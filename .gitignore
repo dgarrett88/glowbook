@@ -1,0 +1,83 @@
+# =========================
+# OS / Editor Junk
+# =========================
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*.tmp
+
+# =========================
+# IDE / Editor Config
+# =========================
+# IntelliJ / Android Studio
+*.iml
+*.ipr
+*.iws
+.idea/
+
+# VSCode – Uncomment if you *don’t* want workspace config tracked
+#.vscode/
+
+# =========================
+# Flutter / Dart Build Artifacts
+# =========================
+.dart_tool/
+.packages
+.pub/
+.pub-cache/
+.buildlog/
+.flutter-plugins
+.flutter-plugins-dependencies
+.ios/
+.macos/
+linux/
+windows/
+web/.dart_tool/
+web/wasm/
+coverage/
+
+# Flutter build outputs
+build/
+**/build/
+
+# =========================
+# iOS
+# =========================
+ios/Pods/
+ios/.symlinks/
+ios/Flutter/.last_build_id
+ios/Flutter/Flutter.framework/
+ios/Flutter/Flutter.podspec
+Generated.xcconfig
+Flutter.podspec
+*.xcworkspace
+*.xcuserstate
+*.xccheckout
+*.xcodeproj/*
+!*.xcodeproj/project.pbxproj
+
+# =========================
+# Android
+# =========================
+android/.gradle/
+android/.idea/
+android/app/release/
+android/app/debug/
+android/app/profile/
+android/local.properties
+android/key.properties
+
+# =========================
+# Symbolication / Obfuscation
+# =========================
+app.*.symbols
+app.*.map.json
+
+# =========================
+# Misc
+# =========================
+*.log
+*.class
+*.pyc
+migrate_working_dir/
