@@ -2,10 +2,9 @@ import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import '../state/canvas_controller.dart'; // <-- fixed relative path
+import '../state/canvas_controller.dart';
 import '../../../core/services/gallery_saver.dart';
 import 'widgets/top_toolbar.dart';
-import 'widgets/bottom_dock.dart';
 
 class CanvasScreen extends ConsumerStatefulWidget {
   const CanvasScreen({super.key});
@@ -64,30 +63,18 @@ class _CanvasScreenState extends ConsumerState<CanvasScreen> {
         preferredSize: const Size.fromHeight(56),
         child: TopToolbar(controller: controller, onExport: _exportPng),
       ),
-      body: Stack(
-        children: [
-          Positioned.fill(
-            child: Listener(
-              behavior: HitTestBehavior.translucent,
-              onPointerDown: (event) => controller.pointerDown(event.pointer, event.localPosition),
-              onPointerMove: (event) => controller.pointerMove(event.pointer, event.localPosition),
-              onPointerUp: (event) => controller.pointerUp(event.pointer),
-              child: RepaintBoundary(
-                key: _repaintKey,
-                child: CustomPaint(
-                  painter: controller.painter,
-                  size: Size.infinite,
-                ),
-              ),
-            ),
+      body: Listener(
+        behavior: HitTestBehavior.translucent,
+        onPointerDown: (event) => controller.pointerDown(event.pointer, event.localPosition),
+        onPointerMove: (event) => controller.pointerMove(event.pointer, event.localPosition),
+        onPointerUp: (event) => controller.pointerUp(event.pointer),
+        child: RepaintBoundary(
+          key: _repaintKey,
+          child: CustomPaint(
+            painter: controller.painter,
+            size: Size.infinite,
           ),
-          Positioned(
-            left: 0,
-            right: 0,
-            bottom: 0,
-            child: BottomDock(controller: controller),
-          ),
-        ],
+        ),
       ),
     );
   }

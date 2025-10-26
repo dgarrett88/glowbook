@@ -5,78 +5,129 @@ import '../../../core/models/stroke.dart';
 import '../render/renderer.dart';
 import 'canvas_state.dart';
 
+enum SymmetryMode { off, mirrorV, mirrorH, quad }
+
 final canvasControllerProvider = ChangeNotifierProvider<CanvasController>((ref) => CanvasController());
 
 class CanvasController extends ChangeNotifier {
   CanvasController();
 
-  // This ValueNotifier drives the CustomPainter's repaint.
   final ValueNotifier<int> repaint = ValueNotifier<int>(0);
 
-  // IMPORTANT: Renderer must listen to *this* repaint notifier.
-  late final Renderer _renderer = Renderer(repaint);
+  SymmetryMode symmetry = SymmetryMode.off;
 
-  // Tool state
+  // Current brush
+  String brushId = Brush.liquidNeon.id;
+
+  // Palette slots policy: free=8; we can raise to 24/32 for premium later.
+  int paletteSlots = 8;
+
+  // Palette list (we'll only render first `paletteSlots`)
+  final List<int> palette = [
+    0xFF00FFFF, // cyan
+    0xFFFF00FF, // magenta
+    0xFFFFFF00, // yellow
+    0xFFFF6EFF, // pink neon
+    0xFF80FF00, // lime
+    0xFFFFA500, // orange
+    0xFF00FF9A, // mint
+    0xFF9A7BFF, // violet
+    // extra prepared slots for premium
+    0xFFFFFFFF,
+    0xFFB0B0B0,
+    0xFF00BFFF,
+    0xFFFF1493,
+    0xFFADFF2F,
+    0xFFFFD700,
+    0xFF7FFFD4,
+    0xFF8A2BE2,
+    0xFFFF4500,
+    0xFF20B2AA,
+    0xFFEE82EE,
+    0xFFDC143C,
+    0xFF1E90FF,
+    0xFF00FA9A,
+    0xFF00CED1,
+    0xFFDAA520,
+    0xFF9932CC,
+    0xFF87CEEB,
+    0xFF32CD32,
+    0xFFFFA07A,
+    0xFF66CDAA,
+    0xFFFFE4B5,
+    0xFFBA55D3,
+    0xFF7FFF00,
+    0xFF00FFFF,
+  ];
+
+  void updatePalette(int index, int argb) {
+    if (index < 0 || index >= palette.length) return;
+    palette[index] = argb;
+    if (color == argb) {
+      setColor(argb);
+    } else {
+      notifyListeners();
+    }
+  }
+
+  late final Renderer _renderer = Renderer(repaint, () => symmetry);
+
   int color = 0xFFFF66FF;
   double brushSize = 10.0;
   double brushGlow = 0.7;
 
-  // Strokes
   CanvasState _state = const CanvasState();
   Stroke? _current;
   int _startMs = 0;
 
+  // Track single active pointer id to prevent 2-finger line connection.
+  int? _activePointerId;
+
   Renderer get painter => _renderer;
 
-  void _tick() {
-    // Bump the repaint notifier so the painter redraws.
-    repaint.value++;
-  }
+  void _tick() { repaint.value++; }
 
   void setBrushSize(double v){ brushSize = v; notifyListeners(); }
   void setColor(int c){ color = c; notifyListeners(); }
+  void setBrush(String id){ brushId = id; notifyListeners(); }
 
-  Future<void> pickColor(BuildContext context) async {
-    final chosen = await showDialog<Color>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Pick color'),
-        content: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            _colorBox(ctx, Colors.cyan),
-            _colorBox(ctx, const Color(0xFFFF00FF)), // magenta
-            _colorBox(ctx, Colors.yellow),
-            _colorBox(ctx, Colors.white),
-          ],
-        ),
-      ),
-    );
-    if (chosen != null) setColor(chosen.toARGB32());
+  void setSymmetry(SymmetryMode m){
+    symmetry = m;
+    _tick();
+    notifyListeners();
   }
 
-  Widget _colorBox(BuildContext ctx, Color c) => InkWell(
-    onTap: ()=> Navigator.pop(ctx, c),
-    child: Container(width: 28, height: 28, margin: const EdgeInsets.all(6), decoration: BoxDecoration(color: c, borderRadius: BorderRadius.circular(6))),
-  );
+  void cycleSymmetry(){
+    switch(symmetry){
+      case SymmetryMode.off: setSymmetry(SymmetryMode.mirrorV); break;
+      case SymmetryMode.mirrorV: setSymmetry(SymmetryMode.mirrorH); break;
+      case SymmetryMode.mirrorH: setSymmetry(SymmetryMode.quad); break;
+      case SymmetryMode.quad: setSymmetry(SymmetryMode.off); break;
+    }
+  }
 
-  // Pointer API: (pointerId, Offset)
   void pointerDown(int pointer, Offset pos){
+    // If a stroke is in progress, ignore any extra fingers.
+    if (_activePointerId != null) return;
+    _activePointerId = pointer;
+
     _startMs = DateTime.now().millisecondsSinceEpoch;
     _current = Stroke(
       id: 's${_state.strokes.length}_$_startMs',
       color: color,
       size: brushSize,
       glow: brushGlow,
-      brushId: Brush.liquidNeon.id,
+      brushId: brushId,
       seed: 0,
       points: [PointSample(pos.dx, pos.dy, 0)],
+      symmetryId: _symmetryId(symmetry),
     );
     _renderer.beginStroke(_current!);
     _tick();
   }
 
   void pointerMove(int pointer, Offset pos){
+    if (_activePointerId != pointer) return; // ignore other pointers
     final s = _current;
     if (s == null) return;
     final now = DateTime.now().millisecondsSinceEpoch;
@@ -87,12 +138,23 @@ class CanvasController extends ChangeNotifier {
   }
 
   void pointerUp(int pointer){
+    if (_activePointerId != pointer) return; // ignore irrelevant ups
+    _activePointerId = null;
     final s = _current;
     if (s == null) return;
     _current = null;
     _renderer.commitStroke(s);
     _state = _state.copyWith(strokes: [..._state.strokes, s], redoStack: []);
     _tick();
+  }
+
+  String _symmetryId(SymmetryMode m){
+    switch(m){
+      case SymmetryMode.mirrorV: return 'mirrorV';
+      case SymmetryMode.mirrorH: return 'mirrorH';
+      case SymmetryMode.quad: return 'quad';
+      case SymmetryMode.off: return 'off';
+    }
   }
 
   void undo(){
