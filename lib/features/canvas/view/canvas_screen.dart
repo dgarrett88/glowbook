@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../state/canvas_controller.dart';
 import '../../../core/services/gallery_saver.dart';
 import 'widgets/top_toolbar.dart';
+import 'widgets/bottom_dock.dart';
 
 class CanvasScreen extends ConsumerStatefulWidget {
   const CanvasScreen({super.key});
@@ -63,6 +64,7 @@ class _CanvasScreenState extends ConsumerState<CanvasScreen> {
         preferredSize: const Size.fromHeight(56),
         child: TopToolbar(controller: controller, onExport: _exportPng),
       ),
+      bottomNavigationBar: BottomDock(controller: controller),
       body: Listener(
         behavior: HitTestBehavior.translucent,
         onPointerDown: (event) => controller.pointerDown(event.pointer, event.localPosition),

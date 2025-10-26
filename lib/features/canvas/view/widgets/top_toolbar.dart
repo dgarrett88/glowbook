@@ -1,61 +1,48 @@
 import 'package:flutter/material.dart';
 import '../../state/canvas_controller.dart';
-import 'brush_hud.dart';
 
-class TopToolbar extends StatelessWidget {
+class TopToolbar extends StatelessWidget implements PreferredSizeWidget {
   final CanvasController controller;
-  final VoidCallback? onExport;
-  const TopToolbar({super.key, required this.controller, this.onExport});
+  final VoidCallback? onExport; // keep existing 'save/export' callback
+  final VoidCallback? onNew;    // optional 'new canvas' callback
 
-  IconData _symIcon(SymmetryMode m){
-    switch(m){
-      case SymmetryMode.off: return Icons.close_fullscreen;
-      case SymmetryMode.mirrorV: return Icons.swap_horiz;
-      case SymmetryMode.mirrorH: return Icons.swap_vert;
-      case SymmetryMode.quad: return Icons.grid_4x4;
-    }
-  }
+  const TopToolbar({
+    super.key,
+    required this.controller,
+    this.onExport,
+    this.onNew,
+  });
 
-  void _openBrushHUD(BuildContext context){
-    showModalBottomSheet(
-      context: context,
-      backgroundColor: Colors.black.withValues(alpha: 0.9),
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
-      ),
-      builder: (_) => BrushHUD(controller: controller),
-    );
-  }
+  @override
+  Size get preferredSize => const Size.fromHeight(kToolbarHeight);
 
   @override
   Widget build(BuildContext context) {
     return AppBar(
       title: const Text('GlowBook'),
       actions: [
+        // New canvas (optional)
         IconButton(
-          icon: const Icon(Icons.brush),
-          tooltip: 'Brush HUD',
-          onPressed: () => _openBrushHUD(context),
+          tooltip: 'New',
+          icon: const Icon(Icons.add),
+          onPressed: onNew,
         ),
+        // Save/Export (kept compatible with existing usage)
         IconButton(
-          icon: Icon(_symIcon(controller.symmetry)),
-          tooltip: 'Cycle symmetry',
-          onPressed: controller.cycleSymmetry,
-        ),
-        IconButton(
+          tooltip: 'Save',
           icon: const Icon(Icons.download),
-          tooltip: 'Export PNG',
           onPressed: onExport,
         ),
+        // Undo / Redo
         IconButton(
+          tooltip: 'Undo',
           icon: const Icon(Icons.undo),
           onPressed: controller.undo,
-          tooltip: 'Undo',
         ),
         IconButton(
+          tooltip: 'Redo',
           icon: const Icon(Icons.redo),
           onPressed: controller.redo,
-          tooltip: 'Redo',
         ),
       ],
     );

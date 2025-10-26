@@ -9,6 +9,8 @@ enum SymmetryMode { off, mirrorV, mirrorH, quad }
 
 final canvasControllerProvider = ChangeNotifierProvider<CanvasController>((ref) => CanvasController());
 
+enum GlowBlend { additive, screen }
+
 class CanvasController extends ChangeNotifier {
   CanvasController();
 

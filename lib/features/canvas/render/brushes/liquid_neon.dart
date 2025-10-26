@@ -1,8 +1,12 @@
 import 'dart:ui';
+import 'dart:math' as math;
 import '../../../../core/models/stroke.dart';
-import '../../state/canvas_controller.dart';
+import '../../state/canvas_controller.dart' show SymmetryMode;
+import '../../state/glow_blend.dart' as gb;
 
 class LiquidNeonBrush {
+  const LiquidNeonBrush();
+
   Path _buildPath(List<PointSample> pts) {
     final path = Path();
     if (pts.isEmpty) return path;
@@ -13,61 +17,62 @@ class LiquidNeonBrush {
     return path;
   }
 
-  void _drawGlowAndCore(Canvas canvas, Path path, int argbColor, double size) {
-    final base = Color(argbColor);
+  List<PointSample> _mirrorV(List<PointSample> pts, Size sz) {
+    final double cx = sz.width / 2.0;
+    return pts.map((p) => PointSample(cx - (p.x - cx), p.y, p.t)).toList(growable: false);
+  }
 
-    // Liquid Neon: bright core + tighter aura
-    final glowPaint = Paint()
+  List<PointSample> _mirrorH(List<PointSample> pts, Size sz) {
+    final double cy = sz.height / 2.0;
+    return pts.map((p) => PointSample(p.x, cy - (p.y - cy), p.t)).toList(growable: false);
+  }
+
+  void _drawGlowAndCore(Canvas canvas, Path path, int argbColor, double size, double glow) {
+    if (glow.isNaN) glow = 0.5;
+    glow = glow.clamp(0.0, 1.0);
+
+    final double gSigma = math.pow(glow, 1.6).toDouble();
+    final double gAlpha = math.pow(glow, 1.3).toDouble();
+    final double sigma = size * (0.05 + 4.0 * gSigma);
+    final int alpha = (30 + 225 * gAlpha).clamp(0, 255).toInt();
+
+    final Color base = Color(argbColor);
+
+    final Paint glowPaint = Paint()
+      ..color = base.withAlpha(alpha)
       ..style = PaintingStyle.stroke
+      ..strokeWidth = size * (1.0 + 0.6 * gAlpha)
       ..strokeCap = StrokeCap.round
       ..strokeJoin = StrokeJoin.round
-      ..strokeWidth = size * 1.4
-      ..color = base.withValues(alpha: 0.55)
-      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 8);
-    canvas.drawPath(path, glowPaint);
+      ..maskFilter = MaskFilter.blur(BlurStyle.normal, sigma)
+      ..blendMode = (gb.GlowBlendState.I.mode == gb.GlowBlend.screen) ? BlendMode.screen : BlendMode.plus;
 
-    final corePaint = Paint()
+    final Paint corePaint = Paint()
+      ..color = base
       ..style = PaintingStyle.stroke
-      ..strokeCap = StrokeCap.round
-      ..strokeJoin = StrokeJoin.round
       ..strokeWidth = size
-      ..color = base; // full intensity
+      ..strokeCap = StrokeCap.round
+      ..strokeJoin = StrokeJoin.round;
+
+    canvas.drawPath(path, glowPaint);
     canvas.drawPath(path, corePaint);
   }
 
-  void drawFull(Canvas canvas, Stroke s) {
-    _drawGlowAndCore(canvas, _buildPath(s.points), s.color, s.size);
-  }
-
-  void drawFullWithSymmetry(Canvas canvas, Stroke s, Size size, SymmetryMode mode) {
-    final cx = size.width / 2.0;
-    final cy = size.height / 2.0;
-
-    Path buildFrom(List<PointSample> pts) {
-      final p = Path();
-      if (pts.isEmpty) return p;
-      p.moveTo(pts.first.x, pts.first.y);
-      for (var i = 1; i < pts.length; i++) {
-        p.lineTo(pts[i].x, pts[i].y);
-      }
-      return p;
-    }
-
-    List<PointSample> mirrorV(List<PointSample> src) =>
-      src.map((pt) => PointSample(2*cx - pt.x, pt.y, pt.t)).toList();
-    List<PointSample> mirrorH(List<PointSample> src) =>
-      src.map((pt) => PointSample(pt.x, 2*cy - pt.y, pt.t)).toList();
-
-    _drawGlowAndCore(canvas, buildFrom(s.points), s.color, s.size);
+  void drawFullWithSymmetry(Canvas canvas, Stroke s, Size sz, SymmetryMode mode) {
+    final path = _buildPath(s.points);
+    _drawGlowAndCore(canvas, path, s.color, s.size, s.glow);
 
     if (mode == SymmetryMode.mirrorV || mode == SymmetryMode.quad) {
-      _drawGlowAndCore(canvas, buildFrom(mirrorV(s.points)), s.color, s.size);
+      final p2 = _buildPath(_mirrorV(s.points, sz));
+      _drawGlowAndCore(canvas, p2, s.color, s.size, s.glow);
     }
     if (mode == SymmetryMode.mirrorH || mode == SymmetryMode.quad) {
-      _drawGlowAndCore(canvas, buildFrom(mirrorH(s.points)), s.color, s.size);
+      final p3 = _buildPath(_mirrorH(s.points, sz));
+      _drawGlowAndCore(canvas, p3, s.color, s.size, s.glow);
     }
     if (mode == SymmetryMode.quad) {
-      _drawGlowAndCore(canvas, buildFrom(mirrorH(mirrorV(s.points))), s.color, s.size);
+      final p4 = _buildPath(_mirrorH(_mirrorV(s.points, sz), sz));
+      _drawGlowAndCore(canvas, p4, s.color, s.size, s.glow);
     }
   }
 }
