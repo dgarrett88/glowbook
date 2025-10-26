@@ -1,3 +1,4 @@
+
 import 'package:flutter/material.dart';
 import '../../state/canvas_controller.dart';
 
@@ -10,33 +11,32 @@ class BottomDock extends StatelessWidget {
     return SafeArea(
       top: false,
       child: Container(
-        height: 68,
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
         decoration: BoxDecoration(
-          color: Theme.of(context).colorScheme.surface.withOpacity(0.9),
-          border: const Border(top: BorderSide(color: Colors.black12)),
+          color: Colors.black.withValues(alpha: 0.9),
+          borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),
         ),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
         child: Row(
           children: [
-            const Icon(Icons.brush),
-            const SizedBox(width: 8),
+            // Size
+            const Text('Size'),
             Expanded(
               child: Slider(
-                min: 1,
-                max: 60,
                 value: controller.brushSize,
+                min: 1,
+                max: 40,
                 onChanged: controller.setBrushSize,
               ),
             ),
-            const SizedBox(width: 12),
+            // Color
             GestureDetector(
               onTap: () => controller.pickColor(context),
               child: Container(
-                width: 28,
-                height: 28,
+                width: 32,
+                height: 32,
                 decoration: BoxDecoration(
                   color: Color(controller.color),
-                  shape: BoxShape.circle,
+                  borderRadius: BorderRadius.circular(8),
                   border: Border.all(color: Colors.white24),
                 ),
               ),

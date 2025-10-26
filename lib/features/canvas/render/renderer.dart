@@ -1,32 +1,30 @@
 import 'dart:ui' as ui;
-import 'package:flutter/material.dart';
+import 'package:flutter/widgets.dart';
 import '../../../core/models/stroke.dart';
 import 'brushes/liquid_neon.dart';
 
 class Renderer extends CustomPainter {
-  Renderer(this.repaint) : super(repaint: repaint);
+  Renderer(this.repaint): super(repaint: repaint);
   final Listenable repaint;
 
-  final List<ui.Picture> _baked = [];
+  final List<ui.Picture> _baked = <ui.Picture>[];
   final LiquidNeonBrush _neon = LiquidNeonBrush();
+  Stroke? _active;
 
-  Stroke? _activeStroke;
-
-  void beginStroke(Stroke stroke) => _activeStroke = stroke;
-  void updateStroke(Stroke stroke) => _activeStroke = stroke;
-
-  void commitStroke(Stroke stroke) {
+  void beginStroke(Stroke s){ _active = s; }
+  void updateStroke(Stroke s){ _active = s; }
+  void commitStroke(Stroke s){
     final rec = ui.PictureRecorder();
     final can = Canvas(rec);
-    _neon.drawFull(can, stroke);
+    _neon.drawFull(can, s);
     _baked.add(rec.endRecording());
-    _activeStroke = null;
+    _active = null;
   }
 
-  void rebuildFrom(List<Stroke> strokes) {
+  void rebuildFrom(List<Stroke> strokes){
     for (final p in _baked) { p.dispose(); }
     _baked.clear();
-    for (final s in strokes) {
+    for (final s in strokes){
       final rec = ui.PictureRecorder();
       final can = Canvas(rec);
       _neon.drawFull(can, s);
@@ -39,8 +37,10 @@ class Renderer extends CustomPainter {
     for (final pic in _baked) {
       canvas.drawPicture(pic);
     }
-    final s = _activeStroke;
-    if (s != null) _neon.drawPartial(canvas, s);
+    final s = _active;
+    if (s != null) {
+      _neon.drawFull(canvas, s);
+    }
   }
 
   @override

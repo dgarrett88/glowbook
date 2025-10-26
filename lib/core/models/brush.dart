@@ -1,8 +1,8 @@
+
 class Brush {
   final String id;
-  final double baseSize;
-  final double glow; // 0..1
-  const Brush({required this.id, required this.baseSize, required this.glow});
+  final String name;
+  const Brush(this.id, this.name);
 
-  static const liquidNeon = Brush(id: 'liquid_neon', baseSize: 8.0, glow: 0.8);
+  static const liquidNeon = Brush('liquid_neon', 'Liquid Neon');
 }
