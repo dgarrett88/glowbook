@@ -4,6 +4,7 @@ import '../../../core/models/stroke.dart';
 import '../state/canvas_controller.dart';
 import 'brushes/liquid_neon.dart';
 import 'brushes/soft_glow.dart';
+import 'brushes/glow_only.dart';
 
 class Renderer extends CustomPainter {
   Renderer(this.repaint, this.symmetryFn): super(repaint: repaint);
@@ -13,6 +14,7 @@ class Renderer extends CustomPainter {
   final List<ui.Picture> _baked = <ui.Picture>[];
   final LiquidNeonBrush _neon = LiquidNeonBrush();
   final SoftGlowBrush _soft = SoftGlowBrush();
+  final GlowOnlyBrush _glowOnly = GlowOnlyBrush();
   Stroke? _active;
   Size? _lastSize;
 
@@ -53,6 +55,9 @@ class Renderer extends CustomPainter {
 
   void _drawByBrush(Canvas canvas, Stroke s, Size sz, SymmetryMode mode){
     switch (s.brushId) {
+      case 'glow_only':
+        _glowOnly.drawFullWithSymmetry(canvas, s, sz, mode);
+        break;
       case 'soft_glow':
         _soft.drawFullWithSymmetry(canvas, s, sz, mode);
         break;

@@ -82,6 +82,8 @@ class CanvasController extends ChangeNotifier {
   Stroke? _current;
   int _startMs = 0;
 
+  List<Stroke> get strokes => List.unmodifiable(_state.strokes);
+
   // Track single active pointer id to prevent 2-finger line connection.
   int? _activePointerId;
 
@@ -159,7 +161,18 @@ class CanvasController extends ChangeNotifier {
     }
   }
 
-  void undo(){
+  
+
+  /// Clears current strokes/redos and starts a fresh blank canvas.
+  void newDocument(){
+    _state = const CanvasState();
+    _current = null;
+    _activePointerId = null;
+    _renderer.rebuildFrom(_state.strokes);
+    _tick();
+  }
+
+void undo(){
     if (_state.strokes.isEmpty) return;
     final last = _state.strokes.last;
     _state = _state.copyWith(

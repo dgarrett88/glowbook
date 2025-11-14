@@ -52,6 +52,7 @@ class BrushHUD extends StatelessWidget {
                     children: [
                       _chip('Liquid Neon', Brush.liquidNeon.id),
                       _chip('Soft Glow',   Brush.softGlow.id),
+                      _chip('Glow Only',  Brush.glowOnly.id),
                     ],
                   ),
                   const SizedBox(height: 12),
