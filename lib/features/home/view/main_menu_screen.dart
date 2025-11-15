@@ -19,6 +19,9 @@ class _MainMenuScreenState extends State<MainMenuScreen> {
   final DocumentStorage _storage = DocumentStorage.instance;
   late Future<List<SavedDocumentInfo>> _docsFuture;
 
+  bool _selectionMode = false;
+  final Set<String> _selectedIds = <String>{};
+
   @override
   void initState() {
     super.initState();
@@ -31,23 +34,25 @@ class _MainMenuScreenState extends State<MainMenuScreen> {
     });
   }
 
-  void _openNewCanvas() {
-    Navigator.of(context)
-        .push(MaterialPageRoute(builder: (_) => const CanvasScreen()))
-        .then((_) => _refreshDocs());
+  Future<void> _openNewCanvas() async {
+    await Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => const CanvasScreen(),
+      ),
+    );
+
+    if (mounted) {
+      _refreshDocs();
+    }
   }
 
   Future<void> _openDocument(SavedDocumentInfo info) async {
     final bundle = await _storage.loadDocument(info.id);
-    if (!mounted) return;
-
     if (bundle == null) {
+      if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Could not open drawing. It may be corrupted.'),
-        ),
+        const SnackBar(content: Text('Could not open drawing.')),
       );
-      _refreshDocs();
       return;
     }
 
@@ -62,14 +67,188 @@ class _MainMenuScreenState extends State<MainMenuScreen> {
     }
   }
 
+  // ===== MULTI-SELECT HELPERS =====
+
+  void _enterSelection(SavedDocumentInfo info) {
+    setState(() {
+      _selectionMode = true;
+      _selectedIds
+        ..clear()
+        ..add(info.id);
+    });
+  }
+
+  void _toggleSelection(SavedDocumentInfo info) {
+    setState(() {
+      if (_selectedIds.contains(info.id)) {
+        _selectedIds.remove(info.id);
+        if (_selectedIds.isEmpty) {
+          _selectionMode = false;
+        }
+      } else {
+        _selectedIds.add(info.id);
+      }
+    });
+  }
+
+  void _clearSelection() {
+    setState(() {
+      _selectionMode = false;
+      _selectedIds.clear();
+    });
+  }
+
+  Future<void> _confirmAndDeleteSelected() async {
+    if (_selectedIds.isEmpty) return;
+
+    final count = _selectedIds.length;
+    final shouldDelete = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text('Delete $count drawing${count == 1 ? '' : 's'}?'),
+        content: const Text('This cannot be undone.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('No'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('Yes'),
+          ),
+        ],
+      ),
+    );
+
+    if (shouldDelete == true) {
+      for (final id in List<String>.from(_selectedIds)) {
+        await _storage.deleteDocument(id);
+      }
+      _clearSelection();
+      _refreshDocs();
+    }
+  }
+
+  // ===== SINGLE DELETE / DUPLICATE / RENAME =====
+
+  Future<void> _confirmAndDelete(SavedDocumentInfo info) async {
+    final shouldDelete = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Delete drawing?'),
+        content: Text('Are you sure you want to delete "${info.name}"?'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('No'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('Yes'),
+          ),
+        ],
+      ),
+    );
+
+    if (shouldDelete == true) {
+      await _storage.deleteDocument(info.id);
+      _refreshDocs();
+    }
+  }
+
+  Future<void> _duplicateDocument(SavedDocumentInfo info) async {
+    final bundle = await _storage.loadDocument(info.id);
+    if (bundle == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Could not duplicate drawing.')),
+      );
+      return;
+    }
+
+    final now = DateTime.now().millisecondsSinceEpoch;
+
+    final newDoc = bundle.doc.copyWith(
+      id: '${bundle.doc.id}_copy_$now',
+      name: '${info.name} (copy)',
+      createdAt: now,
+      updatedAt: now,
+    );
+
+    final newBundle = CanvasDocumentBundle(
+      doc: newDoc,
+      strokes: List.of(bundle.strokes),
+    );
+
+    await _storage.saveBundle(newBundle);
+    _refreshDocs();
+  }
+
+  Future<void> _renameDocument(SavedDocumentInfo info) async {
+    final textController = TextEditingController(text: info.name);
+
+    final result = await showDialog<String>(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          title: const Text('Rename drawing'),
+          content: TextField(
+            controller: textController,
+            autofocus: true,
+            decoration: const InputDecoration(
+              labelText: 'Name',
+            ),
+            onSubmitted: (value) => Navigator.of(context).pop(value.trim()),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(null),
+              child: const Text('Cancel'),
+            ),
+            TextButton(
+              onPressed: () =>
+                  Navigator.of(context).pop(textController.text.trim()),
+              child: const Text('Save'),
+            ),
+          ],
+        );
+      },
+    );
+
+    if (result == null) return;
+    final newName = result.trim();
+    if (newName.isEmpty || newName == info.name) return;
+
+    await _storage.renameDocument(info.id, newName);
+    _refreshDocs();
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('GlowBook'),
+        leading: _selectionMode
+            ? IconButton(
+                icon: const Icon(Icons.close),
+                onPressed: _clearSelection,
+              )
+            : null,
+        title: _selectionMode
+            ? Text('${_selectedIds.length} selected')
+            : const Text('GlowBook'),
         centerTitle: true,
+        actions: _selectionMode
+            ? [
+                IconButton(
+                  icon: const Icon(Icons.delete),
+                  tooltip: 'Delete selected',
+                  onPressed: _selectedIds.isEmpty
+                      ? null
+                      : () => _confirmAndDeleteSelected(),
+                ),
+              ]
+            : null,
       ),
       body: Column(
         children: [
@@ -130,6 +309,8 @@ class _MainMenuScreenState extends State<MainMenuScreen> {
                   );
                 }
 
+                final selectedCount = _selectedIds.length;
+
                 return RefreshIndicator(
                   onRefresh: () async => _refreshDocs(),
                   child: GridView.builder(
@@ -137,18 +318,42 @@ class _MainMenuScreenState extends State<MainMenuScreen> {
                     padding: const EdgeInsets.all(12.0),
                     gridDelegate:
                         const SliverGridDelegateWithFixedCrossAxisCount(
-                      crossAxisCount: 3,
+                      crossAxisCount: 2, // bigger tiles
                       mainAxisSpacing: 12,
                       crossAxisSpacing: 12,
-                      childAspectRatio: 0.9,
+                      childAspectRatio: 0.8, // a bit taller
                     ),
                     itemCount: docs.length,
                     itemBuilder: (context, index) {
                       final info = docs[index];
+                      final isSelected = _selectedIds.contains(info.id);
+
+                      final canShowRename =
+                          _selectionMode && selectedCount == 1 && isSelected;
+
                       return _DocumentTile(
                         info: info,
                         storage: _storage,
-                        onTap: () => _openDocument(info),
+                        selectionMode: _selectionMode,
+                        isSelected: isSelected,
+                        canShowRename: canShowRename,
+                        onTap: () {
+                          if (_selectionMode) {
+                            _toggleSelection(info);
+                          } else {
+                            _openDocument(info);
+                          }
+                        },
+                        onLongPress: () {
+                          if (_selectionMode) {
+                            _toggleSelection(info);
+                          } else {
+                            _enterSelection(info);
+                          }
+                        },
+                        onDelete: () => _confirmAndDelete(info),
+                        onDuplicate: () => _duplicateDocument(info),
+                        onRename: () => _renameDocument(info),
                       );
                     },
                   ),
@@ -166,70 +371,140 @@ class _DocumentTile extends StatelessWidget {
   final SavedDocumentInfo info;
   final DocumentStorage storage;
   final VoidCallback onTap;
+  final VoidCallback onDelete;
+  final VoidCallback onDuplicate;
+  final VoidCallback onRename;
+  final bool selectionMode;
+  final bool isSelected;
+  final bool canShowRename;
+  final VoidCallback? onLongPress;
 
   const _DocumentTile({
     super.key,
     required this.info,
     required this.storage,
     required this.onTap,
+    required this.onDelete,
+    required this.onDuplicate,
+    required this.onRename,
+    required this.selectionMode,
+    required this.isSelected,
+    required this.canShowRename,
+    this.onLongPress,
   });
 
   @override
   Widget build(BuildContext context) {
     final textTheme = Theme.of(context).textTheme;
+    final theme = Theme.of(context);
+
+    final bool showHighlight = selectionMode && isSelected;
 
     return InkWell(
       onTap: onTap,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          // Thumbnail area takes whatever vertical space is available
-          Expanded(
-            child: Card(
-              clipBehavior: Clip.hardEdge,
-              child: FutureBuilder<CanvasDocumentBundle?>(
-                future: storage.loadDocument(info.id),
-                builder: (context, snapshot) {
-                  if (snapshot.connectionState == ConnectionState.waiting) {
-                    return const Center(
-                      child: SizedBox(
-                        width: 20,
-                        height: 20,
-                        child: CircularProgressIndicator(strokeWidth: 2),
-                      ),
-                    );
-                  }
+      onLongPress: onLongPress,
+      child: Container(
+        decoration: BoxDecoration(
+          color: showHighlight
+              ? theme.colorScheme.primary.withOpacity(0.08)
+              : Colors.transparent,
+          borderRadius: BorderRadius.circular(12),
+        ),
+        padding: const EdgeInsets.all(6),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            // Thumbnail image
+            Expanded(
+              child: Card(
+                clipBehavior: Clip.hardEdge,
+                margin: EdgeInsets.zero,
+                child: FutureBuilder<CanvasDocumentBundle?>(
+                  future: storage.loadDocument(info.id),
+                  builder: (context, snapshot) {
+                    if (snapshot.connectionState == ConnectionState.waiting) {
+                      return const Center(
+                        child: SizedBox(
+                          width: 20,
+                          height: 20,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                          ),
+                        ),
+                      );
+                    }
 
-                  final bundle = snapshot.data;
-                  if (bundle == null || bundle.strokes.isEmpty) {
-                    return const Center(
-                      child: Icon(Icons.image_not_supported_outlined),
-                    );
-                  }
+                    final bundle = snapshot.data;
+                    if (bundle == null || bundle.strokes.isEmpty) {
+                      return const Center(
+                        child: Icon(
+                          Icons.image_not_supported_outlined,
+                        ),
+                      );
+                    }
 
-                  return CustomPaint(
-                    painter: _StrokePreviewPainter(bundle),
-                  );
-                },
+                    return CustomPaint(
+                      painter: _StrokePreviewPainter(bundle),
+                    );
+                  },
+                ),
               ),
             ),
-          ),
-          const SizedBox(height: 4),
-          // Fixed-height text area so it doesn't push past the cell
-          SizedBox(
-            height: 16,
-            child: FittedBox(
-              fit: BoxFit.scaleDown,
-              child: Text(
-                info.name,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                textAlign: TextAlign.center,
-                style: textTheme.bodySmall,
-              ),
+
+            const SizedBox(height: 6),
+
+            // Title directly under preview
+            Text(
+              info.name,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: textTheme.bodySmall,
+              textAlign: TextAlign.center,
             ),
-          ),
-        ],
+
+            const SizedBox(height: 4),
+
+            // Controls area
+            if (selectionMode) ...[
+              // Multiselect: highlight shows selection.
+              // When exactly one is selected, show centred rename button.
+              if (canShowRename)
+                Center(
+                  child: IconButton(
+                    icon: const Icon(Icons.edit, size: 18),
+                    tooltip: 'Rename',
+                    padding: EdgeInsets.zero,
+                    constraints: const BoxConstraints(),
+                    onPressed: onRename,
+                  ),
+                ),
+            ] else ...[
+              // Normal mode: centred duplicate + delete, shrink to content
+              Center(
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    IconButton(
+                      icon: const Icon(Icons.copy, size: 18),
+                      padding: EdgeInsets.zero,
+                      constraints: const BoxConstraints(),
+                      tooltip: 'Duplicate',
+                      onPressed: onDuplicate,
+                    ),
+                    const SizedBox(width: 8),
+                    IconButton(
+                      icon: const Icon(Icons.delete_outline, size: 18),
+                      padding: EdgeInsets.zero,
+                      constraints: const BoxConstraints(),
+                      tooltip: 'Delete',
+                      onPressed: onDelete,
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ],
+        ),
       ),
     );
   }
@@ -243,13 +518,13 @@ class _StrokePreviewPainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
     final CanvasDoc doc = bundle.doc;
-    final strokes = bundle.strokes;
+    final List<Stroke> strokes = bundle.strokes;
 
     if (doc.width <= 0 || doc.height <= 0 || strokes.isEmpty) {
       return;
     }
 
-    // Simple background support (solid color only for now).
+    // Background (solid color only for now)
     final params = doc.background.params;
     final colorValue = params['color'] as int?;
     if (colorValue != null) {
@@ -266,28 +541,28 @@ class _StrokePreviewPainter extends CustomPainter {
     final dy = (size.height - doc.height * scale) / 2.0;
 
     for (final stroke in strokes) {
-      if (stroke.points.length < 2) continue;
+      final points = stroke.points;
+      if (points.isEmpty) continue;
+
+      final path = Path();
+      final first = points.first;
+      path.moveTo(
+        dx + first.x * scale,
+        dy + first.y * scale,
+      );
+      for (var i = 1; i < points.length; i++) {
+        final p = points[i];
+        path.lineTo(
+          dx + p.x * scale,
+          dy + p.y * scale,
+        );
+      }
 
       final paint = Paint()
         ..style = PaintingStyle.stroke
         ..strokeCap = StrokeCap.round
         ..strokeWidth = stroke.size * scale
         ..color = Color(stroke.color);
-
-      final path = Path();
-      final first = stroke.points.first;
-      path.moveTo(
-        dx + first.x * scale,
-        dy + first.y * scale,
-      );
-
-      for (var i = 1; i < stroke.points.length; i++) {
-        final p = stroke.points[i];
-        path.lineTo(
-          dx + p.x * scale,
-          dy + p.y * scale,
-        );
-      }
 
       canvas.drawPath(path, paint);
     }

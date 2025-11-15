@@ -65,20 +65,24 @@ class DocumentStorage {
   ///
   /// If [existingId] is provided, that id is reused; otherwise [bundle.doc.id]
   /// is used. Returns the id that was persisted.
-  Future<String> saveBundle(CanvasDocumentBundle bundle,
-      {String? existingId}) async {
+  Future<String> saveBundle(
+    CanvasDocumentBundle bundle, {
+    String? existingId,
+  }) async {
     final id = existingId ?? bundle.doc.id;
     final file = await _docFile(id);
     final payload = bundle.toJson();
     await file.writeAsString(json.encode(payload), flush: true);
 
-    // Update index
+    // Update index metadata
     final index = await loadIndex();
     final meta = SavedDocumentInfo(
       id: id,
       name: bundle.doc.name,
       createdAt: bundle.doc.createdAt,
       updatedAt: bundle.doc.updatedAt,
+      // strokeCount is optional; older entries may not have it.
+      strokeCount: bundle.strokes.length,
     );
 
     final existingIdx = index.indexWhere((e) => e.id == id);
@@ -99,6 +103,24 @@ class DocumentStorage {
     if (raw.trim().isEmpty) return null;
     final decoded = json.decode(raw) as Map;
     return CanvasDocumentBundle.fromJson(decoded.cast<String, dynamic>());
+  }
+
+  /// Renames a document and updates its metadata.
+  ///
+  /// Updates both the stored CanvasDoc and its index entry.
+  Future<void> renameDocument(String id, String newName) async {
+    final bundle = await loadBundle(id);
+    if (bundle == null) return;
+
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final updatedBundle = bundle.copyWith(
+      doc: bundle.doc.copyWith(
+        name: newName,
+        updatedAt: now,
+      ),
+    );
+
+    await saveBundle(updatedBundle, existingId: id);
   }
 
   /// Deletes a document and removes it from the index.

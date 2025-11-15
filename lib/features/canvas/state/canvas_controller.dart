@@ -89,6 +89,10 @@ class CanvasController extends ChangeNotifier {
   // Track single active pointer id to prevent 2-finger line connection.
   int? _activePointerId;
 
+  // Tracks whether the canvas has changed since it was opened/created/saved.
+  bool _hasUnsavedChanges = false;
+  bool get hasUnsavedChanges => _hasUnsavedChanges;
+
   Renderer get painter => _renderer;
 
   void _tick() { repaint.value++; }
@@ -151,6 +155,7 @@ class CanvasController extends ChangeNotifier {
     _current = null;
     _renderer.commitStroke(s);
     _state = _state.copyWith(strokes: [..._state.strokes, s], redoStack: []);
+    _hasUnsavedChanges = true;
     _tick();
   }
 
@@ -174,6 +179,7 @@ class CanvasController extends ChangeNotifier {
     );
     _current = null;
     _activePointerId = null;
+    _hasUnsavedChanges = false;
     _renderer.rebuildFrom(_state.strokes);
     _tick();
   }
@@ -182,8 +188,16 @@ void newDocument(){
     _state = const CanvasState();
     _current = null;
     _activePointerId = null;
+    _hasUnsavedChanges = false;
     _renderer.rebuildFrom(_state.strokes);
     _tick();
+  }
+
+
+  // Mark the current state as saved so callers can skip
+  // save/discard prompts when nothing has changed.
+  void markSaved(){
+    _hasUnsavedChanges = false;
   }
 
 void undo(){
@@ -194,6 +208,7 @@ void undo(){
       redoStack: List.of(_state.redoStack)..add(last),
     );
     _renderer.rebuildFrom(_state.strokes);
+    _hasUnsavedChanges = true;
     _tick();
   }
 
@@ -205,6 +220,7 @@ void undo(){
       redoStack: List.of(_state.redoStack)..removeLast(),
     );
     _renderer.rebuildFrom(_state.strokes);
+    _hasUnsavedChanges = true;
     _tick();
   }
 }

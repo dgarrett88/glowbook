@@ -5,12 +5,14 @@ class TopToolbar extends StatelessWidget implements PreferredSizeWidget {
   final CanvasController controller;
   final VoidCallback? onExport; // keep existing 'save/export' callback
   final VoidCallback? onNew;    // optional 'new canvas' callback
+  final VoidCallback? onExitToMenu; // new: exit to main menu
 
   const TopToolbar({
     super.key,
     required this.controller,
     this.onExport,
     this.onNew,
+    this.onExitToMenu,
   });
 
   @override
@@ -19,6 +21,11 @@ class TopToolbar extends StatelessWidget implements PreferredSizeWidget {
   @override
   Widget build(BuildContext context) {
     return AppBar(
+      leading: IconButton(
+        tooltip: 'Main menu',
+        icon: const Icon(Icons.home_outlined),
+        onPressed: onExitToMenu,
+      ),
       title: const Text('GlowBook'),
       actions: [
         // New canvas (optional)
