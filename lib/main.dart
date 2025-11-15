@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'features/canvas/view/canvas_screen.dart';
+import 'features/home/view/main_menu_screen.dart';
 
 void main() => runApp(const ProviderScope(child: GlowBookApp()));
 
@@ -12,7 +12,7 @@ class GlowBookApp extends StatelessWidget {
       title: 'GlowBook',
       debugShowCheckedModeBanner: false,
       theme: ThemeData.dark(),
-      home: const CanvasScreen(),
+      home: const MainMenuScreen(),
     );
   }
 }

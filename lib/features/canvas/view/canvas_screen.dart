@@ -2,110 +2,51 @@ import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import '../state/canvas_controller.dart';
-import '../../../core/services/document_storage.dart';
-import '../../../core/models/canvas_document_bundle.dart';
-import '../../../core/models/canvas_doc.dart' as cdoc;
+import '../state/canvas_controller.dart' as canvas_state;
 import '../../../core/services/gallery_saver.dart';
+import '../../../core/services/document_storage.dart';
+import '../../../core/models/canvas_doc.dart' as doc_model;
+import '../../../core/utils/uuid.dart';
 import 'widgets/top_toolbar.dart';
 import 'widgets/bottom_dock.dart';
+import '../../../core/models/canvas_document_bundle.dart';
 
 class CanvasScreen extends ConsumerStatefulWidget {
-  const CanvasScreen({super.key});
+  final CanvasDocumentBundle? initialDocument;
+
+  const CanvasScreen({
+    super.key,
+    this.initialDocument,
+  });
 
   @override
   ConsumerState<CanvasScreen> createState() => _CanvasScreenState();
 }
 
-
-enum _NewDocChoice { saveAndContinueLater, continueWithoutSaving, cancel }
+enum _NewPageAction { saveAndNew, discardAndNew, cancel }
 
 class _CanvasScreenState extends ConsumerState<CanvasScreen> {
   final GlobalKey _repaintKey = GlobalKey();
 
-  final DocumentStorage _storage = DocumentStorage.instance;
+  String? _currentDocId;
+  doc_model.CanvasDoc? _currentDoc;
 
-  Future<_NewDocChoice?> _showNewDocDialog() {
-    return showDialog<_NewDocChoice>(
-      context: context,
-      barrierDismissible: false,
-      builder: (ctx) {
-        return AlertDialog(
-          title: const Text('Start a new drawing?'),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              const Text('What would you like to do with your current drawing?'),
-              SizedBox(height: 16),
-              ElevatedButton(
-                onPressed: () {
-                  Navigator.of(ctx).pop(_NewDocChoice.saveAndContinueLater);
-                },
-                child: const Text('Save and continue later'),
-              ),
-              SizedBox(height: 8),
-              OutlinedButton(
-                onPressed: () {
-                  Navigator.of(ctx).pop(_NewDocChoice.continueWithoutSaving);
-                },
-                child: const Text('Continue without saving'),
-              ),
-              SizedBox(height: 8),
-              TextButton(
-                onPressed: () {
-                  Navigator.of(ctx).pop(_NewDocChoice.cancel);
-                },
-                child: const Text('Cancel'),
-              ),
-            ],
-          ),
-        );
-      },
-    );
-  }
-
-  Future<void> _handleNewPressed() async {
-    final choice = await _showNewDocDialog();
-    if (choice == null || choice == _NewDocChoice.cancel) return;
-
-    final controller = ref.read(canvasControllerProvider);
-
-    if (choice == _NewDocChoice.saveAndContinueLater) {
-      final now = DateTime.now().millisecondsSinceEpoch;
-      final doc = cdoc.CanvasDoc(
-        id: 'doc_$now',
-        name: 'GlowBook $now',
-        createdAt: now,
-        updatedAt: now,
-        width: 0,
-        height: 0,
-        background: cdoc.Background.solid(0xFF000000),
-        symmetry: cdoc.SymmetryMode.off,
-      );
-
-      final bundle = CanvasDocumentBundle(
-        doc: doc,
-        strokes: controller.strokes,
-      );
-
-      await _storage.saveBundle(bundle);
-
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Drawing saved for later')),
-        );
-      }
+  @override
+  void initState() {
+    super.initState();
+    final bundle = widget.initialDocument;
+    if (bundle != null) {
+      _currentDocId = bundle.doc.id;
+      _currentDoc = bundle.doc;
+      final controller = ref.read(canvas_state.canvasControllerProvider);
+      controller.loadFromBundle(bundle);
     }
-
-    controller.newDocument();
   }
-
-
 
   Future<void> _exportPng() async {
     try {
-      final boundary = _repaintKey.currentContext?.findRenderObject() as RenderRepaintBoundary?;
+      final boundary = _repaintKey.currentContext?.findRenderObject()
+          as RenderRepaintBoundary?;
       if (boundary == null) {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
@@ -125,7 +66,11 @@ class _CanvasScreenState extends ConsumerState<CanvasScreen> {
         return;
       }
       final bytes = byteData.buffer.asUint8List();
-      final ts = DateTime.now().toIso8601String().replaceAll(':','-').split('.').first;
+      final ts = DateTime.now()
+          .toIso8601String()
+          .replaceAll(':', '-')
+          .split('.')
+          .first;
       final name = 'GlowBook_$ts.png';
       await GallerySaverService.savePngToGallery(bytes, filename: name);
       if (mounted) {
@@ -142,23 +87,110 @@ class _CanvasScreenState extends ConsumerState<CanvasScreen> {
     }
   }
 
+
+  Future<void> _handleNewDocument(canvas_state.CanvasController controller) async {
+    final action = await showDialog<_NewPageAction>(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          title: const Text('Start a new page?'),
+          content: const Text(
+            'What would you like to do with your current drawing?',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () =>
+                  Navigator.of(context).pop(_NewPageAction.cancel),
+              child: const Text('Cancel'),
+            ),
+            TextButton(
+              onPressed: () =>
+                  Navigator.of(context).pop(_NewPageAction.discardAndNew),
+              child: const Text('Continue without saving'),
+            ),
+            ElevatedButton(
+              onPressed: () =>
+                  Navigator.of(context).pop(_NewPageAction.saveAndNew),
+              child: const Text('Save to continue later'),
+            ),
+          ],
+        );
+      },
+    );
+
+    if (!mounted || action == null || action == _NewPageAction.cancel) {
+      return;
+    }
+
+    if (action == _NewPageAction.saveAndNew) {
+      final now = DateTime.now().millisecondsSinceEpoch;
+      final size = MediaQuery.of(context).size;
+      final existing = _currentDoc;
+
+      final doc = (existing ?? doc_model.CanvasDoc(
+        id: _currentDocId ?? simpleId(),
+        name: existing?.name ?? 'Untitled',
+        createdAt: existing?.createdAt ?? now,
+        updatedAt: now,
+        width: existing?.width ?? size.width.toInt(),
+        height: existing?.height ?? size.height.toInt(),
+        background:
+            existing?.background ?? doc_model.Background.solid(0xFF000000),
+        symmetry: existing?.symmetry ?? doc_model.SymmetryMode.off,
+      )).copyWith(
+        updatedAt: now,
+      );
+
+      final bundle = CanvasDocumentBundle(
+        doc: doc,
+        strokes: List.of(controller.strokes),
+      );
+
+      final storage = DocumentStorage.instance;
+      final savedId = await storage.saveBundle(
+        bundle,
+        existingId: _currentDocId,
+      );
+
+      _currentDocId = savedId;
+      _currentDoc = doc;
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Drawing saved to main menu')),
+        );
+      }
+    } else if (action == _NewPageAction.discardAndNew) {
+      final docId = _currentDocId;
+      if (docId != null) {
+        DocumentStorage.instance.deleteDocument(docId);
+      }
+    }
+
+    _currentDocId = null;
+    _currentDoc = null;
+    controller.newDocument();
+  }
+
   @override
   Widget build(BuildContext context) {
-    final controller = ref.watch(canvasControllerProvider);
+    final controller = ref.watch(canvas_state.canvasControllerProvider);
     return Scaffold(
       appBar: PreferredSize(
         preferredSize: const Size.fromHeight(56),
         child: TopToolbar(
           controller: controller,
           onExport: _exportPng,
-          onNew: _handleNewPressed,
+          onNew: () => _handleNewDocument(controller),
         ),
       ),
       bottomNavigationBar: BottomDock(controller: controller),
       body: Listener(
         behavior: HitTestBehavior.translucent,
-        onPointerDown: (event) => controller.pointerDown(event.pointer, event.localPosition),
-        onPointerMove: (event) => controller.pointerMove(event.pointer, event.localPosition),
+        onPointerDown: (event) =>
+            controller.pointerDown(event.pointer, event.localPosition),
+        onPointerMove: (event) =>
+            controller.pointerMove(event.pointer, event.localPosition),
         onPointerUp: (event) => controller.pointerUp(event.pointer),
         child: RepaintBoundary(
           key: _repaintKey,

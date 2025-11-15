@@ -65,7 +65,8 @@ class DocumentStorage {
   ///
   /// If [existingId] is provided, that id is reused; otherwise [bundle.doc.id]
   /// is used. Returns the id that was persisted.
-  Future<String> saveBundle(CanvasDocumentBundle bundle, {String? existingId}) async {
+  Future<String> saveBundle(CanvasDocumentBundle bundle,
+      {String? existingId}) async {
     final id = existingId ?? bundle.doc.id;
     final file = await _docFile(id);
     final payload = bundle.toJson();
@@ -117,5 +118,15 @@ class DocumentStorage {
     if (await root.exists()) {
       await root.delete(recursive: true);
     }
+  }
+
+  /// Convenience wrapper for loading the list of saved documents.
+  Future<List<SavedDocumentInfo>> listDocuments() {
+    return loadIndex();
+  }
+
+  /// Convenience wrapper for loading a single document bundle by id.
+  Future<CanvasDocumentBundle?> loadDocument(String id) {
+    return loadBundle(id);
   }
 }

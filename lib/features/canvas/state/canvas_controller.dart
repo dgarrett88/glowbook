@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/models/brush.dart';
 import '../../../core/models/stroke.dart';
+import '../../../core/models/canvas_document_bundle.dart';
 import '../render/renderer.dart';
 import 'canvas_state.dart';
 
@@ -74,6 +75,9 @@ class CanvasController extends ChangeNotifier {
 
   late final Renderer _renderer = Renderer(repaint, () => symmetry);
 
+  List<Stroke> get strokes => List.unmodifiable(_state.strokes);
+
+
   int color = 0xFFFF66FF;
   double brushSize = 10.0;
   double brushGlow = 0.7;
@@ -81,8 +85,6 @@ class CanvasController extends ChangeNotifier {
   CanvasState _state = const CanvasState();
   Stroke? _current;
   int _startMs = 0;
-
-  List<Stroke> get strokes => List.unmodifiable(_state.strokes);
 
   // Track single active pointer id to prevent 2-finger line connection.
   int? _activePointerId;
@@ -164,7 +166,19 @@ class CanvasController extends ChangeNotifier {
   
 
   /// Clears current strokes/redos and starts a fresh blank canvas.
-  void newDocument(){
+  
+  void loadFromBundle(CanvasDocumentBundle bundle) {
+    _state = CanvasState(
+      strokes: List<Stroke>.from(bundle.strokes),
+      redoStack: const [],
+    );
+    _current = null;
+    _activePointerId = null;
+    _renderer.rebuildFrom(_state.strokes);
+    _tick();
+  }
+
+void newDocument(){
     _state = const CanvasState();
     _current = null;
     _activePointerId = null;
