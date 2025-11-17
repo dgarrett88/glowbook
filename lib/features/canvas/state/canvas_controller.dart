@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+
 import '../../../core/models/brush.dart';
 import '../../../core/models/stroke.dart';
 import '../../../core/models/canvas_document_bundle.dart';
@@ -8,7 +9,8 @@ import 'canvas_state.dart';
 
 enum SymmetryMode { off, mirrorV, mirrorH, quad }
 
-final canvasControllerProvider = ChangeNotifierProvider<CanvasController>((ref) => CanvasController());
+final canvasControllerProvider =
+    ChangeNotifierProvider<CanvasController>((ref) => CanvasController());
 
 enum GlowBlend { additive, screen }
 
@@ -77,10 +79,16 @@ class CanvasController extends ChangeNotifier {
 
   List<Stroke> get strokes => List.unmodifiable(_state.strokes);
 
-
   int color = 0xFFFF66FF;
   double brushSize = 10.0;
-  double brushGlow = 0.7;
+
+  double _brushGlow = 0.7;
+  double get brushGlow => _brushGlow;
+
+  void setBrushGlow(double value) {
+    _brushGlow = value.clamp(0.0, 1.0);
+    notifyListeners();
+  }
 
   CanvasState _state = const CanvasState();
   Stroke? _current;
@@ -95,28 +103,49 @@ class CanvasController extends ChangeNotifier {
 
   Renderer get painter => _renderer;
 
-  void _tick() { repaint.value++; }
+  void _tick() {
+    repaint.value++;
+  }
 
-  void setBrushSize(double v){ brushSize = v; notifyListeners(); }
-  void setColor(int c){ color = c; notifyListeners(); }
-  void setBrush(String id){ brushId = id; notifyListeners(); }
+  void setBrushSize(double v) {
+    brushSize = v;
+    notifyListeners();
+  }
 
-  void setSymmetry(SymmetryMode m){
+  void setColor(int c) {
+    color = c;
+    notifyListeners();
+  }
+
+  void setBrush(String id) {
+    brushId = id;
+    notifyListeners();
+  }
+
+  void setSymmetry(SymmetryMode m) {
     symmetry = m;
     _tick();
     notifyListeners();
   }
 
-  void cycleSymmetry(){
-    switch(symmetry){
-      case SymmetryMode.off: setSymmetry(SymmetryMode.mirrorV); break;
-      case SymmetryMode.mirrorV: setSymmetry(SymmetryMode.mirrorH); break;
-      case SymmetryMode.mirrorH: setSymmetry(SymmetryMode.quad); break;
-      case SymmetryMode.quad: setSymmetry(SymmetryMode.off); break;
+  void cycleSymmetry() {
+    switch (symmetry) {
+      case SymmetryMode.off:
+        setSymmetry(SymmetryMode.mirrorV);
+        break;
+      case SymmetryMode.mirrorV:
+        setSymmetry(SymmetryMode.mirrorH);
+        break;
+      case SymmetryMode.mirrorH:
+        setSymmetry(SymmetryMode.quad);
+        break;
+      case SymmetryMode.quad:
+        setSymmetry(SymmetryMode.off);
+        break;
     }
   }
 
-  void pointerDown(int pointer, Offset pos){
+  void pointerDown(int pointer, Offset pos) {
     // If a stroke is in progress, ignore any extra fingers.
     if (_activePointerId != null) return;
     _activePointerId = pointer;
@@ -136,7 +165,7 @@ class CanvasController extends ChangeNotifier {
     _tick();
   }
 
-  void pointerMove(int pointer, Offset pos){
+  void pointerMove(int pointer, Offset pos) {
     if (_activePointerId != pointer) return; // ignore other pointers
     final s = _current;
     if (s == null) return;
@@ -147,7 +176,7 @@ class CanvasController extends ChangeNotifier {
     _tick();
   }
 
-  void pointerUp(int pointer){
+  void pointerUp(int pointer) {
     if (_activePointerId != pointer) return; // ignore irrelevant ups
     _activePointerId = null;
     final s = _current;
@@ -159,19 +188,20 @@ class CanvasController extends ChangeNotifier {
     _tick();
   }
 
-  String _symmetryId(SymmetryMode m){
-    switch(m){
-      case SymmetryMode.mirrorV: return 'mirrorV';
-      case SymmetryMode.mirrorH: return 'mirrorH';
-      case SymmetryMode.quad: return 'quad';
-      case SymmetryMode.off: return 'off';
+  String _symmetryId(SymmetryMode m) {
+    switch (m) {
+      case SymmetryMode.mirrorV:
+        return 'mirrorV';
+      case SymmetryMode.mirrorH:
+        return 'mirrorH';
+      case SymmetryMode.quad:
+        return 'quad';
+      case SymmetryMode.off:
+        return 'off';
     }
   }
 
-  
-
   /// Clears current strokes/redos and starts a fresh blank canvas.
-  
   void loadFromBundle(CanvasDocumentBundle bundle) {
     _state = CanvasState(
       strokes: List<Stroke>.from(bundle.strokes),
@@ -184,7 +214,7 @@ class CanvasController extends ChangeNotifier {
     _tick();
   }
 
-void newDocument(){
+  void newDocument() {
     _state = const CanvasState();
     _current = null;
     _activePointerId = null;
@@ -193,14 +223,13 @@ void newDocument(){
     _tick();
   }
 
-
   // Mark the current state as saved so callers can skip
   // save/discard prompts when nothing has changed.
-  void markSaved(){
+  void markSaved() {
     _hasUnsavedChanges = false;
   }
 
-void undo(){
+  void undo() {
     if (_state.strokes.isEmpty) return;
     final last = _state.strokes.last;
     _state = _state.copyWith(
@@ -212,7 +241,7 @@ void undo(){
     _tick();
   }
 
-  void redo(){
+  void redo() {
     if (_state.redoStack.isEmpty) return;
     final s = _state.redoStack.last;
     _state = _state.copyWith(

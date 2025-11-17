@@ -81,8 +81,10 @@ class DocumentStorage {
       name: bundle.doc.name,
       createdAt: bundle.doc.createdAt,
       updatedAt: bundle.doc.updatedAt,
-      // strokeCount is optional; older entries may not have it.
+      // strokeCount and size are optional; older entries may not have them.
       strokeCount: bundle.strokes.length,
+      width: bundle.doc.width,
+      height: bundle.doc.height,
     );
 
     final existingIdx = index.indexWhere((e) => e.id == id);

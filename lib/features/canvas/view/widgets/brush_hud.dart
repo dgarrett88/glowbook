@@ -1,260 +1,283 @@
-
-import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+
 import '../../state/canvas_controller.dart';
 import '../../../../core/models/brush.dart';
 import 'color_wheel_dialog.dart';
+import 'brush_preview.dart';
 
-/// BrushHUD quickfix:
-/// - Restores brush chips
-/// - Live-updating sliders for size & glow (AnimatedBuilder on controller)
-/// - Restores 8 editable color swatches (long-press opens color wheel)
-class BrushHUD extends StatelessWidget {
-  final CanvasController controller;
-  const BrushHUD({super.key, required this.controller});
+class BrushHUD extends ConsumerWidget {
+  const BrushHUD({super.key});
 
-  int _columnsFor(int slots, double width){
-    if (slots <= 8) return 4;     // 2 rows of 4
-    if (slots <= 24) return 6;    // mid tier
-    return 8;                     // dense for 32
+  // Map actual brush size (1-600) -> slider value (0.0-1.0)
+  double _sizeToSliderValue(double size) {
+    const min1 = 1.0;
+    const max1 = 100.0;
+    const min2 = 100.0;
+    const max2 = 600.0;
+
+    final s = size.clamp(min1, max2);
+
+    if (s <= max1) {
+      // Range 1-100 collapsed into 0.0-0.5
+      final local = (s - min1) / (max1 - min1); // 0..1
+      return local * 0.5; // 0..0.5
+    } else {
+      // Range 100-600 collapsed into 0.5-1.0
+      final local = (s - min2) / (max2 - min2); // 0..1
+      return 0.5 + local * 0.5; // 0.5..1.0
+    }
+  }
+
+  // Map slider value (0.0-1.0) -> actual brush size (1-600)
+  double _sliderValueToSize(double t) {
+    const min1 = 1.0;
+    const max1 = 100.0;
+    const min2 = 100.0;
+    const max2 = 600.0;
+
+    final v = t.clamp(0.0, 1.0);
+
+    if (v <= 0.5) {
+      final local = v / 0.5; // 0..1
+      return min1 + local * (max1 - min1); // 1..100
+    } else {
+      final local = (v - 0.5) / 0.5; // 0..1
+      return min2 + local * (max2 - min2); // 100..600
+    }
   }
 
   @override
-  Widget build(BuildContext context) {
-    return AnimatedBuilder(
-      animation: controller,
-      builder: (context, _) {
-        final slots = controller.paletteSlots.clamp(1, controller.palette.length);
-        final media = MediaQuery.of(context);
-        final maxHeight = media.size.height * 0.85;
-        return ConstrainedBox(
-          constraints: BoxConstraints(maxHeight: maxHeight),
-          child: SafeArea(
-            top: false,
-            child: SingleChildScrollView(
-              padding: EdgeInsets.only(left: 16, right: 16, top: 12, bottom: 16 + media.viewInsets.bottom),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  // Header
-                  Row(
-                    children: const [
-                      Icon(Icons.brush),
-                      SizedBox(width: 8),
-                      Text('Brush', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
-                    ],
-                  ),
-                  const SizedBox(height: 8),
-                  // Brush choices (chips)
-                  Wrap(
-                    spacing: 8,
-                    children: [
-                      _chip('Liquid Neon', Brush.liquidNeon.id),
-                      _chip('Soft Glow',   Brush.softGlow.id),
-                      _chip('Glow Only',  Brush.glowOnly.id),
-                    ],
-                  ),
-                  const SizedBox(height: 12),
-                  // Size
-                  const Text('Size'),
-                  Slider(
-                    value: controller.brushSize,
-                    min: 1,
-                    max: 40,
-                    onChanged: controller.setBrushSize,
-                  ),
-                  const SizedBox(height: 12),
-                  // Glow
-                  const Text('Glow'),
-                  Slider(
-                    value: controller.brushGlow,
-                    min: 0.0,
-                    max: 3.0,
-                    onChanged: (v) {
-                      controller.brushGlow = v;
-                      controller.notifyListeners();
-                    },
-                  ),
-                  const SizedBox(height: 12),
-                  // Colors
-                  const Text('Colors (hold to edit)'),
-                  const SizedBox(height: 8),
-                  LayoutBuilder(
-                    builder: (ctx, constraints){
-                      final cols = _columnsFor(slots, constraints.maxWidth);
-                      final itemSize = (constraints.maxWidth - (8.0 * (cols - 1))) / cols;
-                      return GridView.builder(
-                        padding: EdgeInsets.zero,
-                        shrinkWrap: true,
-                        physics: const NeverScrollableScrollPhysics(),
-                        gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-                          crossAxisCount: cols,
-                          crossAxisSpacing: 8,
-                          mainAxisSpacing: 8,
-                          childAspectRatio: 1,
-                        ),
-                        itemCount: slots,
-                        itemBuilder: (ctx, i){
-                          final argb = controller.palette[i];
-                          final selected = controller.color == argb;
-                          return _SwatchTile(
-                            size: itemSize,
-                            argb: argb,
-                            selected: selected,
-                            onTapSelect: () => controller.setColor(argb),
-                            onPickCommit: (c){
-                              controller.updatePalette(i, c.toARGB32());
-                              controller.setColor(c.toARGB32());
-                            },
-                          );
-                        },
-                      );
-                    },
-                  ),
-                  const SizedBox(height: 10),
-                  Align(
-                    alignment: Alignment.centerRight,
-                    child: ElevatedButton.icon(
-                      onPressed: ()=> Navigator.pop(context),
-                      icon: const Icon(Icons.check),
-                      label: const Text('Done'),
+  Widget build(BuildContext context, WidgetRef ref) {
+    final controller = ref.watch(canvasControllerProvider);
+    final ctrl = ref.read(canvasControllerProvider);
+
+    // UI glow value: 0-100 mapped from internal 0-1
+    final glowUi = (controller.brushGlow * 100.0).clamp(0.0, 100.0);
+
+    return Container(
+      padding: const EdgeInsets.all(8),
+      decoration: BoxDecoration(
+        color: Colors.black.withValues(alpha: 0.8),
+        borderRadius: BorderRadius.circular(16),
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // ---------------------------
+          // Brush selector row
+          // ---------------------------
+          SizedBox(
+            height: 36,
+            child: ListView.separated(
+              scrollDirection: Axis.horizontal,
+              itemCount: Brush.all.length,
+              separatorBuilder: (_, __) => const SizedBox(width: 8),
+              itemBuilder: (context, index) {
+                final brush = Brush.all[index];
+                final isSelected = controller.brushId == brush.id;
+                return GestureDetector(
+                  onTap: () => ctrl.setBrush(brush.id),
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 10,
+                      vertical: 6,
+                    ),
+                    decoration: BoxDecoration(
+                      color: Colors.white.withValues(
+                        alpha: isSelected ? 0.15 : 0.05,
+                      ),
+                      borderRadius: BorderRadius.circular(999),
+                      border: Border.all(
+                        color: isSelected ? Colors.white : Colors.white24,
+                      ),
+                    ),
+                    child: Text(
+                      brush.name,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 12,
+                      ),
                     ),
                   ),
-                ],
+                );
+              },
+            ),
+          ),
+
+          const SizedBox(height: 12),
+
+          // ---------------------------
+          // Brush Preview
+          // ---------------------------
+          Row(
+            children: [
+              // Mini preview canvas
+              SizedBox(
+                width: 130,
+                height: 90,
+                child: BrushPreview(controller: controller),
               ),
-            ),
+              const SizedBox(width: 12),
+
+              // Brush info text
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      Brush.fromId(controller.brushId).name,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 14,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    const SizedBox(height: 6),
+                    Text(
+                      'Size: ${controller.brushSize.toStringAsFixed(0)}\n'
+                      'Glow: ${glowUi.toStringAsFixed(0)}',
+                      style: TextStyle(
+                        color: Colors.white.withOpacity(0.7),
+                        fontSize: 11,
+                        height: 1.3,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
           ),
-        );
-      }
-    );
-  }
 
-  Widget _chip(String label, String id){
-    return Builder(
-      builder: (context) {
-        final hud = context.findAncestorWidgetOfExactType<BrushHUD>()!;
-        final selected = hud.controller.brushId == id;
-        return ChoiceChip(
-          label: Text(label),
-          selected: selected,
-          onSelected: (_){ hud.controller.setBrush(id); },
-        );
-      }
-    );
-  }
-}
+          const SizedBox(height: 16),
 
-class _SwatchTile extends StatefulWidget {
-  const _SwatchTile({
-    required this.size,
-    required this.argb,
-    required this.selected,
-    required this.onTapSelect,
-    required this.onPickCommit,
-  });
-
-  final double size;
-  final int argb;
-  final bool selected;
-  final VoidCallback onTapSelect;
-  final ValueChanged<Color> onPickCommit;
-
-  @override
-  State<_SwatchTile> createState() => _SwatchTileState();
-}
-
-class _SwatchTileState extends State<_SwatchTile> with SingleTickerProviderStateMixin {
-  static const Duration _holdDuration = Duration(milliseconds: 300);
-  late final AnimationController _ring = AnimationController(vsync: this, duration: _holdDuration);
-
-  Timer? _holdTimer;
-  bool _pressing = false;
-  bool _armed = false;
-
-  @override
-  void dispose() {
-    _holdTimer?.cancel();
-    _ring.dispose();
-    super.dispose();
-  }
-
-  void _startHold() {
-    _cancelHold();
-    setState(()=> _pressing = true);
-    _ring.forward(from: 0);
-    _holdTimer = Timer(_holdDuration, () async {
-      if (!mounted) return;
-      if (_pressing) {
-        _armed = true;
-        final picked = await showDialog<Color>(
-          context: context,
-          builder: (_) => ColorWheelDialog(initial: Color(widget.argb)),
-        );
-        if (!mounted) return;
-        if (picked != null) {
-          widget.onPickCommit(picked);
-        }
-        _cancelHold();
-      }
-    });
-  }
-
-  void _cancelHold() {
-    _holdTimer?.cancel();
-    _holdTimer = null;
-    if (mounted) setState(()=> _pressing = false);
-    _ring.stop();
-    _armed = false;
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final borderColor = widget.selected ? Colors.white : Colors.white24;
-    final spinnerSize = widget.size * 0.36;
-
-    return GestureDetector(
-      behavior: HitTestBehavior.opaque,
-      onTapDown: (_) => _startHold(),
-      onTapUp: (_) {
-        final openedDialog = _armed;
-        _cancelHold();
-        if (!openedDialog) {
-          widget.onTapSelect();
-        }
-      },
-      onTapCancel: _cancelHold,
-      child: Stack(
-        alignment: Alignment.center,
-        children: [
-          Container(
-            width: widget.size, height: widget.size,
-            decoration: BoxDecoration(
-              color: Color(widget.argb),
-              borderRadius: BorderRadius.circular(8),
-              border: Border.all(color: borderColor, width: widget.selected ? 2 : 1),
-              boxShadow: widget.selected ? [const BoxShadow(color: Colors.black54, blurRadius: 6)] : null,
-            ),
-          ),
-          IgnorePointer(
-            ignoring: true,
-            child: AnimatedOpacity(
-              opacity: _pressing ? 1 : 0,
-              duration: const Duration(milliseconds: 80),
-              child: SizedBox(
-                width: spinnerSize, height: spinnerSize,
-                child: AnimatedBuilder(
-                  animation: _ring,
-                  builder: (context, _) {
-                    return CircularProgressIndicator(
-                      value: _ring.value,
-                      strokeWidth: 2,
-                      valueColor: const AlwaysStoppedAnimation<Color>(Colors.white),
-                      backgroundColor: Colors.white24,
-                    );
+          // ---------------------------
+          // Size slider (non-linear)
+          // ---------------------------
+          Row(
+            children: [
+              const Text(
+                'Size',
+                style: TextStyle(color: Colors.white, fontSize: 12),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Slider(
+                  // Slider range is 0..1, mapped to 1..600
+                  value: _sizeToSliderValue(controller.brushSize),
+                  min: 0.0,
+                  max: 1.0,
+                  onChanged: (t) {
+                    final newSize = _sliderValueToSize(t);
+                    ctrl.setBrushSize(newSize);
                   },
                 ),
               ),
+              Text(
+                controller.brushSize.toStringAsFixed(0),
+                style: const TextStyle(color: Colors.white, fontSize: 12),
+              ),
+            ],
+          ),
+
+          // ---------------------------
+          // Glow size slider (0-100 UI -> 0-1 internal)
+          // ---------------------------
+          Row(
+            children: [
+              const Text(
+                'Glow size',
+                style: TextStyle(color: Colors.white, fontSize: 12),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Slider(
+                  value: glowUi,
+                  min: 0.0,
+                  max: 100.0,
+                  onChanged: (v) {
+                    ctrl.setBrushGlow(v / 100.0);
+                  },
+                ),
+              ),
+              Text(
+                glowUi.toStringAsFixed(0),
+                style: const TextStyle(color: Colors.white, fontSize: 12),
+              ),
+            ],
+          ),
+
+          const SizedBox(height: 8),
+
+          // ---------------------------
+          // Palette / Colors
+          // ---------------------------
+          _PaletteRow(controller: controller, ctrl: ctrl),
+        ],
+      ),
+    );
+  }
+}
+
+class _PaletteRow extends StatelessWidget {
+  final CanvasController controller;
+  final CanvasController ctrl;
+
+  const _PaletteRow({
+    required this.controller,
+    required this.ctrl,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = controller.palette;
+    final slots = controller.paletteSlots;
+
+    return SizedBox(
+      height: 40,
+      child: Row(
+        children: [
+          const Text(
+            'Colors',
+            style: TextStyle(color: Colors.white, fontSize: 12),
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: ListView.separated(
+              scrollDirection: Axis.horizontal,
+              itemCount: slots,
+              separatorBuilder: (_, __) => const SizedBox(width: 6),
+              itemBuilder: (context, index) {
+                final argb = colors[index];
+                final isSelected = controller.color == argb;
+
+                return GestureDetector(
+                  onTap: () => ctrl.setColor(argb),
+                  onLongPress: () async {
+                    final picked = await showDialog<Color?>(
+                      context: context,
+                      barrierDismissible: true,
+                      builder: (_) => ColorWheelDialog(initial: Color(argb)),
+                    );
+                    if (picked != null) {
+                      ctrl.updatePalette(index, picked.toARGB32());
+                    }
+                  },
+                  child: Container(
+                    width: 26,
+                    height: 26,
+                    decoration: BoxDecoration(
+                      color: Color(argb),
+                      shape: BoxShape.circle,
+                      border: Border.all(
+                        color: isSelected ? Colors.white : Colors.black54,
+                        width: isSelected ? 2 : 1,
+                      ),
+                    ),
+                  ),
+                );
+              },
             ),
           ),
         ],

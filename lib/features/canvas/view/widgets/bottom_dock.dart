@@ -18,7 +18,10 @@ class BottomDock extends StatelessWidget {
         padding: const EdgeInsets.symmetric(horizontal: 12),
         decoration: BoxDecoration(
           color: cs.surface,
-          boxShadow: const [BoxShadow(blurRadius: 12, offset: Offset(0,-2), color: Colors.black26)],
+          boxShadow: const [
+            BoxShadow(
+                blurRadius: 12, offset: Offset(0, -2), color: Colors.black26)
+          ],
         ),
         child: Row(
           children: [
@@ -29,7 +32,7 @@ class BottomDock extends StatelessWidget {
                 context: context,
                 useSafeArea: true,
                 backgroundColor: cs.surface,
-                builder: (_) => BrushHUD(controller: controller),
+                builder: (_) => BrushHUD(),
               ),
             ),
             _DockButton(
@@ -40,7 +43,8 @@ class BottomDock extends StatelessWidget {
             ),
             _DockButton(
               customIcon: Container(
-                width: 22, height: 22,
+                width: 22,
+                height: 22,
                 decoration: BoxDecoration(
                   color: Color(controller.color),
                   shape: BoxShape.circle,
@@ -52,7 +56,8 @@ class BottomDock extends StatelessWidget {
                 final picked = await showDialog<Color?>(
                   context: context,
                   barrierDismissible: true,
-                  builder: (_) => ColorWheelDialog(initial: Color(controller.color)),
+                  builder: (_) =>
+                      ColorWheelDialog(initial: Color(controller.color)),
                 );
                 if (picked != null) controller.setColor(picked.value);
               },
@@ -63,9 +68,9 @@ class BottomDock extends StatelessWidget {
     );
   }
 
-  void _cycleSymmetry(){
+  void _cycleSymmetry() {
     // Cycle order: Off -> Vertical -> Horizontal -> Quad -> Off
-    switch(controller.symmetry){
+    switch (controller.symmetry) {
       case SymmetryMode.off:
         controller.setSymmetry(SymmetryMode.mirrorV);
         break;
@@ -81,8 +86,8 @@ class BottomDock extends StatelessWidget {
     }
   }
 
-  Widget _symIcon(SymmetryMode m){
-    switch(m){
+  Widget _symIcon(SymmetryMode m) {
+    switch (m) {
       case SymmetryMode.off:
         return const Icon(Icons.blur_circular);
       case SymmetryMode.mirrorV:
@@ -106,11 +111,21 @@ class BottomDock extends StatelessWidget {
             child: Wrap(
               runSpacing: 12,
               children: [
-                _SymRow('Off', const Icon(Icons.blur_circular), () => controller.setSymmetry(SymmetryMode.off)),
+                _SymRow('Off', const Icon(Icons.blur_circular),
+                    () => controller.setSymmetry(SymmetryMode.off)),
                 // NOTE: labels swapped per your request
-                _SymRow('Horizontal', const DiceDotsIcon(pattern: DiceDotsPattern.twoH), () => controller.setSymmetry(SymmetryMode.mirrorV)),
-                _SymRow('Vertical', const DiceDotsIcon(pattern: DiceDotsPattern.twoV), () => controller.setSymmetry(SymmetryMode.mirrorH)),
-                _SymRow('Quad', const DiceDotsIcon(pattern: DiceDotsPattern.four), () => controller.setSymmetry(SymmetryMode.quad)),
+                _SymRow(
+                    'Horizontal',
+                    const DiceDotsIcon(pattern: DiceDotsPattern.twoH),
+                    () => controller.setSymmetry(SymmetryMode.mirrorV)),
+                _SymRow(
+                    'Vertical',
+                    const DiceDotsIcon(pattern: DiceDotsPattern.twoV),
+                    () => controller.setSymmetry(SymmetryMode.mirrorH)),
+                _SymRow(
+                    'Quad',
+                    const DiceDotsIcon(pattern: DiceDotsPattern.four),
+                    () => controller.setSymmetry(SymmetryMode.quad)),
               ],
             ),
           ),
@@ -120,32 +135,41 @@ class BottomDock extends StatelessWidget {
   }
 }
 
-class _SymRow extends StatelessWidget{
+class _SymRow extends StatelessWidget {
   final String label;
   final Widget icon;
   final VoidCallback onTap;
   const _SymRow(this.label, this.icon, this.onTap);
 
   @override
-  Widget build(BuildContext context){
+  Widget build(BuildContext context) {
     return ListTile(
       leading: icon,
       title: Text(label),
-      onTap: (){ Navigator.pop(context); onTap(); },
+      onTap: () {
+        Navigator.pop(context);
+        onTap();
+      },
     );
   }
 }
 
-class _DockButton extends StatelessWidget{
+class _DockButton extends StatelessWidget {
   final IconData? icon;
   final Widget? customIcon;
   final String label;
   final VoidCallback onTap;
   final VoidCallback? onLongPress;
-  const _DockButton({super.key, this.icon, this.customIcon, required this.label, required this.onTap, this.onLongPress});
+  const _DockButton(
+      {super.key,
+      this.icon,
+      this.customIcon,
+      required this.label,
+      required this.onTap,
+      this.onLongPress});
 
   @override
-  Widget build(BuildContext context){
+  Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
     final ic = customIcon ?? Icon(icon, size: 22, color: cs.onSurface);
     return Padding(

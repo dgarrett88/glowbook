@@ -318,10 +318,10 @@ class _MainMenuScreenState extends State<MainMenuScreen> {
                     padding: const EdgeInsets.all(12.0),
                     gridDelegate:
                         const SliverGridDelegateWithFixedCrossAxisCount(
-                      crossAxisCount: 2, // bigger tiles
+                      crossAxisCount: 2,
                       mainAxisSpacing: 12,
                       crossAxisSpacing: 12,
-                      childAspectRatio: 0.8, // a bit taller
+                      childAspectRatio: 0.49, // was 0.8 – more height per tile
                     ),
                     itemCount: docs.length,
                     itemBuilder: (context, index) {
@@ -458,7 +458,10 @@ class _DocumentTile extends StatelessWidget {
               info.name,
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
-              style: textTheme.bodySmall,
+              style: textTheme.bodySmall?.copyWith(
+                fontSize: 18, // <--- adjust this
+                fontWeight: FontWeight.w500,
+              ),
               textAlign: TextAlign.center,
             ),
 
@@ -524,7 +527,7 @@ class _StrokePreviewPainter extends CustomPainter {
       return;
     }
 
-    // Background (solid color only for now)
+    // Background (solid color)
     final params = doc.background.params;
     final colorValue = params['color'] as int?;
     if (colorValue != null) {
@@ -534,11 +537,26 @@ class _StrokePreviewPainter extends CustomPainter {
       );
     }
 
+    // COVER the thumbnail
     final sx = size.width / doc.width;
     final sy = size.height / doc.height;
-    final scale = math.min(sx, sy);
-    final dx = (size.width - doc.width * scale) / 2.0;
-    final dy = (size.height - doc.height * scale) / 2.0;
+    final scale = math.max(sx, sy);
+
+    final contentWidth = doc.width * scale;
+    final contentHeight = doc.height * scale;
+
+    // Center horizontally
+    final dx = (size.width - contentWidth) / 2.0;
+
+    // Base vertical center
+    double dy = (size.height - contentHeight) / 2.0;
+
+    // If the content is taller than the card, bias the crop DOWN a bit
+    // so we see more of the top and less of the bottom.
+    final overflowY = contentHeight - size.height;
+    if (overflowY > 0) {
+      dy += overflowY * 0.55; // tweak 0.2 -> more/less bias if you like
+    }
 
     for (final stroke in strokes) {
       final points = stroke.points;
