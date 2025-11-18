@@ -5,9 +5,9 @@ import '../../../../core/models/stroke.dart';
 import '../../state/canvas_controller.dart' show SymmetryMode;
 import '../../state/glow_blend.dart' as gb;
 
-/// Softer, hazier neon – meant to be smoother than Liquid Neon.
-class SoftGlowBrush {
-  SoftGlowBrush();
+/// Edge glow: bright neon rim, tighter core – “outlined tube” look.
+class EdgeGlowBrush {
+  const EdgeGlowBrush();
 
   Path _buildPath(List<PointSample> pts) {
     final path = Path();
@@ -23,40 +23,39 @@ class SoftGlowBrush {
     final double size = s.size;
     if (size <= 0) return;
 
-    // Glow slider 0–1 controlling radius/softness/brightness.
     final double g = s.glow.clamp(0.0, 1.0);
 
-    // Keep a minimum softness so 0 isn't totally dead.
     final double radiusFactor = math.pow(g, 0.8).toDouble();
-    final double sigma = size * (1.2 + 5.0 * radiusFactor);
-    final double haloWidth = size * (1.4 + 3.0 * radiusFactor);
+    final double sigma = size * (0.6 + 4.5 * radiusFactor);
+    final double outerWidth = size * (1.5 + 2.5 * radiusFactor);
+    final double innerWidth = size * 0.7;
 
-    final double brightFactor = math.pow(g, 0.7).toDouble();
-    final int haloAlpha = (40 + 180 * brightFactor).clamp(0, 255).toInt();
-    final int coreAlpha = (150 + 80 * brightFactor).clamp(0, 255).toInt();
+    final double brightFactor = math.pow(g, 0.75).toDouble();
+    final int outerAlpha = (60 + 150 * brightFactor).clamp(0, 255).toInt();
+    final int innerAlpha = (180 + 60 * brightFactor).clamp(0, 255).toInt();
 
     final Color base = Color(s.color);
 
-    final Paint halo = Paint()
+    final Paint outer = Paint()
       ..style = PaintingStyle.stroke
       ..strokeCap = StrokeCap.round
       ..strokeJoin = StrokeJoin.round
-      ..strokeWidth = haloWidth
-      ..color = base.withAlpha(haloAlpha)
+      ..strokeWidth = outerWidth
+      ..color = base.withAlpha(outerAlpha)
       ..maskFilter = MaskFilter.blur(BlurStyle.normal, sigma)
       ..blendMode = (gb.GlowBlendState.I.mode == gb.GlowBlend.screen)
           ? BlendMode.screen
           : BlendMode.plus;
 
-    final Paint core = Paint()
+    final Paint inner = Paint()
       ..style = PaintingStyle.stroke
       ..strokeCap = StrokeCap.round
       ..strokeJoin = StrokeJoin.round
-      ..strokeWidth = size * 0.8
-      ..color = base.withAlpha(coreAlpha);
+      ..strokeWidth = innerWidth
+      ..color = base.withAlpha(innerAlpha);
 
-    canvas.drawPath(path, halo);
-    canvas.drawPath(path, core);
+    canvas.drawPath(path, outer);
+    canvas.drawPath(path, inner);
   }
 
   List<PointSample> _mirrorV(List<PointSample> src, Size size) =>

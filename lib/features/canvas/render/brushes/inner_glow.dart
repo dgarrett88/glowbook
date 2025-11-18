@@ -5,9 +5,9 @@ import '../../../../core/models/stroke.dart';
 import '../../state/canvas_controller.dart' show SymmetryMode;
 import '../../state/glow_blend.dart' as gb;
 
-/// Softer, hazier neon – meant to be smoother than Liquid Neon.
-class SoftGlowBrush {
-  SoftGlowBrush();
+/// Inner glow: strong inner core with a tighter halo – “tube” feel.
+class InnerGlowBrush {
+  const InnerGlowBrush();
 
   Path _buildPath(List<PointSample> pts) {
     final path = Path();
@@ -23,17 +23,15 @@ class SoftGlowBrush {
     final double size = s.size;
     if (size <= 0) return;
 
-    // Glow slider 0–1 controlling radius/softness/brightness.
     final double g = s.glow.clamp(0.0, 1.0);
 
-    // Keep a minimum softness so 0 isn't totally dead.
-    final double radiusFactor = math.pow(g, 0.8).toDouble();
-    final double sigma = size * (1.2 + 5.0 * radiusFactor);
-    final double haloWidth = size * (1.4 + 3.0 * radiusFactor);
+    final double radiusFactor = math.pow(g, 0.85).toDouble();
+    final double sigma = size * (0.4 + 3.8 * radiusFactor);
+    final double haloWidth = size * (1.3 + 2.4 * radiusFactor);
 
-    final double brightFactor = math.pow(g, 0.7).toDouble();
-    final int haloAlpha = (40 + 180 * brightFactor).clamp(0, 255).toInt();
-    final int coreAlpha = (150 + 80 * brightFactor).clamp(0, 255).toInt();
+    final double brightFactor = math.pow(g, 0.8).toDouble();
+    final int haloAlpha = (40 + 150 * brightFactor).clamp(0, 255).toInt();
+    final int coreAlpha = (200 + 40 * brightFactor).clamp(0, 255).toInt();
 
     final Color base = Color(s.color);
 
@@ -52,7 +50,7 @@ class SoftGlowBrush {
       ..style = PaintingStyle.stroke
       ..strokeCap = StrokeCap.round
       ..strokeJoin = StrokeJoin.round
-      ..strokeWidth = size * 0.8
+      ..strokeWidth = math.max(size * (0.9 + 0.25 * g), 1.0)
       ..color = base.withAlpha(coreAlpha);
 
     canvas.drawPath(path, halo);

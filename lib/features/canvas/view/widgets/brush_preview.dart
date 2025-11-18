@@ -8,6 +8,10 @@ import '../../state/canvas_controller.dart';
 import '../../render/brushes/liquid_neon.dart';
 import '../../render/brushes/soft_glow.dart';
 import '../../render/brushes/glow_only.dart';
+import '../../render/brushes/hyper_neon.dart';
+import '../../render/brushes/edge_glow.dart';
+import '../../render/brushes/ghost_trail.dart';
+import '../../render/brushes/inner_glow.dart';
 
 class BrushPreview extends StatelessWidget {
   final CanvasController controller;
@@ -30,9 +34,14 @@ class BrushPreview extends StatelessWidget {
 
 class _BrushPreviewPainter extends CustomPainter {
   final CanvasController controller;
+
   final LiquidNeonBrush _neon = const LiquidNeonBrush();
   final SoftGlowBrush _soft = SoftGlowBrush();
   final GlowOnlyBrush _glowOnly = const GlowOnlyBrush();
+  final HyperNeonBrush _hyper = const HyperNeonBrush();
+  final EdgeGlowBrush _edge = const EdgeGlowBrush();
+  final GhostTrailBrush _ghost = const GhostTrailBrush();
+  final InnerGlowBrush _inner = const InnerGlowBrush();
 
   _BrushPreviewPainter(this.controller) : super(repaint: controller);
 
@@ -85,8 +94,6 @@ class _BrushPreviewPainter extends CustomPainter {
 
     const mode = SymmetryMode.off;
 
-    // Choose the brush implementation based on brushId.
-    // Fallback to neon if we don't recognize it.
     switch (stroke.brushId) {
       case 'liquid_neon':
         _neon.drawFullWithSymmetry(canvas, stroke, size, mode);
@@ -97,6 +104,18 @@ class _BrushPreviewPainter extends CustomPainter {
       case 'glow_only':
         _glowOnly.drawFullWithSymmetry(canvas, stroke, size, mode);
         break;
+      case 'hyper_neon':
+        _hyper.drawFullWithSymmetry(canvas, stroke, size, mode);
+        break;
+      case 'edge_glow':
+        _edge.drawFullWithSymmetry(canvas, stroke, size, mode);
+        break;
+      case 'ghost_trail':
+        _ghost.drawFullWithSymmetry(canvas, stroke, size, mode);
+        break;
+      case 'inner_glow':
+        _inner.drawFullWithSymmetry(canvas, stroke, size, mode);
+        break;
       default:
         _neon.drawFullWithSymmetry(canvas, stroke, size, mode);
         break;
@@ -105,7 +124,6 @@ class _BrushPreviewPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant _BrushPreviewPainter oldDelegate) {
-    // We already listen to controller via `repaint`, so this is mostly sanity.
     return oldDelegate.controller != controller;
   }
 }
