@@ -108,46 +108,12 @@ class BrushHUD extends ConsumerWidget {
 
           const SizedBox(height: 12),
 
-          // ---------------------------
           // Brush Preview
           // ---------------------------
-          Row(
-            children: [
-              // Mini preview canvas
-              SizedBox(
-                width: 130,
-                height: 90,
-                child: BrushPreview(controller: controller),
-              ),
-              const SizedBox(width: 12),
-
-              // Brush info text
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      Brush.fromId(controller.brushId).name,
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontSize: 14,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                    const SizedBox(height: 6),
-                    Text(
-                      'Size: ${controller.brushSize.toStringAsFixed(0)}\n'
-                      'Glow: ${glowUi.toStringAsFixed(0)}',
-                      style: TextStyle(
-                        color: Colors.white.withOpacity(0.7),
-                        fontSize: 11,
-                        height: 1.3,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ],
+          SizedBox(
+            height: 160,
+            width: double.infinity,
+            child: BrushPreview(controller: controller),
           ),
 
           const SizedBox(height: 16),

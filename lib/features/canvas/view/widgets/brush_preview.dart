@@ -2,7 +2,6 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 
-import '../../../../core/models/brush.dart';
 import '../../../../core/models/stroke.dart';
 import '../../state/canvas_controller.dart';
 import '../../render/brushes/liquid_neon.dart';
@@ -22,11 +21,8 @@ class BrushPreview extends StatelessWidget {
   Widget build(BuildContext context) {
     return ClipRRect(
       borderRadius: BorderRadius.circular(12),
-      child: AspectRatio(
-        aspectRatio: 3 / 2,
-        child: CustomPaint(
-          painter: _BrushPreviewPainter(controller),
-        ),
+      child: CustomPaint(
+        painter: _BrushPreviewPainter(controller),
       ),
     );
   }
@@ -35,9 +31,9 @@ class BrushPreview extends StatelessWidget {
 class _BrushPreviewPainter extends CustomPainter {
   final CanvasController controller;
 
-  final LiquidNeonBrush _neon = const LiquidNeonBrush();
+  final LiquidNeonBrush _neon = LiquidNeonBrush();
   final SoftGlowBrush _soft = SoftGlowBrush();
-  final GlowOnlyBrush _glowOnly = const GlowOnlyBrush();
+  final GlowOnlyBrush _glowOnly = GlowOnlyBrush();
   final HyperNeonBrush _hyper = const HyperNeonBrush();
   final EdgeGlowBrush _edge = const EdgeGlowBrush();
   final GhostTrailBrush _ghost = const GhostTrailBrush();
@@ -48,41 +44,44 @@ class _BrushPreviewPainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
     // Background
-    final bg = Paint()..color = const Color(0xFF050506);
-    canvas.drawRect(Offset.zero & size, bg);
+    final bgPaint = Paint()..color = const Color(0xFF050506);
+    canvas.drawRect(Offset.zero & size, bgPaint);
 
     // Subtle border
-    final border = Paint()
+    final borderPaint = Paint()
       ..style = PaintingStyle.stroke
       ..strokeWidth = 1
-      ..color = Colors.white.withValues(alpha: 0.15);
+      ..color = Colors.white.withOpacity(0.2);
     canvas.drawRRect(
       RRect.fromRectAndRadius(
         Offset.zero & size,
         const Radius.circular(12),
       ),
-      border,
+      borderPaint,
     );
 
-    final cx = size.width / 2;
-    final cy = size.height / 2;
+    final width = size.width;
+    final height = size.height;
+    final midY = height * 0.5;
 
-    // Build a clustered "dot" stroke in the center.
+    // Build a single stroke from left to right with a gentle wave.
+    const sampleCount = 32;
     final points = <PointSample>[];
-    const sampleCount = 12;
-    final radius =
-        (controller.brushSize / 2).clamp(2.0, size.shortestSide * 0.18);
+
+    final xStart = width * 0.08;
+    final xEnd = width * 0.92;
+    final amp = height * 0.18;
 
     for (int i = 0; i < sampleCount; i++) {
-      final angle = (i / sampleCount) * 2 * math.pi;
-      final r = radius * (0.3 + 0.7 * (i / sampleCount));
-      final x = cx + r * math.cos(angle);
-      final y = cy + r * math.sin(angle);
-      points.add(PointSample(x, y, i * 10));
+      final t = i / (sampleCount - 1);
+      final x = xStart + (xEnd - xStart) * t;
+      final wave = math.sin(t * math.pi * 2.0);
+      final y = midY + wave * amp;
+      points.add(PointSample(x, y, (t * 300).round()));
     }
 
     final stroke = Stroke(
-      id: 'preview_dot',
+      id: 'preview_stroke',
       brushId: controller.brushId,
       color: controller.color,
       size: controller.brushSize,
