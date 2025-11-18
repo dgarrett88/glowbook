@@ -20,7 +20,10 @@ class BottomDock extends StatelessWidget {
           color: cs.surface,
           boxShadow: const [
             BoxShadow(
-                blurRadius: 12, offset: Offset(0, -2), color: Colors.black26)
+              blurRadius: 12,
+              offset: Offset(0, -2),
+              color: Colors.black26,
+            ),
           ],
         ),
         child: Row(
@@ -30,9 +33,29 @@ class BottomDock extends StatelessWidget {
               label: 'Brush',
               onTap: () => showModalBottomSheet(
                 context: context,
-                useSafeArea: true,
-                backgroundColor: cs.surface,
-                builder: (_) => BrushHUD(),
+                backgroundColor: Colors.transparent,
+                isScrollControlled: true,
+                builder: (ctx) {
+                  final screenH = MediaQuery.of(ctx).size.height;
+                  return Align(
+                    alignment: Alignment.bottomCenter,
+                    child: SizedBox(
+                      height: screenH * 0.85, // 👈 85% of screen height
+                      child: Container(
+                        decoration: BoxDecoration(
+                          color: cs.surface,
+                          borderRadius: const BorderRadius.vertical(
+                            top: Radius.circular(16),
+                          ),
+                        ),
+                        child: const Padding(
+                          padding: EdgeInsets.all(8.0),
+                          child: BrushHUD(),
+                        ),
+                      ),
+                    ),
+                  );
+                },
               ),
             ),
             _DockButton(
@@ -86,7 +109,7 @@ class BottomDock extends StatelessWidget {
     }
   }
 
-  Widget _symIcon(SymmetryMode m) {
+  static Widget _symIcon(SymmetryMode m) {
     switch (m) {
       case SymmetryMode.off:
         return const Icon(Icons.blur_circular);
@@ -160,13 +183,14 @@ class _DockButton extends StatelessWidget {
   final String label;
   final VoidCallback onTap;
   final VoidCallback? onLongPress;
-  const _DockButton(
-      {super.key,
-      this.icon,
-      this.customIcon,
-      required this.label,
-      required this.onTap,
-      this.onLongPress});
+  const _DockButton({
+    super.key,
+    this.icon,
+    this.customIcon,
+    required this.label,
+    required this.onTap,
+    this.onLongPress,
+  });
 
   @override
   Widget build(BuildContext context) {
