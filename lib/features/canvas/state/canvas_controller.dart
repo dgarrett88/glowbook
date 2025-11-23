@@ -82,15 +82,121 @@ class CanvasController extends ChangeNotifier {
   int color = 0xFFFF66FF;
   double brushSize = 10.0;
 
+  /// How solid the inner stroke core is (0..1).
+  double coreOpacity = 0.86;
+
+  // Legacy effective glow value (0..1) used by existing brushes.
+  // This is derived from the three multi-glow controls so older code
+  // that only reads [brushGlow] keeps working.
   double _brushGlow = 0.7;
   double get brushGlow => _brushGlow;
 
+  // Multi-glow controls (0..1). These are the source of truth; [_brushGlow]
+  // is recomputed from them.
+  double glowRadius = 0.7;
+  double glowOpacity = 1.0;
+  double glowBrightness = 0.7;
+
+  // Whether the HUD is in "advanced glow" mode.
+  bool _advancedGlowEnabled = false;
+  bool get advancedGlowEnabled => _advancedGlowEnabled;
+
+  // Saved advanced glow settings so they survive when the user
+  // turns advanced OFF, plays with the simple Glow slider, and
+  // later turns advanced back ON again.
+  double _savedAdvancedGlowRadius = 0.7;
+  double _savedAdvancedGlowBrightness = 0.8;
+  double _savedAdvancedGlowOpacity = 1.0;
+
+  void _recomputeBrushGlow() {
+    // Radius = how far the glow spreads
+    // Opacity = master fade
+    final r = glowRadius.clamp(0.0, 1.0);
+    final o = glowOpacity.clamp(0.0, 1.0);
+
+    // Brightness does NOT affect geometry – only colour inside the brushes.
+    _brushGlow = r * o;
+  }
+
+  /// Legacy single-glow setter used by older UI.
+  /// When called, we interpret this as "link all glow controls" and set
+  /// radius and brightness to the same value with full opacity.
   void setBrushGlow(double value) {
-    _brushGlow = value.clamp(0.0, 1.0);
+    final v = value.clamp(0.0, 1.0);
+    glowRadius = v;
+    glowBrightness = v;
+    glowOpacity = 1.0;
+    _recomputeBrushGlow();
+    notifyListeners();
+  }
+
+  void setGlowRadius(double value) {
+    glowRadius = value.clamp(0.0, 1.0);
+
+    // If we're in advanced mode, keep the saved advanced radius in sync.
+    if (_advancedGlowEnabled) {
+      _savedAdvancedGlowRadius = glowRadius;
+    }
+
+    _recomputeBrushGlow();
+    notifyListeners();
+  }
+
+  void setGlowOpacity(double value) {
+    glowOpacity = value.clamp(0.0, 1.0);
+
+    if (_advancedGlowEnabled) {
+      _savedAdvancedGlowOpacity = glowOpacity;
+    }
+
+    _recomputeBrushGlow();
+    notifyListeners();
+  }
+
+  void setGlowBrightness(double value) {
+    glowBrightness = value.clamp(0.0, 1.0);
+
+    if (_advancedGlowEnabled) {
+      _savedAdvancedGlowBrightness = glowBrightness;
+    }
+
+    _recomputeBrushGlow();
+    notifyListeners();
+  }
+
+  void setAdvancedGlowEnabled(bool value) {
+    if (_advancedGlowEnabled == value) return;
+
+    if (value) {
+      // Turning advanced ON:
+      // Restore the last advanced settings into the live glow fields,
+      // so the sliders show what the user previously configured.
+      glowRadius = _savedAdvancedGlowRadius.clamp(0.0, 1.0);
+      glowBrightness = _savedAdvancedGlowBrightness.clamp(0.0, 1.0);
+      glowOpacity = _savedAdvancedGlowOpacity.clamp(0.0, 1.0);
+      _recomputeBrushGlow();
+    } else {
+      // Turning advanced OFF:
+      // 1) Snapshot the current advanced settings so we can restore them
+      //    next time advanced is enabled.
+      _savedAdvancedGlowRadius = glowRadius.clamp(0.0, 1.0);
+      _savedAdvancedGlowBrightness = glowBrightness.clamp(0.0, 1.0);
+      _savedAdvancedGlowOpacity = glowOpacity.clamp(0.0, 1.0);
+
+      // 2) Reset live glow fields back to the default "Liquid Neon" style.
+      glowRadius = 0.7;
+      glowBrightness = 0.7;
+      glowOpacity = 1.0;
+
+      _recomputeBrushGlow();
+    }
+
+    _advancedGlowEnabled = value;
     notifyListeners();
   }
 
   CanvasState _state = const CanvasState();
+
   Stroke? _current;
   int _startMs = 0;
 
@@ -109,6 +215,11 @@ class CanvasController extends ChangeNotifier {
 
   void setBrushSize(double v) {
     brushSize = v;
+    notifyListeners();
+  }
+
+  void setCoreOpacity(double v) {
+    coreOpacity = v.clamp(0.0, 1.0);
     notifyListeners();
   }
 
@@ -153,16 +264,18 @@ class CanvasController extends ChangeNotifier {
     _startMs = DateTime.now().millisecondsSinceEpoch;
     _current = Stroke(
       id: 's${_state.strokes.length}_$_startMs',
+      brushId: brushId,
       color: color,
       size: brushSize,
       glow: brushGlow,
-      brushId: brushId,
+      glowRadius: glowRadius,
+      glowOpacity: glowOpacity,
+      glowBrightness: glowBrightness,
+      coreOpacity: coreOpacity,
       seed: 0,
       points: [PointSample(pos.dx, pos.dy, 0)],
       symmetryId: _symmetryId(symmetry),
     );
-    _renderer.beginStroke(_current!);
-    _tick();
   }
 
   void pointerMove(int pointer, Offset pos) {

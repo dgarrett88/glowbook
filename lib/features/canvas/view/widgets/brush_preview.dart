@@ -1,5 +1,4 @@
 import 'dart:math' as math;
-
 import 'package:flutter/material.dart';
 
 import '../../../../core/models/stroke.dart';
@@ -34,10 +33,10 @@ class _BrushPreviewPainter extends CustomPainter {
   final LiquidNeonBrush _neon = LiquidNeonBrush();
   final SoftGlowBrush _soft = SoftGlowBrush();
   final GlowOnlyBrush _glowOnly = GlowOnlyBrush();
-  final HyperNeonBrush _hyper = const HyperNeonBrush();
-  final EdgeGlowBrush _edge = const EdgeGlowBrush();
-  final GhostTrailBrush _ghost = const GhostTrailBrush();
-  final InnerGlowBrush _inner = const InnerGlowBrush();
+  final HyperNeonBrush _hyper = HyperNeonBrush();
+  final EdgeGlowBrush _edge = EdgeGlowBrush();
+  final GhostTrailBrush _ghost = GhostTrailBrush();
+  final InnerGlowBrush _inner = InnerGlowBrush();
 
   _BrushPreviewPainter(this.controller) : super(repaint: controller);
 
@@ -51,7 +50,7 @@ class _BrushPreviewPainter extends CustomPainter {
     final borderPaint = Paint()
       ..style = PaintingStyle.stroke
       ..strokeWidth = 1
-      ..color = Colors.white.withOpacity(0.2);
+      ..color = Colors.white.withValues(alpha: 0.2);
     canvas.drawRRect(
       RRect.fromRectAndRadius(
         Offset.zero & size,
@@ -86,6 +85,10 @@ class _BrushPreviewPainter extends CustomPainter {
       color: controller.color,
       size: controller.brushSize,
       glow: controller.brushGlow,
+      glowRadius: controller.glowRadius,
+      glowOpacity: controller.glowOpacity,
+      glowBrightness: controller.glowBrightness,
+      coreOpacity: controller.coreOpacity, // 🔥 wired into preview
       seed: 0,
       points: points,
       symmetryId: null,

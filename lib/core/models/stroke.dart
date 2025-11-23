@@ -34,6 +34,9 @@ class Stroke {
   /// Brightness factor that feeds into glow alpha (0..1).
   final double glowBrightness;
 
+  /// How solid the inner stroke core is (0..1).
+  final double coreOpacity;
+
   final int seed;
   final List<PointSample> points;
 
@@ -49,6 +52,7 @@ class Stroke {
     this.glowRadius = 0.7,
     this.glowOpacity = 1.0,
     this.glowBrightness = 0.7,
+    this.coreOpacity = 0.86,
     required this.seed,
     required this.points,
     this.symmetryId,
@@ -63,6 +67,7 @@ class Stroke {
     double? glowRadius,
     double? glowOpacity,
     double? glowBrightness,
+    double? coreOpacity,
     int? seed,
     List<PointSample>? points,
     String? symmetryId,
@@ -76,6 +81,7 @@ class Stroke {
       glowRadius: glowRadius ?? this.glowRadius,
       glowOpacity: glowOpacity ?? this.glowOpacity,
       glowBrightness: glowBrightness ?? this.glowBrightness,
+      coreOpacity: coreOpacity ?? this.coreOpacity,
       seed: seed ?? this.seed,
       points: points ?? this.points,
       symmetryId: symmetryId ?? this.symmetryId,
@@ -91,6 +97,7 @@ class Stroke {
         'glowRadius': glowRadius,
         'glowOpacity': glowOpacity,
         'glowBrightness': glowBrightness,
+        'coreOpacity': coreOpacity,
         'seed': seed,
         'points': points.map((p) => p.toJson()).toList(),
         'symmetryId': symmetryId,
@@ -108,9 +115,12 @@ class Stroke {
       glowOpacity: (json['glowOpacity'] as num?)?.toDouble() ?? 1.0,
       glowBrightness:
           (json['glowBrightness'] as num?)?.toDouble() ?? legacyGlow,
+      coreOpacity: (json['coreOpacity'] as num?)?.toDouble() ?? 0.86,
       seed: json['seed'] as int,
       points: (json['points'] as List)
-          .map((e) => PointSample.fromJson((e as Map).cast<String, dynamic>()))
+          .map(
+            (e) => PointSample.fromJson((e as Map).cast<String, dynamic>()),
+          )
           .toList(),
       symmetryId: json['symmetryId'] as String?,
     );
