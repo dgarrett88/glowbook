@@ -9,10 +9,10 @@ import '../../state/glow_blend.dart' as gb;
 /// ----------------
 /// Bright neon tube with a soft glow band.
 ///
-/// This implementation uses the *per-channel* glow fields on [Stroke]:
-/// - [glowRadius]     -> how far the glow spreads (geometry only)
-/// - [glowBrightness] -> how intense / colourful the glow band is
-/// - [glowOpacity]    -> how visible everything is (alpha only)
+/// Uses per-channel glow fields on [Stroke]:
+/// - [glowRadius]     -> how far the glow spreads (geometry)
+/// - [glowBrightness] -> how intense the glow colour is
+/// - [glowOpacity]    -> how visible the glow is (alpha)
 ///
 /// It intentionally ignores the legacy [Stroke.glow] value for look,
 /// so radius / brightness / opacity stay logically separated.
@@ -56,25 +56,34 @@ class LiquidNeonBrush {
     r = r.clamp(0.0, 1.0);
 
     // Colour driver (0..1) from glowBrightness.
+    //
+    // UI is 0..300, mapped to stored 0..1 using /300 in the HUD.
+    // We interpret stored b as a 0..3x brightness multiplier:
+    //   UI 100 -> b ≈ 1/3 -> 1x base colour
+    //   UI 300 -> b = 1   -> 3x brighter
     double b = s.glowBrightness;
-    if (b.isNaN) b = 0.6;
+    if (b.isNaN) {
+      // default near "100" UI -> ~1x
+      b = 1.0 / 3.0;
+    }
     b = b.clamp(0.0, 1.0);
+    final double brightnessMul = 3.0 * b; // 0..3
 
     // Master opacity (0..1) from glowOpacity.
     double o = s.glowOpacity;
     if (o.isNaN) o = 1.0;
     o = o.clamp(0.0, 1.0);
 
-    int _boostChannel(int c, double factor) =>
+    int boostChannel(int c, double factor) =>
         (c * factor).clamp(0.0, 255.0).toInt();
 
     // ---------------- CORE STROKE ----------------
     //
     // Core respects the user’s chosen colour; we only scale alpha.
-    // Core tube alpha comes from coreOpacity (0..1).
-    final double co =
-        (s.coreOpacity.isNaN ? 0.86 : s.coreOpacity).clamp(0.0, 1.0);
-    final int coreAlpha = (co * 255.0).toInt();
+    // (Assuming Stroke has coreOpacity 0..1 – this is what your
+    // "Core strength" slider writes to.)
+    final double coreStrength = s.coreOpacity.clamp(0.0, 1.0);
+    final int coreAlpha = (255.0 * coreStrength).round();
     final Color coreColor = base.withAlpha(coreAlpha);
 
     final Paint corePaint = Paint()
@@ -84,38 +93,53 @@ class LiquidNeonBrush {
       ..strokeCap = StrokeCap.round
       ..strokeJoin = StrokeJoin.round;
 
+    // If radius / opacity / brightness are effectively zero,
+    // draw ONLY the core tube (no halo at all).
+    if (r <= 0.0 || o <= 0.0 || brightnessMul <= 0.0) {
+      canvas.drawPath(path, corePaint);
+      return;
+    }
+
     // ---------------- GLOW STROKE ----------------
     //
-    // Radius (r) controls how far the glow spreads. It ONLY affects
-    // geometry (width & blur), not colour.
+    // NEW behaviour:
+    //   - radius controls *halo thickness* in absolute pixels
+    //   - brush size controls the core tube only
+    //   - changing size does NOT massively change the halo reach
     //
-    // You can tweak these two factors if you want even more / less range:
-    const double maxWidthFactor = 7.0; // how fat the halo can get
-    const double maxBlurFactor = 5.0; // how soft the glow can get
+    // By default, the "extra" glow beyond the core is independent of size.
+    // When [glowRadiusScalesWithSize] is true on the stroke, we additionally
+    // scale the halo by the brush size so bigger brushes have a larger reach.
+    const double maxHaloThickness = 120.0; // px of glow beyond the core
+    final double baseHalo = maxHaloThickness * r; // 0..maxHaloThickness
 
-    final double widthFactor = 1.4 + maxWidthFactor * r; // ~1.4x .. 8.4x at r=1
-    final double glowWidth = size * widthFactor;
+    final bool scaleWithSize = s.glowRadiusScalesWithSize;
+    const double kSizeRef = 24.0;
+    final double sizeFactor =
+        (size / kSizeRef).clamp(0.5, 4.0); // avoid outrageous extremes
 
-    final double sigmaFactor = math.pow(r, 1.3).toDouble(); // bias to high end
-    final double sigma = size * (0.4 + maxBlurFactor * sigmaFactor);
+    final double halo = scaleWithSize ? baseHalo * sizeFactor : baseHalo;
+
+    // Total width of the glow stroke.
+    // core tube (size) + halo thickness (possibly size-scaled)
+    final double glowWidth = size + halo;
+
+    // Blur radius: tie it more to halo than to size
+    final double sigma = 0.3 * size + 0.7 * halo;
 
     // Glow alpha depends on opacity only; radius does NOT affect alpha.
     final int glowAlpha = (255.0 * o).clamp(0.0, 255.0).toInt();
 
-    // Brightness heavily affects COLOUR intensity of the glow.
-    //
-    // Give it lots of low range:
-    //   b=0   -> factor ~0.00 (almost black)
-    //   b=0.5 -> factor ~0.32
-    //   b=1   -> factor ~1.30  (very hot)
-    final double brightnessFactor = b * b;
-    final double glowColorFactor = 0.00 + 1.30 * brightnessFactor;
+    // Brightness affects COLOUR intensity of the glow.
+    // brightnessMul = 1  -> base colour
+    // brightnessMul = 3  -> 3x brighter
+    final double glowColorFactor = brightnessMul;
 
     final Color glowColor = Color.fromARGB(
       glowAlpha,
-      _boostChannel(base.red, glowColorFactor),
-      _boostChannel(base.green, glowColorFactor),
-      _boostChannel(base.blue, glowColorFactor),
+      boostChannel(base.red, glowColorFactor),
+      boostChannel(base.green, glowColorFactor),
+      boostChannel(base.blue, glowColorFactor),
     );
 
     final Paint glowPaint = Paint()

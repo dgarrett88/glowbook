@@ -89,6 +89,7 @@ class _BrushPreviewPainter extends CustomPainter {
       glowOpacity: controller.glowOpacity,
       glowBrightness: controller.glowBrightness,
       coreOpacity: controller.coreOpacity, // 🔥 wired into preview
+      glowRadiusScalesWithSize: controller.glowRadiusScalesWithSize,
       seed: 0,
       points: points,
       symmetryId: null,

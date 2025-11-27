@@ -97,6 +97,9 @@ class CanvasController extends ChangeNotifier {
   double glowOpacity = 1.0;
   double glowBrightness = 0.7;
 
+  /// If true, glow radius scales with brush size when rendering.
+  bool glowRadiusScalesWithSize = false;
+
   // Whether the HUD is in "advanced glow" mode.
   bool _advancedGlowEnabled = false;
   bool get advancedGlowEnabled => _advancedGlowEnabled;
@@ -162,6 +165,12 @@ class CanvasController extends ChangeNotifier {
 
     _recomputeBrushGlow();
     notifyListeners();
+
+    void setGlowRadiusScalesWithSize(bool value) {
+      if (glowRadiusScalesWithSize == value) return;
+      glowRadiusScalesWithSize = value;
+      notifyListeners();
+    }
   }
 
   void setAdvancedGlowEnabled(bool value) {
@@ -272,6 +281,7 @@ class CanvasController extends ChangeNotifier {
       glowOpacity: glowOpacity,
       glowBrightness: glowBrightness,
       coreOpacity: coreOpacity,
+      glowRadiusScalesWithSize: glowRadiusScalesWithSize,
       seed: 0,
       points: [PointSample(pos.dx, pos.dy, 0)],
       symmetryId: _symmetryId(symmetry),
@@ -364,5 +374,11 @@ class CanvasController extends ChangeNotifier {
     _renderer.rebuildFrom(_state.strokes);
     _hasUnsavedChanges = true;
     _tick();
+  }
+
+  void setGlowRadiusScalesWithSize(bool value) {
+    if (glowRadiusScalesWithSize == value) return;
+    glowRadiusScalesWithSize = value;
+    notifyListeners();
   }
 }

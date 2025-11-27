@@ -37,6 +37,9 @@ class Stroke {
   /// How solid the inner stroke core is (0..1).
   final double coreOpacity;
 
+  /// If true, glow radius scales with brush size when rendered.
+  final bool glowRadiusScalesWithSize;
+
   final int seed;
   final List<PointSample> points;
 
@@ -53,6 +56,7 @@ class Stroke {
     this.glowOpacity = 1.0,
     this.glowBrightness = 0.7,
     this.coreOpacity = 0.86,
+    this.glowRadiusScalesWithSize = false,
     required this.seed,
     required this.points,
     this.symmetryId,
@@ -68,6 +72,7 @@ class Stroke {
     double? glowOpacity,
     double? glowBrightness,
     double? coreOpacity,
+    bool? glowRadiusScalesWithSize,
     int? seed,
     List<PointSample>? points,
     String? symmetryId,
@@ -82,6 +87,8 @@ class Stroke {
       glowOpacity: glowOpacity ?? this.glowOpacity,
       glowBrightness: glowBrightness ?? this.glowBrightness,
       coreOpacity: coreOpacity ?? this.coreOpacity,
+      glowRadiusScalesWithSize:
+          glowRadiusScalesWithSize ?? this.glowRadiusScalesWithSize,
       seed: seed ?? this.seed,
       points: points ?? this.points,
       symmetryId: symmetryId ?? this.symmetryId,
@@ -98,6 +105,7 @@ class Stroke {
         'glowOpacity': glowOpacity,
         'glowBrightness': glowBrightness,
         'coreOpacity': coreOpacity,
+        'glowRadiusScalesWithSize': glowRadiusScalesWithSize,
         'seed': seed,
         'points': points.map((p) => p.toJson()).toList(),
         'symmetryId': symmetryId,
@@ -116,6 +124,8 @@ class Stroke {
       glowBrightness:
           (json['glowBrightness'] as num?)?.toDouble() ?? legacyGlow,
       coreOpacity: (json['coreOpacity'] as num?)?.toDouble() ?? 0.86,
+      glowRadiusScalesWithSize:
+          (json['glowRadiusScalesWithSize'] as bool?) ?? false,
       seed: json['seed'] as int,
       points: (json['points'] as List)
           .map(
