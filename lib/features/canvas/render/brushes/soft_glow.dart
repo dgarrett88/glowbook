@@ -42,7 +42,7 @@ class SoftGlowBrush {
       ..strokeCap = StrokeCap.round
       ..strokeJoin = StrokeJoin.round
       ..strokeWidth = haloWidth
-      ..color = base.withAlpha(haloAlpha)
+      ..color = base.withAlpha((haloAlpha * gb.GlowBlendState.I.intensity.clamp(0.0, 1.0)).toInt())
       ..maskFilter = MaskFilter.blur(BlurStyle.normal, sigma)
       ..blendMode = (gb.GlowBlendState.I.mode == gb.GlowBlend.screen)
           ? BlendMode.screen
@@ -53,7 +53,7 @@ class SoftGlowBrush {
       ..strokeCap = StrokeCap.round
       ..strokeJoin = StrokeJoin.round
       ..strokeWidth = size * 0.8
-      ..color = base.withAlpha(coreAlpha);
+      ..color = base.withAlpha((coreAlpha * gb.GlowBlendState.I.intensity.clamp(0.0, 1.0)).toInt());
 
     canvas.drawPath(path, halo);
     canvas.drawPath(path, core);

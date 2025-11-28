@@ -40,7 +40,7 @@ class _BrushHUDState extends ConsumerState<BrushHUD> {
     final glowUi = (effectiveGlow * 100.0).clamp(0.0, 100.0);
     final glowRadiusUi = (glowRadius * 300.0).clamp(0.0, 300.0);
     final glowOpacityUi = (glowOpacity * 100.0).clamp(0.0, 100.0);
-    final glowBrightnessUi = (glowBrightness * 255.0).clamp(0.0, 255.0);
+    final glowBrightnessUi = (glowBrightness * 170.0).clamp(0.0, 170.0);
 
     // Core opacity UI (0..100)
     final coreUi =
@@ -53,9 +53,9 @@ class _BrushHUDState extends ConsumerState<BrushHUD> {
 
     // Liquid Neon defaults (for now; later can be per-brush).
     const double defaultCoreOpacity = 0.86;
-    const double defaultGlow = 0.7;
+    const double defaultGlow = 0.3;
     const double defaultRadius = 0.7;
-    const double defaultBrightness = 0.7;
+    const double defaultBrightness = 0.1;
     const double defaultOpacity = 1.0;
 
     bool approxEquals(double a, double b) => (a - b).abs() < 0.001;
@@ -521,7 +521,7 @@ class _BrushHUDState extends ConsumerState<BrushHUD> {
                               dragSensitivity: 0.4,
                               onChanged: (ui) {
                                 // Map 0..255 UI -> 0..1 stored
-                                final nv = (ui / 255.0).clamp(0.0, 1.0);
+                                final nv = (ui / 170.0).clamp(0.0, 1.0);
                                 ctrl.setGlowBrightness(nv);
                               },
                             ),

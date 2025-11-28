@@ -41,7 +41,7 @@ class EdgeGlowBrush {
       ..strokeCap = StrokeCap.round
       ..strokeJoin = StrokeJoin.round
       ..strokeWidth = outerWidth
-      ..color = base.withAlpha(outerAlpha)
+      ..color = base.withAlpha((outerAlpha * gb.GlowBlendState.I.intensity.clamp(0.0, 1.0)).toInt())
       ..maskFilter = MaskFilter.blur(BlurStyle.normal, sigma)
       ..blendMode = (gb.GlowBlendState.I.mode == gb.GlowBlend.screen)
           ? BlendMode.screen
@@ -52,7 +52,7 @@ class EdgeGlowBrush {
       ..strokeCap = StrokeCap.round
       ..strokeJoin = StrokeJoin.round
       ..strokeWidth = innerWidth
-      ..color = base.withAlpha(innerAlpha);
+      ..color = base.withAlpha((innerAlpha * gb.GlowBlendState.I.intensity.clamp(0.0, 1.0)).toInt());
 
     canvas.drawPath(path, outer);
     canvas.drawPath(path, inner);

@@ -40,7 +40,7 @@ class InnerGlowBrush {
       ..strokeCap = StrokeCap.round
       ..strokeJoin = StrokeJoin.round
       ..strokeWidth = haloWidth
-      ..color = base.withAlpha(haloAlpha)
+      ..color = base.withAlpha((haloAlpha * gb.GlowBlendState.I.intensity.clamp(0.0, 1.0)).toInt())
       ..maskFilter = MaskFilter.blur(BlurStyle.normal, sigma)
       ..blendMode = (gb.GlowBlendState.I.mode == gb.GlowBlend.screen)
           ? BlendMode.screen
@@ -51,7 +51,7 @@ class InnerGlowBrush {
       ..strokeCap = StrokeCap.round
       ..strokeJoin = StrokeJoin.round
       ..strokeWidth = math.max(size * (0.9 + 0.25 * g), 1.0)
-      ..color = base.withAlpha(coreAlpha);
+      ..color = base.withAlpha((coreAlpha * gb.GlowBlendState.I.intensity.clamp(0.0, 1.0)).toInt());
 
     canvas.drawPath(path, halo);
     canvas.drawPath(path, core);

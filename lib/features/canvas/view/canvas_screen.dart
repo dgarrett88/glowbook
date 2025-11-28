@@ -10,6 +10,7 @@ import '../../../core/utils/uuid.dart';
 import 'widgets/top_toolbar.dart';
 import 'widgets/bottom_dock.dart';
 import '../../../core/models/canvas_document_bundle.dart';
+import '../state/glow_blend.dart' as gb;
 
 class CanvasScreen extends ConsumerStatefulWidget {
   final CanvasDocumentBundle? initialDocument;
@@ -31,8 +32,6 @@ class _CanvasScreenState extends ConsumerState<CanvasScreen> {
   String? _currentDocId;
   doc_model.CanvasDoc? _currentDoc;
 
-
-
   Future<_NewPageAction?> _showSaveOrDiscardDialog() {
     return showDialog<_NewPageAction>(
       context: context,
@@ -44,13 +43,12 @@ class _CanvasScreenState extends ConsumerState<CanvasScreen> {
           ),
           actions: [
             TextButton(
-              onPressed: () =>
-                  Navigator.of(context).pop(_NewPageAction.cancel),
+              onPressed: () => Navigator.of(context).pop(_NewPageAction.cancel),
               child: const Text('Cancel'),
             ),
             TextButton(
-              onPressed: () => Navigator.of(context)
-                  .pop(_NewPageAction.discardAndNew),
+              onPressed: () =>
+                  Navigator.of(context).pop(_NewPageAction.discardAndNew),
               child: const Text('Continue without saving'),
             ),
             ElevatedButton(
@@ -70,17 +68,18 @@ class _CanvasScreenState extends ConsumerState<CanvasScreen> {
     final existing = _currentDoc;
 
     final doc = (existing ??
-        doc_model.CanvasDoc(
-          id: _currentDocId ?? simpleId(),
-          name: existing?.name ?? 'Untitled',
-          createdAt: existing?.createdAt ?? now,
-          updatedAt: now,
-          width: existing?.width ?? size.width.toInt(),
-          height: existing?.height ?? size.height.toInt(),
-          background:
-              existing?.background ?? doc_model.Background.solid(0xFF000000),
-          symmetry: existing?.symmetry ?? doc_model.SymmetryMode.off,
-        )).copyWith(
+            doc_model.CanvasDoc(
+              id: _currentDocId ?? simpleId(),
+              name: existing?.name ?? 'Untitled',
+              createdAt: existing?.createdAt ?? now,
+              updatedAt: now,
+              width: existing?.width ?? size.width.toInt(),
+              height: existing?.height ?? size.height.toInt(),
+              background: existing?.background ??
+                  doc_model.Background.solid(0xFF000000),
+              symmetry: existing?.symmetry ?? doc_model.SymmetryMode.off,
+            ))
+        .copyWith(
       updatedAt: now,
     );
 
@@ -167,9 +166,8 @@ class _CanvasScreenState extends ConsumerState<CanvasScreen> {
     }
   }
 
-
-  
-  Future<void> _handleNewDocument(canvas_state.CanvasController controller) async {
+  Future<void> _handleNewDocument(
+      canvas_state.CanvasController controller) async {
     // If there are no unsaved changes, just start a fresh canvas.
     if (!controller.hasUnsavedChanges) {
       _currentDocId = null;
@@ -193,9 +191,6 @@ class _CanvasScreenState extends ConsumerState<CanvasScreen> {
     _currentDoc = null;
     controller.newDocument();
   }
-
-
-
 
   Future<void> _handleExitToMainMenu(
       canvas_state.CanvasController controller) async {
@@ -224,10 +219,17 @@ class _CanvasScreenState extends ConsumerState<CanvasScreen> {
     }
   }
 
-
   @override
   Widget build(BuildContext context) {
     final controller = ref.watch(canvas_state.canvasControllerProvider);
+
+    // Decide canvas background based on global blend mode.
+    final blendMode = gb.GlowBlendState.I.mode;
+    final bool isMultiply = blendMode == gb.GlowBlend.multiply;
+
+    // Black for neon (additive/screen), white for multiply (Venn-style mixing).
+    final Color canvasBg = isMultiply ? Colors.white : Colors.black;
+
     return Scaffold(
       appBar: PreferredSize(
         preferredSize: const Size.fromHeight(56),
@@ -248,9 +250,12 @@ class _CanvasScreenState extends ConsumerState<CanvasScreen> {
         onPointerUp: (event) => controller.pointerUp(event.pointer),
         child: RepaintBoundary(
           key: _repaintKey,
-          child: CustomPaint(
-            painter: controller.painter,
-            size: Size.infinite,
+          child: Container(
+            color: canvasBg,
+            child: CustomPaint(
+              painter: controller.painter,
+              size: Size.infinite,
+            ),
           ),
         ),
       ),

@@ -5,6 +5,8 @@ import '../../../core/models/brush.dart';
 import '../../../core/models/stroke.dart';
 import '../../../core/models/canvas_document_bundle.dart';
 import '../render/renderer.dart';
+import 'glow_blend.dart' as gb;
+
 import 'canvas_state.dart';
 
 enum SymmetryMode { off, mirrorV, mirrorH, quad }
@@ -12,10 +14,10 @@ enum SymmetryMode { off, mirrorV, mirrorH, quad }
 final canvasControllerProvider =
     ChangeNotifierProvider<CanvasController>((ref) => CanvasController());
 
-enum GlowBlend { additive, screen }
-
 class CanvasController extends ChangeNotifier {
-  CanvasController();
+  CanvasController() {
+    gb.GlowBlendState.I.addListener(_handleBlendChanged);
+  }
 
   final ValueNotifier<int> repaint = ValueNotifier<int>(0);
 
@@ -165,12 +167,6 @@ class CanvasController extends ChangeNotifier {
 
     _recomputeBrushGlow();
     notifyListeners();
-
-    void setGlowRadiusScalesWithSize(bool value) {
-      if (glowRadiusScalesWithSize == value) return;
-      glowRadiusScalesWithSize = value;
-      notifyListeners();
-    }
   }
 
   void setAdvancedGlowEnabled(bool value) {
@@ -380,5 +376,19 @@ class CanvasController extends ChangeNotifier {
     if (glowRadiusScalesWithSize == value) return;
     glowRadiusScalesWithSize = value;
     notifyListeners();
+  }
+
+  void _handleBlendChanged() {
+    // When the global blend mode or intensity changes, rebuild all baked
+    // stroke pictures so existing strokes are re-rendered with the new
+    // compositing behaviour.
+    _renderer.rebuildFrom(_state.strokes);
+    _tick();
+  }
+
+  @override
+  void dispose() {
+    gb.GlowBlendState.I.removeListener(_handleBlendChanged);
+    super.dispose();
   }
 }

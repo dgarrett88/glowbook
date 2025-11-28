@@ -74,6 +74,9 @@ class LiquidNeonBrush {
     if (o.isNaN) o = 1.0;
     o = o.clamp(0.0, 1.0);
 
+    // Global blend intensity 0..1 from blend sheet slider.
+    final double intensity = gb.GlowBlendState.I.intensity.clamp(0.0, 1.0);
+
     int boostChannel(int c, double factor) =>
         (c * factor).clamp(0.0, 255.0).toInt();
 
@@ -128,7 +131,7 @@ class LiquidNeonBrush {
     final double sigma = 0.3 * size + 0.7 * halo;
 
     // Glow alpha depends on opacity only; radius does NOT affect alpha.
-    final int glowAlpha = (255.0 * o).clamp(0.0, 255.0).toInt();
+    final int glowAlpha = (255.0 * o * intensity).clamp(0.0, 255.0).toInt();
 
     // Brightness affects COLOUR intensity of the glow.
     // brightnessMul = 1  -> base colour
@@ -149,9 +152,7 @@ class LiquidNeonBrush {
       ..strokeCap = StrokeCap.round
       ..strokeJoin = StrokeJoin.round
       ..maskFilter = MaskFilter.blur(BlurStyle.normal, sigma)
-      ..blendMode = (gb.GlowBlendState.I.mode == gb.GlowBlend.screen)
-          ? BlendMode.screen
-          : BlendMode.plus;
+      ..blendMode = gb.GlowBlendState.I.mode.toBlendMode();
 
     // Draw order:
     // - Default (glowOverStroke == false):
