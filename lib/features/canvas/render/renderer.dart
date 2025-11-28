@@ -9,6 +9,7 @@ import 'brushes/hyper_neon.dart';
 import 'brushes/edge_glow.dart';
 import 'brushes/ghost_trail.dart';
 import 'brushes/inner_glow.dart';
+import '../state/glow_blend.dart' as gb;
 
 class Renderer extends CustomPainter {
   Renderer(this.repaint, this.symmetryFn) : super(repaint: repaint);
@@ -105,9 +106,24 @@ class Renderer extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
     _lastSize = size;
+
+    // Clear the background based on global blend mode.
+    final mode = gb.GlowBlendState.I.mode;
+    final bool isMultiply = mode == gb.GlowBlend.multiply;
+
+    // White for Multiply (Venn-style mixing), black for neon modes.
+    final ui.Color bgColor =
+        isMultiply ? const ui.Color(0xFFFFFFFF) : const ui.Color(0xFF000000);
+
+    final Paint bgPaint = Paint()..color = bgColor;
+    canvas.drawRect(ui.Offset.zero & size, bgPaint);
+
+    // Draw baked strokes.
     for (final pic in _baked) {
       canvas.drawPicture(pic);
     }
+
+    // Draw active stroke on top.
     final s = _active;
     if (s != null) {
       _drawByBrush(canvas, s, size, _modeForStroke(s));

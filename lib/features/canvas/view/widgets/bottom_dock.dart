@@ -312,6 +312,7 @@ class _DockButton extends StatelessWidget {
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 4),
       child: GestureDetector(
+        behavior: HitTestBehavior.opaque, // 👈 make whole padded area tappable
         onTap: onTap,
         onLongPress: onLongPress,
         child: Container(
