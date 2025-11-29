@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import '../../state/canvas_controller.dart';
 import '../../state/glow_blend.dart' as gb;
+import 'glow_blend_dropdown.dart';
 
 import 'brush_hud.dart';
 import 'color_wheel_dialog.dart';
@@ -185,76 +186,78 @@ class BottomDock extends StatelessWidget {
     showModalBottomSheet(
       context: context,
       backgroundColor: Colors.transparent,
-      isScrollControlled: true,
+      barrierColor: Colors.transparent, // no dark overlay
+      isScrollControlled: false,
       builder: (ctx) {
-        final screenH = MediaQuery.of(ctx).size.height;
-        return Align(
-          alignment: Alignment.bottomCenter,
-          child: SizedBox(
-            height: screenH * 0.45,
+        return SafeArea(
+          top: false,
+          child: Align(
+            alignment: Alignment.bottomCenter,
             child: Container(
+              margin: const EdgeInsets.only(bottom: 4),
               decoration: BoxDecoration(
-                color: cs.surface,
+                color: cs.surface.withOpacity(0.95),
                 borderRadius: const BorderRadius.vertical(
-                  top: Radius.circular(16),
+                  top: Radius.circular(12),
                 ),
+                boxShadow: const [
+                  BoxShadow(
+                    blurRadius: 8,
+                    offset: Offset(0, -2),
+                    color: Colors.black26,
+                  ),
+                ],
               ),
-              child: Padding(
-                padding: const EdgeInsets.all(16.0),
-                child: AnimatedBuilder(
-                  animation: gb.GlowBlendState.I,
-                  builder: (context, _) {
-                    final state = gb.GlowBlendState.I;
-                    return Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Row(
-                          children: [
-                            const Text(
-                              'Blend modes',
-                              style: TextStyle(
-                                fontSize: 16,
-                                fontWeight: FontWeight.bold,
-                              ),
+              // 🔥 Force it to be a short bar
+              child: SizedBox(
+                height: 52,
+                child: Padding(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                  child: AnimatedBuilder(
+                    animation: gb.GlowBlendState.I,
+                    builder: (context, _) {
+                      final state = gb.GlowBlendState.I;
+                      return Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          // [Additive] – compact dropdown showing current blend mode.
+                          ConstrainedBox(
+                            constraints: const BoxConstraints(
+                              minWidth: 90,
+                              maxWidth: 140,
                             ),
-                            const Spacer(),
-                            IconButton(
-                              icon: const Icon(Icons.close),
-                              onPressed: () => Navigator.of(ctx).pop(),
+                            child: GlowBlendDropdown(controller: controller),
+                          ),
+                          const SizedBox(width: 8),
+
+                          // ---------o-----  slider controlling intensity
+                          Expanded(
+                            child: Slider(
+                              value: state.intensity,
+                              min: 0.0,
+                              max: 1.0,
+                              onChanged: (v) {
+                                gb.GlowBlendState.I.setIntensity(v);
+                              },
                             ),
-                          ],
-                        ),
-                        const SizedBox(height: 12),
-                        Wrap(
-                          spacing: 8,
-                          runSpacing: 8,
-                          children: [
-                            for (final mode in gb.GlowBlend.values)
-                              ChoiceChip(
-                                label: Text(mode.label),
-                                selected: state.mode == mode,
-                                onSelected: (_) {
-                                  gb.GlowBlendState.I.setMode(mode);
-                                },
-                              ),
-                          ],
-                        ),
-                        const SizedBox(height: 24),
-                        Text(
-                          'Intensity: ${(state.intensity * 100).round()}%',
-                          style: const TextStyle(fontSize: 13),
-                        ),
-                        Slider(
-                          value: state.intensity,
-                          min: 0.0,
-                          max: 1.0,
-                          onChanged: (v) {
-                            gb.GlowBlendState.I.setIntensity(v);
-                          },
-                        ),
-                      ],
-                    );
-                  },
+                          ),
+
+                          const SizedBox(width: 6),
+
+                          // 65% – small percentage label
+                          SizedBox(
+                            width: 40,
+                            child: Text(
+                              '${(state.intensity * 100).round()}%',
+                              textAlign: TextAlign.right,
+                              style: const TextStyle(fontSize: 11),
+                            ),
+                          ),
+                        ],
+                      );
+                    },
+                  ),
                 ),
               ),
             ),
@@ -312,7 +315,7 @@ class _DockButton extends StatelessWidget {
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 4),
       child: GestureDetector(
-        behavior: HitTestBehavior.opaque, // 👈 make whole padded area tappable
+        behavior: HitTestBehavior.opaque, // 👈 whole padded area tappable
         onTap: onTap,
         onLongPress: onLongPress,
         child: Container(

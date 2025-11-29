@@ -55,19 +55,41 @@ class LiquidNeonBrush {
     if (r.isNaN) r = 0.6;
     r = r.clamp(0.0, 1.0);
 
-    // Colour driver (0..1) from glowBrightness.
+    // ---------------- GLOW BRIGHTNESS (0–100 logical scale) ----------------
     //
-    // UI is 0..300, mapped to stored 0..1 using /300 in the HUD.
-    // We interpret stored b as a 0..3x brightness multiplier:
-    //   UI 100 -> b ≈ 1/3 -> 1x base colour
-    //   UI 300 -> b = 1   -> 3x brighter
+    // s.glowBrightness is stored 0.0–1.0 but conceptually is 0–100 in UI:
+    //
+    //   UI 0   -> b = 0.0  -> brightnessMul = 0.0   (black, no glow colour)
+    //   UI 70  -> b = 0.7  -> brightnessMul = 1.0   (base colour)
+    //   UI 100 -> b = 1.0  -> brightnessMul ≈ 1.7   (brighter than base)
+    //
+    // 1–69 are darker than base, 71–100 brighter than base.
     double b = s.glowBrightness;
     if (b.isNaN) {
-      // default near "100" UI -> ~1x
-      b = 1.0 / 3.0;
+      // Default = 70 on the 0–100 scale.
+      b = 0.7;
     }
     b = b.clamp(0.0, 1.0);
-    final double brightnessMul = 3.0 * b; // 0..3
+
+    // Map 0.0–1.0 to 0–100 UI-style brightness.
+    final double uiBrightness = b * 100.0;
+    const double pivot = 70.0;
+
+    double brightnessMul;
+    if (uiBrightness <= 0.0) {
+      // 0 → black glow (no colour contribution)
+      brightnessMul = 0.0;
+    } else {
+      // Linear scale around 70 as the "base colour" point.
+      //  uiBrightness = 70  -> 70/70 = 1.0 (base colour)
+      //  uiBrightness < 70  -> <1.0 (darker)
+      //  uiBrightness > 70  -> >1.0 (brighter)
+      brightnessMul = uiBrightness / pivot;
+
+      // Dial brightness up a little overall without changing the pivot:
+      // 70 still maps to 1.0, but the top end (100) now reaches ~1.7.
+      brightnessMul *= 1.2;
+    }
 
     // Master opacity (0..1) from glowOpacity.
     double o = s.glowOpacity;
@@ -83,8 +105,6 @@ class LiquidNeonBrush {
     // ---------------- CORE STROKE ----------------
     //
     // Core respects the user’s chosen colour; we only scale alpha.
-    // (Assuming Stroke has coreOpacity 0..1 – this is what your
-    // "Core strength" slider writes to.)
     final double coreStrength = s.coreOpacity.clamp(0.0, 1.0);
     final int coreAlpha = (255.0 * coreStrength).round();
     final Color coreColor = base.withAlpha(coreAlpha);
@@ -105,14 +125,7 @@ class LiquidNeonBrush {
 
     // ---------------- GLOW STROKE ----------------
     //
-    // NEW behaviour:
-    //   - radius controls *halo thickness* in absolute pixels
-    //   - brush size controls the core tube only
-    //   - changing size does NOT massively change the halo reach
-    //
-    // By default, the "extra" glow beyond the core is independent of size.
-    // When [glowRadiusScalesWithSize] is true on the stroke, we additionally
-    // scale the halo by the brush size so bigger brushes have a larger reach.
+    // Radius controls halo thickness in absolute pixels.
     const double maxHaloThickness = 120.0; // px of glow beyond the core
     final double baseHalo = maxHaloThickness * r; // 0..maxHaloThickness
 
@@ -124,18 +137,15 @@ class LiquidNeonBrush {
     final double halo = scaleWithSize ? baseHalo * sizeFactor : baseHalo;
 
     // Total width of the glow stroke.
-    // core tube (size) + halo thickness (possibly size-scaled)
     final double glowWidth = size + halo;
 
     // Blur radius: tie it more to halo than to size
     final double sigma = 0.3 * size + 0.7 * halo;
 
     // Glow alpha depends on opacity only; radius does NOT affect alpha.
-    final int glowAlpha = (255.0 * o * intensity).clamp(0.0, 255.0).toInt();
+    final int glowAlpha = (255.0 * o * intensity).clamp(0, 255).toInt();
 
     // Brightness affects COLOUR intensity of the glow.
-    // brightnessMul = 1  -> base colour
-    // brightnessMul = 3  -> 3x brighter
     final double glowColorFactor = brightnessMul;
 
     final Color glowColor = Color.fromARGB(
@@ -154,11 +164,7 @@ class LiquidNeonBrush {
       ..maskFilter = MaskFilter.blur(BlurStyle.normal, sigma)
       ..blendMode = gb.GlowBlendState.I.mode.toBlendMode();
 
-    // Draw order:
-    // - Default (glowOverStroke == false):
-    //     glow first, then core on top (stroke over glow).
-    // - If glowOverStroke == true:
-    //     core first, then glow over stroke.
+    // Draw order.
     if (glowOverStroke) {
       canvas.drawPath(path, corePaint);
       canvas.drawPath(path, glowPaint);

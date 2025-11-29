@@ -1,4 +1,4 @@
-import 'dart:ui' show BlendMode;
+import 'dart:ui' show BlendMode, Color, lerpDouble;
 import 'package:flutter/foundation.dart';
 
 /// Global blend modes for how neon strokes interact with each other.
@@ -11,6 +11,7 @@ enum GlowBlend {
   overlay,
   lighten,
   darken,
+  chromaticMix,
 }
 
 extension GlowBlendX on GlowBlend {
@@ -32,9 +33,14 @@ extension GlowBlendX on GlowBlend {
         return BlendMode.lighten;
       case GlowBlend.darken:
         return BlendMode.darken;
+      case GlowBlend.chromaticMix:
+        // Experimental "colour melt" mode – use normal compositing so
+        // strokes and halos tint each other without huge brightness jumps.
+        return BlendMode.srcOver;
     }
   }
 
+  /// Human-friendly label for menus.
   String get label {
     switch (this) {
       case GlowBlend.additive:
@@ -49,6 +55,40 @@ extension GlowBlendX on GlowBlend {
         return 'Lighten';
       case GlowBlend.darken:
         return 'Darken';
+      case GlowBlend.chromaticMix:
+        return 'Chromatic Mix';
+    }
+  }
+
+  /// Adjust the stroke colour based on the global blend mode and intensity.
+  ///
+  /// Right now we only refine Additive so it:
+  /// - has more headroom (doesn't hit white instantly)
+  /// - actually responds nicely to the intensity slider.
+  Color adjustColorForMode(Color base, double intensity) {
+    switch (this) {
+      case GlowBlend.additive:
+        final t = intensity.clamp(0.0, 1.0);
+
+        // Give ourselves headroom so additive doesn’t instantly blow out:
+        // At low intensity we darken the colour a bit and reduce alpha.
+        // At high intensity it’s closer to the original.
+        final headroomScale = lerpDouble(0.7, 1.0, t)!;   // 0.7 → 1.0
+        final alphaScale = lerpDouble(0.3, 1.0, t)!;      // 0.3 → 1.0
+
+        int scaleChannel(int c) =>
+            (c * headroomScale).clamp(0, 255).round();
+
+        final r = scaleChannel(base.red);
+        final g = scaleChannel(base.green);
+        final b = scaleChannel(base.blue);
+        final a = (base.alpha * alphaScale).clamp(0, 255).round();
+
+        return Color.fromARGB(a, r, g, b);
+
+      // Other modes can get their own refinement later.
+      default:
+        return base;
     }
   }
 }

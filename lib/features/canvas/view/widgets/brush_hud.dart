@@ -33,14 +33,14 @@ class _BrushHUDState extends ConsumerState<BrushHUD> {
     final glowBrightness = controller.glowBrightness.clamp(0.0, 1.0);
 
     // UI values
-    // - Glow (simple)  0..100
-    // - Radius         0..300
-    // - Opacity        0..100
-    // - Brightness     0..255 (upper end basically saturates)
+// - Glow (simple)  0..100
+// - Radius         0..300
+// - Opacity        0..100
+// - Brightness     0..100  (70 = base colour)
     final glowUi = (effectiveGlow * 100.0).clamp(0.0, 100.0);
     final glowRadiusUi = (glowRadius * 300.0).clamp(0.0, 300.0);
     final glowOpacityUi = (glowOpacity * 100.0).clamp(0.0, 100.0);
-    final glowBrightnessUi = (glowBrightness * 170.0).clamp(0.0, 170.0);
+    final glowBrightnessUi = (glowBrightness * 100.0).clamp(0.0, 100.0);
 
     // Core opacity UI (0..100)
     final coreUi =
@@ -51,11 +51,16 @@ class _BrushHUDState extends ConsumerState<BrushHUD> {
 
     final bool advancedGlow = controller.advancedGlowEnabled;
 
-    // Liquid Neon defaults (for now; later can be per-brush).
+    // These are the "Liquid Neon" defaults (could be per-brush).
     const double defaultCoreOpacity = 0.86;
     const double defaultGlow = 0.3;
-    const double defaultRadius = 0.7;
-    const double defaultBrightness = 0.1;
+
+// Advanced glow defaults:
+// Radius: 15 (on 0–300 UI scale)  -> 15 / 300 = 0.05
+// Brightness: 50 (on 0–100 UI scale) -> 0.5
+    const double defaultRadius = 15.0 / 300.0;
+    const double defaultBrightness = 50.0 / 100.0;
+
     const double defaultOpacity = 1.0;
 
     bool approxEquals(double a, double b) => (a - b).abs() < 0.001;
@@ -510,18 +515,18 @@ class _BrushHUDState extends ConsumerState<BrushHUD> {
                             color: Colors.white.withValues(alpha: 0.14),
                           ),
 
-                          // Brightness (0..255)
+                          // Brightness (0..100)
                           Expanded(
                             child: NumberDragField(
                               value: glowBrightnessUi,
                               min: 0,
-                              max: 255,
+                              max: 100,
                               decimals: 1,
                               suffix: null,
                               dragSensitivity: 0.4,
                               onChanged: (ui) {
-                                // Map 0..255 UI -> 0..1 stored
-                                final nv = (ui / 170.0).clamp(0.0, 1.0);
+                                // Map 0..100 UI -> 0..1 stored
+                                final nv = (ui / 100.0).clamp(0.0, 1.0);
                                 ctrl.setGlowBrightness(nv);
                               },
                             ),
