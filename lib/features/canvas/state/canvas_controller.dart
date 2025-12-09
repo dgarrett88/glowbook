@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/models/brush.dart';
 import '../../../core/models/stroke.dart';
 import '../../../core/models/canvas_document_bundle.dart';
+import '../../../core/models/canvas_doc.dart' as doc_model;
 import '../render/renderer.dart';
 import 'glow_blend.dart' as gb;
 
@@ -81,23 +82,25 @@ class CanvasController extends ChangeNotifier {
 
   List<Stroke> get strokes => List.unmodifiable(_state.strokes);
 
-  int color = 0xFFFF66FF;
+  int color = 0xFF00FFFF; // default cyan
   double brushSize = 10.0;
+
+  /// Canvas background colour (ARGB). Default black.
+  int backgroundColor = 0xFF000000;
+  bool _hasCustomBackground = false;
+  bool get hasCustomBackground => _hasCustomBackground;
 
   /// How solid the inner stroke core is (0..1).
   double coreOpacity = 0.86;
 
-  // Legacy effective glow value (0..1) used by existing brushes.
-  // This is derived from the three multi-glow controls so older code
-  // that only reads [brushGlow] keeps working.
-  double _brushGlow = 0.7;
+  // Simple glow – base 0.3 (30%)
+  double _brushGlow = 0.3;
   double get brushGlow => _brushGlow;
 
-  // Multi-glow controls (0..1). These are the source of truth; [_brushGlow]
-  // is recomputed from them.
-  double glowRadius = 0.7;
+  // Multi-glow controls (0..1)
+  double glowRadius = 0.3;
   double glowOpacity = 1.0;
-  double glowBrightness = 0.7;
+  double glowBrightness = 0.3;
 
   /// If true, glow radius scales with brush size when rendering.
   bool glowRadiusScalesWithSize = false;
@@ -106,31 +109,47 @@ class CanvasController extends ChangeNotifier {
   bool _advancedGlowEnabled = false;
   bool get advancedGlowEnabled => _advancedGlowEnabled;
 
-  // Saved advanced glow settings so they survive when the user
-  // turns advanced OFF, plays with the simple Glow slider, and
-  // later turns advanced back ON again.
-  double _savedAdvancedGlowRadius = 0.7;
-  double _savedAdvancedGlowBrightness = 0.8;
+  // Advanced glow saved settings
+  double _savedAdvancedGlowRadius = 15.0 / 300.0;
+  double _savedAdvancedGlowBrightness = 50.0 / 100.0;
   double _savedAdvancedGlowOpacity = 1.0;
 
+  // Store the user's simple-glow setting when switching modes
+  double _savedSimpleGlow = 0.3;
+
+  CanvasState _state = const CanvasState();
+
+  Stroke? _current;
+  int _startMs = 0;
+
+  int? _activePointerId;
+
+  bool _hasUnsavedChanges = false;
+  bool get hasUnsavedChanges => _hasUnsavedChanges;
+
+  Renderer get painter => _renderer;
+
+  /// When true, blend mode/intensity changes should *not* mark the doc dirty.
+  /// Used when restoring state from a document or creating a new one.
+  bool _suppressBlendDirty = false;
+
   void _recomputeBrushGlow() {
-    // Radius = how far the glow spreads
-    // Opacity = master fade
     final r = glowRadius.clamp(0.0, 1.0);
     final o = glowOpacity.clamp(0.0, 1.0);
-
-    // Brightness does NOT affect geometry – only colour inside the brushes.
     _brushGlow = r * o;
   }
 
   /// Legacy single-glow setter used by older UI.
-  /// When called, we interpret this as "link all glow controls" and set
-  /// radius and brightness to the same value with full opacity.
   void setBrushGlow(double value) {
     final v = value.clamp(0.0, 1.0);
+
     glowRadius = v;
-    glowBrightness = v;
     glowOpacity = 1.0;
+
+    // brightness scales 0 → 1.0
+    double b = (v * 1.0).clamp(0.0, 1.0);
+    glowBrightness = b;
+
     _recomputeBrushGlow();
     notifyListeners();
   }
@@ -138,7 +157,6 @@ class CanvasController extends ChangeNotifier {
   void setGlowRadius(double value) {
     glowRadius = value.clamp(0.0, 1.0);
 
-    // If we're in advanced mode, keep the saved advanced radius in sync.
     if (_advancedGlowEnabled) {
       _savedAdvancedGlowRadius = glowRadius;
     }
@@ -169,50 +187,40 @@ class CanvasController extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Set the canvas background colour.
+  void setBackgroundColor(int value) {
+    backgroundColor = value;
+    _hasCustomBackground = true;
+    _hasUnsavedChanges = true;
+    notifyListeners();
+  }
+
+  /// ✅ Correct advanced/simple glow behaviour
   void setAdvancedGlowEnabled(bool value) {
     if (_advancedGlowEnabled == value) return;
 
     if (value) {
-      // Turning advanced ON:
-      // Restore the last advanced settings into the live glow fields,
-      // so the sliders show what the user previously configured.
+      // Turning advanced ON
+      _savedSimpleGlow = brushGlow; // save user's last simple glow
+
       glowRadius = _savedAdvancedGlowRadius.clamp(0.0, 1.0);
       glowBrightness = _savedAdvancedGlowBrightness.clamp(0.0, 1.0);
       glowOpacity = _savedAdvancedGlowOpacity.clamp(0.0, 1.0);
+
       _recomputeBrushGlow();
     } else {
-      // Turning advanced OFF:
-      // 1) Snapshot the current advanced settings so we can restore them
-      //    next time advanced is enabled.
+      // Turning advanced OFF
       _savedAdvancedGlowRadius = glowRadius.clamp(0.0, 1.0);
       _savedAdvancedGlowBrightness = glowBrightness.clamp(0.0, 1.0);
       _savedAdvancedGlowOpacity = glowOpacity.clamp(0.0, 1.0);
 
-      // 2) Reset live glow fields back to the default "Liquid Neon" style.
-      glowRadius = 0.7;
-      glowBrightness = 0.7;
-      glowOpacity = 1.0;
-
-      _recomputeBrushGlow();
+      // Restore user's simple glow instead of forcing defaults
+      setBrushGlow(_savedSimpleGlow);
     }
 
     _advancedGlowEnabled = value;
     notifyListeners();
   }
-
-  CanvasState _state = const CanvasState();
-
-  Stroke? _current;
-  int _startMs = 0;
-
-  // Track single active pointer id to prevent 2-finger line connection.
-  int? _activePointerId;
-
-  // Tracks whether the canvas has changed since it was opened/created/saved.
-  bool _hasUnsavedChanges = false;
-  bool get hasUnsavedChanges => _hasUnsavedChanges;
-
-  Renderer get painter => _renderer;
 
   void _tick() {
     repaint.value++;
@@ -262,7 +270,6 @@ class CanvasController extends ChangeNotifier {
   }
 
   void pointerDown(int pointer, Offset pos) {
-    // If a stroke is in progress, ignore any extra fingers.
     if (_activePointerId != null) return;
     _activePointerId = pointer;
 
@@ -285,24 +292,33 @@ class CanvasController extends ChangeNotifier {
   }
 
   void pointerMove(int pointer, Offset pos) {
-    if (_activePointerId != pointer) return; // ignore other pointers
+    if (_activePointerId != pointer) return;
     final s = _current;
     if (s == null) return;
+
     final now = DateTime.now().millisecondsSinceEpoch;
     final t = now - _startMs;
+
     s.points.add(PointSample(pos.dx, pos.dy, t));
     _renderer.updateStroke(s);
     _tick();
   }
 
   void pointerUp(int pointer) {
-    if (_activePointerId != pointer) return; // ignore irrelevant ups
+    if (_activePointerId != pointer) return;
     _activePointerId = null;
+
     final s = _current;
     if (s == null) return;
+
     _current = null;
     _renderer.commitStroke(s);
-    _state = _state.copyWith(strokes: [..._state.strokes, s], redoStack: []);
+
+    _state = _state.copyWith(
+      strokes: [..._state.strokes, s],
+      redoStack: [],
+    );
+
     _hasUnsavedChanges = true;
     _tick();
   }
@@ -316,11 +332,11 @@ class CanvasController extends ChangeNotifier {
       case SymmetryMode.quad:
         return 'quad';
       case SymmetryMode.off:
+      default:
         return 'off';
     }
   }
 
-  /// Clears current strokes/redos and starts a fresh blank canvas.
   void loadFromBundle(CanvasDocumentBundle bundle) {
     _state = CanvasState(
       strokes: List<Stroke>.from(bundle.strokes),
@@ -329,6 +345,24 @@ class CanvasController extends ChangeNotifier {
     _current = null;
     _activePointerId = null;
     _hasUnsavedChanges = false;
+
+    // Restore background from doc metadata (solid colour only).
+    final bg = bundle.doc.background;
+    if (bg.type == doc_model.BackgroundType.solid &&
+        bg.params['color'] is int) {
+      backgroundColor = bg.params['color'] as int;
+      _hasCustomBackground = true;
+    } else {
+      backgroundColor = 0xFF000000;
+      _hasCustomBackground = false;
+    }
+
+    // Restore blend mode, but don't mark as dirty.
+    _suppressBlendDirty = true;
+    final key = bundle.doc.blendModeKey;
+    final mode = gb.glowBlendFromKey(key);
+    gb.GlowBlendState.I.setMode(mode);
+
     _renderer.rebuildFrom(_state.strokes);
     _tick();
   }
@@ -338,23 +372,33 @@ class CanvasController extends ChangeNotifier {
     _current = null;
     _activePointerId = null;
     _hasUnsavedChanges = false;
+
+    // Reset background to default black; not considered a "change".
+    backgroundColor = 0xFF000000;
+    _hasCustomBackground = false;
+
+    // New documents start in Additive, but that shouldn't mark them dirty.
+    _suppressBlendDirty = true;
+    gb.GlowBlendState.I.setMode(gb.GlowBlend.additive);
+
     _renderer.rebuildFrom(_state.strokes);
     _tick();
   }
 
-  // Mark the current state as saved so callers can skip
-  // save/discard prompts when nothing has changed.
   void markSaved() {
     _hasUnsavedChanges = false;
   }
 
   void undo() {
     if (_state.strokes.isEmpty) return;
+
     final last = _state.strokes.last;
+
     _state = _state.copyWith(
       strokes: List.of(_state.strokes)..removeLast(),
       redoStack: List.of(_state.redoStack)..add(last),
     );
+
     _renderer.rebuildFrom(_state.strokes);
     _hasUnsavedChanges = true;
     _tick();
@@ -362,11 +406,14 @@ class CanvasController extends ChangeNotifier {
 
   void redo() {
     if (_state.redoStack.isEmpty) return;
+
     final s = _state.redoStack.last;
+
     _state = _state.copyWith(
       strokes: List.of(_state.strokes)..add(s),
       redoStack: List.of(_state.redoStack)..removeLast(),
     );
+
     _renderer.rebuildFrom(_state.strokes);
     _hasUnsavedChanges = true;
     _tick();
@@ -379,9 +426,14 @@ class CanvasController extends ChangeNotifier {
   }
 
   void _handleBlendChanged() {
-    // When the global blend mode or intensity changes, rebuild all baked
-    // stroke pictures so existing strokes are re-rendered with the new
-    // compositing behaviour.
+    if (_suppressBlendDirty) {
+      // This change came from restoring state / new document setup.
+      _suppressBlendDirty = false;
+    } else {
+      // User-driven change → mark as unsaved.
+      _hasUnsavedChanges = true;
+    }
+
     _renderer.rebuildFrom(_state.strokes);
     _tick();
   }

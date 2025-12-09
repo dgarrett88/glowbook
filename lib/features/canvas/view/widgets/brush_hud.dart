@@ -33,10 +33,10 @@ class _BrushHUDState extends ConsumerState<BrushHUD> {
     final glowBrightness = controller.glowBrightness.clamp(0.0, 1.0);
 
     // UI values
-// - Glow (simple)  0..100
-// - Radius         0..300
-// - Opacity        0..100
-// - Brightness     0..100  (70 = base colour)
+    // - Glow (simple)  0..100
+    // - Radius         0..300
+    // - Opacity        0..100
+    // - Brightness     0..100  (70 = base colour)
     final glowUi = (effectiveGlow * 100.0).clamp(0.0, 100.0);
     final glowRadiusUi = (glowRadius * 300.0).clamp(0.0, 300.0);
     final glowOpacityUi = (glowOpacity * 100.0).clamp(0.0, 100.0);
@@ -55,9 +55,9 @@ class _BrushHUDState extends ConsumerState<BrushHUD> {
     const double defaultCoreOpacity = 0.86;
     const double defaultGlow = 0.3;
 
-// Advanced glow defaults:
-// Radius: 15 (on 0–300 UI scale)  -> 15 / 300 = 0.05
-// Brightness: 50 (on 0–100 UI scale) -> 0.5
+    // Advanced glow defaults:
+    // Radius: 15 (on 0–300 UI scale)  -> 15 / 300 = 0.05
+    // Brightness: 50 (on 0–100 UI scale) -> 0.5
     const double defaultRadius = 15.0 / 300.0;
     const double defaultBrightness = 50.0 / 100.0;
 

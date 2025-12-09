@@ -73,11 +73,10 @@ extension GlowBlendX on GlowBlend {
         // Give ourselves headroom so additive doesn’t instantly blow out:
         // At low intensity we darken the colour a bit and reduce alpha.
         // At high intensity it’s closer to the original.
-        final headroomScale = lerpDouble(0.7, 1.0, t)!;   // 0.7 → 1.0
-        final alphaScale = lerpDouble(0.3, 1.0, t)!;      // 0.3 → 1.0
+        final headroomScale = lerpDouble(0.7, 1.0, t)!; // 0.7 → 1.0
+        final alphaScale = lerpDouble(0.3, 1.0, t)!; // 0.3 → 1.0
 
-        int scaleChannel(int c) =>
-            (c * headroomScale).clamp(0, 255).round();
+        int scaleChannel(int c) => (c * headroomScale).clamp(0, 255).round();
 
         final r = scaleChannel(base.red);
         final g = scaleChannel(base.green);
@@ -118,5 +117,47 @@ class GlowBlendState extends ChangeNotifier {
     if (clamped == _intensity) return;
     _intensity = clamped;
     notifyListeners();
+  }
+}
+
+/// Map a GlowBlend to a stable string key for storage with documents.
+String glowBlendToKey(GlowBlend mode) {
+  switch (mode) {
+    case GlowBlend.additive:
+      return 'additive';
+    case GlowBlend.screen:
+      return 'screen';
+    case GlowBlend.multiply:
+      return 'multiply';
+    case GlowBlend.overlay:
+      return 'overlay';
+    case GlowBlend.lighten:
+      return 'lighten';
+    case GlowBlend.darken:
+      return 'darken';
+    case GlowBlend.chromaticMix:
+      return 'chromaticMix';
+  }
+}
+
+/// Convert a stored string key back into a GlowBlend.
+/// Unknown/null keys fall back to additive.
+GlowBlend glowBlendFromKey(String? key) {
+  switch (key) {
+    case 'screen':
+      return GlowBlend.screen;
+    case 'multiply':
+      return GlowBlend.multiply;
+    case 'overlay':
+      return GlowBlend.overlay;
+    case 'lighten':
+      return GlowBlend.lighten;
+    case 'darken':
+      return GlowBlend.darken;
+    case 'chromaticMix':
+      return GlowBlend.chromaticMix;
+    case 'additive':
+    default:
+      return GlowBlend.additive;
   }
 }

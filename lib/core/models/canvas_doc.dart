@@ -15,7 +15,8 @@ class Background {
 
   factory Background.fromJson(Map<String, dynamic> json) {
     final typeStr = json['type'] as String?;
-    final params = (json['params'] as Map?)?.cast<String, dynamic>() ?? const <String, dynamic>{};
+    final params = (json['params'] as Map?)?.cast<String, dynamic>() ??
+        const <String, dynamic>{};
     return Background(
       type: _backgroundTypeFromString(typeStr),
       params: params,
@@ -59,6 +60,17 @@ class CanvasDoc {
   final Background background;
   final SymmetryMode symmetry;
 
+  /// NEW: per-document blend mode key.
+  ///
+  /// Examples:
+  ///  - 'additive'
+  ///  - 'screen'
+  ///  - 'overlay'
+  ///  - 'chromaticMix'
+  ///
+  /// Older JSON files won’t have this field, so we default to 'additive'.
+  final String blendModeKey;
+
   const CanvasDoc({
     required this.id,
     required this.name,
@@ -68,6 +80,7 @@ class CanvasDoc {
     required this.height,
     required this.background,
     required this.symmetry,
+    this.blendModeKey = 'additive',
   });
 
   CanvasDoc copyWith({
@@ -79,6 +92,7 @@ class CanvasDoc {
     int? height,
     Background? background,
     SymmetryMode? symmetry,
+    String? blendModeKey,
   }) {
     return CanvasDoc(
       id: id ?? this.id,
@@ -89,6 +103,7 @@ class CanvasDoc {
       height: height ?? this.height,
       background: background ?? this.background,
       symmetry: symmetry ?? this.symmetry,
+      blendModeKey: blendModeKey ?? this.blendModeKey,
     );
   }
 
@@ -101,6 +116,9 @@ class CanvasDoc {
         'height': height,
         'background': background.toJson(),
         'symmetry': _symmetryToString(symmetry),
+
+        // NEW: save blend mode key
+        'blendMode': blendModeKey,
       };
 
   factory CanvasDoc.fromJson(Map<String, dynamic> json) {
@@ -115,6 +133,9 @@ class CanvasDoc {
         (json['background'] as Map).cast<String, dynamic>(),
       ),
       symmetry: _symmetryFromString(json['symmetry'] as String?),
+
+      // NEW: default to additive if missing
+      blendModeKey: (json['blendMode'] as String?) ?? 'additive',
     );
   }
 

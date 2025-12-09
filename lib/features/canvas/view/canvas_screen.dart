@@ -81,6 +81,10 @@ class _CanvasScreenState extends ConsumerState<CanvasScreen> {
             ))
         .copyWith(
       updatedAt: now,
+      // Save current blend mode with this document.
+      blendModeKey: gb.glowBlendToKey(gb.GlowBlendState.I.mode),
+      // Save current background colour with this document.
+      background: doc_model.Background.solid(controller.backgroundColor),
     );
 
     final bundle = CanvasDocumentBundle(
@@ -223,12 +227,8 @@ class _CanvasScreenState extends ConsumerState<CanvasScreen> {
   Widget build(BuildContext context) {
     final controller = ref.watch(canvas_state.canvasControllerProvider);
 
-    // Decide canvas background based on global blend mode.
-    final blendMode = gb.GlowBlendState.I.mode;
-    final bool isMultiply = blendMode == gb.GlowBlend.multiply;
-
-    // Black for neon (additive/screen), white for multiply (Venn-style mixing).
-    final Color canvasBg = isMultiply ? Colors.white : Colors.black;
+    // ✅ Always use the controller's background colour.
+    final Color canvasBg = Color(controller.backgroundColor);
 
     return Scaffold(
       appBar: PreferredSize(

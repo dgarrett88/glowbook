@@ -104,6 +104,30 @@ class BottomDock extends StatelessWidget {
                 },
               ),
               _DockButton(
+                customIcon: Container(
+                  width: 22,
+                  height: 22,
+                  decoration: BoxDecoration(
+                    color: Color(controller.backgroundColor),
+                    shape: BoxShape.circle,
+                    border: Border.all(color: Colors.white24),
+                  ),
+                ),
+                label: 'BG',
+                onTap: () async {
+                  final picked = await showDialog<Color?>(
+                    context: context,
+                    barrierDismissible: true,
+                    builder: (_) => ColorWheelDialog(
+                      initial: Color(controller.backgroundColor),
+                    ),
+                  );
+                  if (picked != null) {
+                    controller.setBackgroundColor(picked.value);
+                  }
+                },
+              ),
+              _DockButton(
                 icon: Icons.auto_awesome,
                 label: 'Blend',
                 onTap: () => _openBlendSheet(context),
