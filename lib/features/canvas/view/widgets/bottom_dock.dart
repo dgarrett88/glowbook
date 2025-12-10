@@ -9,7 +9,19 @@ import 'dice_dots_icon.dart';
 
 class BottomDock extends StatelessWidget {
   final CanvasController controller;
-  const BottomDock({super.key, required this.controller});
+
+  /// NEW: whether the layer panel is currently visible.
+  final bool showLayers;
+
+  /// NEW: callback to toggle layer panel visibility.
+  final VoidCallback onToggleLayers;
+
+  const BottomDock({
+    super.key,
+    required this.controller,
+    required this.showLayers,
+    required this.onToggleLayers,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -132,7 +144,19 @@ class BottomDock extends StatelessWidget {
                 label: 'Blend',
                 onTap: () => _openBlendSheet(context),
               ),
+
               const Spacer(),
+
+              // NEW: Layers toggle button on the far right
+              _DockButton(
+                customIcon: Icon(
+                  Icons.layers,
+                  size: 22,
+                  color: showLayers ? Colors.cyanAccent : Colors.white,
+                ),
+                label: 'Layers',
+                onTap: onToggleLayers,
+              ),
             ],
           ),
         ),

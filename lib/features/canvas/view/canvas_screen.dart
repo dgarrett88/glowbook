@@ -11,6 +11,7 @@ import 'widgets/top_toolbar.dart';
 import 'widgets/bottom_dock.dart';
 import '../../../core/models/canvas_document_bundle.dart';
 import '../state/glow_blend.dart' as gb;
+import 'layer_panel.dart';
 
 class CanvasScreen extends ConsumerStatefulWidget {
   final CanvasDocumentBundle? initialDocument;
@@ -31,6 +32,8 @@ class _CanvasScreenState extends ConsumerState<CanvasScreen> {
 
   String? _currentDocId;
   doc_model.CanvasDoc? _currentDoc;
+
+  bool _showLayers = false;
 
   Future<_NewPageAction?> _showSaveOrDiscardDialog() {
     return showDialog<_NewPageAction>(
@@ -60,6 +63,12 @@ class _CanvasScreenState extends ConsumerState<CanvasScreen> {
         );
       },
     );
+  }
+
+  void _toggleLayers() {
+    setState(() {
+      _showLayers = !_showLayers;
+    });
   }
 
   Future<void> _saveCurrent(canvas_state.CanvasController controller) async {
@@ -240,24 +249,46 @@ class _CanvasScreenState extends ConsumerState<CanvasScreen> {
           onExitToMenu: () => _handleExitToMainMenu(controller),
         ),
       ),
-      bottomNavigationBar: BottomDock(controller: controller),
-      body: Listener(
-        behavior: HitTestBehavior.translucent,
-        onPointerDown: (event) =>
-            controller.pointerDown(event.pointer, event.localPosition),
-        onPointerMove: (event) =>
-            controller.pointerMove(event.pointer, event.localPosition),
-        onPointerUp: (event) => controller.pointerUp(event.pointer),
-        child: RepaintBoundary(
-          key: _repaintKey,
-          child: Container(
-            color: canvasBg,
-            child: CustomPaint(
-              painter: controller.painter,
-              size: Size.infinite,
+      bottomNavigationBar: BottomDock(
+        controller: controller,
+        showLayers: _showLayers,
+        onToggleLayers: _toggleLayers,
+      ),
+      body: Stack(
+        children: [
+          // 🎨 Main canvas
+          Listener(
+            behavior: HitTestBehavior.translucent,
+            onPointerDown: (event) => controller.pointerDown(
+              event.pointer,
+              event.localPosition,
+            ),
+            onPointerMove: (event) =>
+                controller.pointerMove(event.pointer, event.localPosition),
+            onPointerUp: (event) => controller.pointerUp(event.pointer),
+            child: RepaintBoundary(
+              key: _repaintKey,
+              child: Container(
+                color: canvasBg,
+                child: CustomPaint(
+                  painter: controller.painter,
+                  size: Size.infinite,
+                ),
+              ),
             ),
           ),
-        ),
+
+          // 📚 Bottom layer panel
+          if (_showLayers)
+            Align(
+              alignment: Alignment.bottomCenter,
+              child: FractionallySizedBox(
+                heightFactor: 0.30, // 30% screen height
+                widthFactor: 1.0, // full width
+                child: const LayerPanel(),
+              ),
+            ),
+        ],
       ),
     );
   }

@@ -5,8 +5,10 @@ import '../../../core/models/brush.dart';
 import '../../../core/models/stroke.dart';
 import '../../../core/models/canvas_document_bundle.dart';
 import '../../../core/models/canvas_doc.dart' as doc_model;
+import '../../../core/models/canvas_layer.dart';
 import '../render/renderer.dart';
 import 'glow_blend.dart' as gb;
+import 'dart:math' as math;
 
 import 'canvas_state.dart';
 
@@ -14,6 +16,20 @@ enum SymmetryMode { off, mirrorV, mirrorH, quad }
 
 final canvasControllerProvider =
     ChangeNotifierProvider<CanvasController>((ref) => CanvasController());
+
+/// Internal: where a stroke lives in the layer stack.
+/// This lets undo/redo stay stable even if you reorder layers.
+class _StrokeLocation {
+  final String strokeId;
+  final String layerId;
+  final int groupIndex;
+
+  const _StrokeLocation({
+    required this.strokeId,
+    required this.layerId,
+    required this.groupIndex,
+  });
+}
 
 class CanvasController extends ChangeNotifier {
   CanvasController() {
@@ -80,7 +96,13 @@ class CanvasController extends ChangeNotifier {
 
   late final Renderer _renderer = Renderer(repaint, () => symmetry);
 
-  List<Stroke> get strokes => List.unmodifiable(_state.strokes);
+  /// Flattened strokes for save/export/etc.
+  List<Stroke> get strokes => List.unmodifiable(_state.allStrokes);
+
+  /// Expose layers & active layer for UI / tools.
+  List<CanvasLayer> get layers => List.unmodifiable(_state.layers);
+  String get activeLayerId => _state.activeLayerId;
+  CanvasLayer get activeLayer => _state.activeLayer;
 
   int color = 0xFF00FFFF; // default cyan
   double brushSize = 10.0;
@@ -117,7 +139,7 @@ class CanvasController extends ChangeNotifier {
   // Store the user's simple-glow setting when switching modes
   double _savedSimpleGlow = 0.3;
 
-  CanvasState _state = const CanvasState();
+  CanvasState _state = CanvasState.initial();
 
   Stroke? _current;
   int _startMs = 0;
@@ -133,11 +155,66 @@ class CanvasController extends ChangeNotifier {
   /// Used when restoring state from a document or creating a new one.
   bool _suppressBlendDirty = false;
 
+  /// Stroke history for undo/redo – uses logical locations, not visual order.
+  final List<_StrokeLocation> _history = [];
+  final List<_StrokeLocation> _redoLocations = [];
+
+  // ---------------------------------------------------------------------------
+  // INTERNAL HELPERS
+  // ---------------------------------------------------------------------------
+
   void _recomputeBrushGlow() {
     final r = glowRadius.clamp(0.0, 1.0);
     final o = glowOpacity.clamp(0.0, 1.0);
     _brushGlow = r * o;
   }
+
+  void _tick() {
+    repaint.value++;
+  }
+
+  void _recordStrokeCreation(Stroke s) {
+    // Find where this stroke actually ended up in the layer tree.
+    for (final layer in _state.layers) {
+      for (int gi = 0; gi < layer.groups.length; gi++) {
+        final group = layer.groups[gi];
+        final idx = group.strokes.indexWhere((st) => st.id == s.id);
+        if (idx != -1) {
+          _history.add(_StrokeLocation(
+            strokeId: s.id,
+            layerId: layer.id,
+            groupIndex: gi,
+          ));
+          // Any new stroke wipes redo history.
+          _redoLocations.clear();
+          _state = _state.copyWith(redoStack: []);
+          return;
+        }
+      }
+    }
+  }
+
+  void _rebuildHistoryFromState() {
+    _history.clear();
+    _redoLocations.clear();
+    final layers = _state.layers;
+    for (final layer in layers) {
+      for (int gi = 0; gi < layer.groups.length; gi++) {
+        final group = layer.groups[gi];
+        for (final s in group.strokes) {
+          _history.add(_StrokeLocation(
+            strokeId: s.id,
+            layerId: layer.id,
+            groupIndex: gi,
+          ));
+        }
+      }
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // BRUSH / GLOW / BACKGROUND
+  // ---------------------------------------------------------------------------
 
   /// Legacy single-glow setter used by older UI.
   void setBrushGlow(double value) {
@@ -147,7 +224,7 @@ class CanvasController extends ChangeNotifier {
     glowOpacity = 1.0;
 
     // brightness scales 0 → 1.0
-    double b = (v * 1.0).clamp(0.0, 1.0);
+    final double b = (v * 1.0).clamp(0.0, 1.0);
     glowBrightness = b;
 
     _recomputeBrushGlow();
@@ -222,10 +299,6 @@ class CanvasController extends ChangeNotifier {
     notifyListeners();
   }
 
-  void _tick() {
-    repaint.value++;
-  }
-
   void setBrushSize(double v) {
     brushSize = v;
     notifyListeners();
@@ -269,13 +342,291 @@ class CanvasController extends ChangeNotifier {
     }
   }
 
+  // ---------------------------------------------------------------------------
+  // LAYER MANAGEMENT
+  // ---------------------------------------------------------------------------
+
+  /// Set the active layer for drawing by id.
+  void setActiveLayer(String id) {
+    if (id == _state.activeLayerId) return;
+    final exists = _state.layers.any((l) => l.id == id);
+    if (!exists) return;
+    _state = _state.copyWith(activeLayerId: id);
+    notifyListeners();
+  }
+
+  /// Create a new layer on top, with one empty group.
+  /// Returns the new layer id.
+  String addLayer({String? name}) {
+    final index = _state.layers.length + 1;
+    final id = 'layer-$index';
+    final layerName = name ?? 'Layer $index';
+
+    final newLayer = const CanvasLayer(
+      id: 'placeholder',
+      name: 'placeholder',
+      visible: true,
+      locked: false,
+      transform: LayerTransform(),
+      groups: [
+        StrokeGroup(
+          id: 'group-main',
+          name: 'Group 1',
+          transform: GroupTransform(),
+          strokes: [],
+        ),
+      ],
+    ).copyWith(id: id, name: layerName);
+
+    final newLayers = List<CanvasLayer>.from(_state.layers)..add(newLayer);
+
+    _state = _state.copyWith(
+      layers: newLayers,
+      activeLayerId: id,
+    );
+
+    _renderer.rebuildFrom(_state.allStrokes);
+    _hasUnsavedChanges = true;
+    _tick();
+    notifyListeners();
+    return id;
+  }
+
+  /// Remove a layer by id. We never allow removing the last layer.
+  void removeLayer(String id) {
+    if (_state.layers.length <= 1) return;
+
+    final newLayers = List<CanvasLayer>.from(_state.layers)
+      ..removeWhere((l) => l.id == id);
+    if (newLayers.isEmpty) return;
+
+    String newActiveId = _state.activeLayerId;
+    if (!newLayers.any((l) => l.id == newActiveId)) {
+      newActiveId = newLayers.last.id;
+    }
+
+    _state = _state.copyWith(
+      layers: newLayers,
+      activeLayerId: newActiveId,
+      redoStack: const [],
+    );
+
+    // Drop any history entries that referenced this layer.
+    _history.removeWhere((loc) => loc.layerId == id);
+    _redoLocations.removeWhere((loc) => loc.layerId == id);
+
+    _renderer.rebuildFrom(_state.allStrokes);
+    _hasUnsavedChanges = true;
+    _tick();
+    notifyListeners();
+  }
+
+  void setLayerVisibility(String id, bool visible) {
+    final idx = _state.layers.indexWhere((l) => l.id == id);
+    if (idx < 0) return;
+
+    final layers = List<CanvasLayer>.from(_state.layers);
+    final layer = layers[idx];
+    if (layer.visible == visible) return;
+
+    layers[idx] = layer.copyWith(visible: visible);
+    _state = _state.copyWith(layers: layers);
+
+    _renderer.rebuildFrom(_state.allStrokes);
+    _hasUnsavedChanges = true;
+    _tick();
+    notifyListeners();
+  }
+
+  void setLayerLocked(String id, bool locked) {
+    final idx = _state.layers.indexWhere((l) => l.id == id);
+    if (idx < 0) return;
+
+    final layers = List<CanvasLayer>.from(_state.layers);
+    final layer = layers[idx];
+    if (layer.locked == locked) return;
+
+    layers[idx] = layer.copyWith(locked: locked);
+    _state = _state.copyWith(layers: layers);
+    _hasUnsavedChanges = true;
+    notifyListeners();
+  }
+
+  void renameLayer(String id, String name) {
+    final idx = _state.layers.indexWhere((l) => l.id == id);
+    if (idx < 0) return;
+
+    final layers = List<CanvasLayer>.from(_state.layers);
+    final layer = layers[idx];
+    layers[idx] = layer.copyWith(name: name);
+    _state = _state.copyWith(layers: layers);
+    _hasUnsavedChanges = true;
+    notifyListeners();
+  }
+
+  /// Set layer position (X/Y) in canvas space.
+  void setLayerPosition(String id, double x, double y) {
+    final idx = _state.layers.indexWhere((l) => l.id == id);
+    if (idx < 0) return;
+
+    final layers = List<CanvasLayer>.from(_state.layers);
+    final layer = layers[idx];
+    final oldT = layer.transform;
+
+    final newT = oldT.copyWith(
+      position: Offset(x, y),
+    );
+
+    layers[idx] = layer.copyWith(transform: newT);
+    _state = _state.copyWith(layers: layers);
+
+    _renderer.rebuildFrom(_state.allStrokes);
+    _hasUnsavedChanges = true;
+    _tick();
+    notifyListeners();
+  }
+
+  ///Set layer opacity (0..1).
+  void setLayerOpacity(String id, double opacity) {
+    final idx = _state.layers.indexWhere((l) => l.id == id);
+    if (idx < 0) return;
+
+    final layers = List<CanvasLayer>.from(_state.layers);
+    final layer = layers[idx];
+    final t = layer.transform;
+
+    final double newOpacity = opacity.clamp(0.0, 1.0);
+
+    layers[idx] = layer.copyWith(
+      transform: t.copyWith(opacity: newOpacity),
+    );
+
+    _state = _state.copyWith(layers: layers);
+
+    _renderer.rebuildFrom(_state.allStrokes);
+    _hasUnsavedChanges = true;
+    _tick();
+    notifyListeners();
+  }
+
+  /// Set layer rotation in **degrees** from the UI.
+  void setLayerRotationDegrees(String id, double degrees) {
+    final idx = _state.layers.indexWhere((l) => l.id == id);
+    if (idx < 0) return;
+
+    final layers = List<CanvasLayer>.from(_state.layers);
+    final layer = layers[idx];
+    final oldT = layer.transform;
+
+    final double radians = degrees * math.pi / 180.0;
+
+    final newT = oldT.copyWith(
+      rotation: radians,
+    );
+
+    layers[idx] = layer.copyWith(transform: newT);
+    _state = _state.copyWith(layers: layers);
+
+    _renderer.rebuildFrom(_state.allStrokes);
+    _hasUnsavedChanges = true;
+    _tick();
+    notifyListeners();
+  }
+
+  /// Set layer scale (uniform).
+  void setLayerScale(String id, double scale) {
+    final idx = _state.layers.indexWhere((l) => l.id == id);
+    if (idx < 0) return;
+
+    final clamped = scale.clamp(0.1, 5.0);
+
+    final layers = List<CanvasLayer>.from(_state.layers);
+    final layer = layers[idx];
+    final oldT = layer.transform;
+
+    final newT = oldT.copyWith(
+      scale: clamped.toDouble(),
+    );
+
+    layers[idx] = layer.copyWith(transform: newT);
+    _state = _state.copyWith(layers: layers);
+
+    _renderer.rebuildFrom(_state.allStrokes);
+    _hasUnsavedChanges = true;
+    _tick();
+    notifyListeners();
+  }
+
+  /// Reorder layers by internal index.
+  /// 0 = bottom-most layer, last = top-most layer.
+  void moveLayer(int fromIndex, int toIndex) {
+    if (fromIndex == toIndex) return;
+
+    final layers = List<CanvasLayer>.from(_state.layers);
+    if (fromIndex < 0 ||
+        fromIndex >= layers.length ||
+        toIndex < 0 ||
+        toIndex >= layers.length) {
+      return;
+    }
+
+    final moved = layers.removeAt(fromIndex);
+    layers.insert(toIndex, moved);
+
+    _state = _state.copyWith(layers: layers);
+
+    // History refers to layer IDs, so no change needed there.
+    _renderer.rebuildFrom(_state.allStrokes);
+    _hasUnsavedChanges = true;
+    _tick();
+    notifyListeners();
+  }
+
+  /// Reorder layers to exactly match [orderedIds].
+  /// Length must equal current layers length and IDs must match.
+  void reorderLayersByIds(List<String> orderedIds) {
+    if (orderedIds.length != _state.layers.length) return;
+
+    // Map id -> layer for quick lookup
+    final map = {
+      for (final l in _state.layers) l.id: l,
+    };
+
+    final newLayers = <CanvasLayer>[];
+    for (final id in orderedIds) {
+      final layer = map[id];
+      if (layer == null) {
+        // Invalid ID list: bail out without touching state.
+        return;
+      }
+      newLayers.add(layer);
+    }
+
+    _state = _state.copyWith(layers: newLayers);
+
+    _renderer.rebuildFrom(_state.allStrokes);
+    _hasUnsavedChanges = true;
+    _tick();
+    notifyListeners();
+  }
+
+  // ---------------------------------------------------------------------------
+  // DRAWING FLOW
+  // ---------------------------------------------------------------------------
+
   void pointerDown(int pointer, Offset pos) {
     if (_activePointerId != null) return;
+
+    // 🚫 If active layer is locked, do not start a stroke at all.
+    if (activeLayer.locked) {
+      return;
+    }
+
     _activePointerId = pointer;
 
     _startMs = DateTime.now().millisecondsSinceEpoch;
     _current = Stroke(
-      id: 's${_state.strokes.length}_$_startMs',
+      id: 's${_state.allStrokes.length}_$_startMs',
       brushId: brushId,
       color: color,
       size: brushSize,
@@ -314,13 +665,71 @@ class CanvasController extends ChangeNotifier {
     _current = null;
     _renderer.commitStroke(s);
 
-    _state = _state.copyWith(
-      strokes: [..._state.strokes, s],
-      redoStack: [],
-    );
+    // Add to active layer.
+    _state = _addStrokeToActiveLayer(_state, s);
+
+    // Record in history for stable undo/redo.
+    _recordStrokeCreation(s);
 
     _hasUnsavedChanges = true;
     _tick();
+    notifyListeners();
+  }
+
+  /// Helper to add a stroke into the active layer's primary group.
+  /// Does NOT touch history; caller is responsible for that.
+  CanvasState _addStrokeToActiveLayer(
+    CanvasState state,
+    Stroke stroke,
+  ) {
+    if (state.layers.isEmpty) {
+      // If somehow no layers, re-init and recurse once.
+      final fresh = CanvasState.initial();
+      return _addStrokeToActiveLayer(fresh, stroke);
+    }
+
+    final int layerIndex = state.layers.indexWhere(
+      (l) => l.id == state.activeLayerId,
+    );
+    final int targetLayerIndex = layerIndex >= 0 ? layerIndex : 0;
+    final CanvasLayer layer = state.layers[targetLayerIndex];
+
+    if (layer.locked) {
+      // If active layer is locked, just refuse to add (no-op).
+      return state;
+    }
+
+    if (layer.groups.isEmpty) {
+      // Recreate with a default group if needed.
+      final defaultGroup = StrokeGroup(
+        id: 'group-main',
+        name: 'Group 1',
+        transform: const GroupTransform(),
+        strokes: [stroke],
+      );
+      final newLayer = layer.copyWith(groups: [defaultGroup]);
+      final newLayers = List<CanvasLayer>.from(state.layers);
+      newLayers[targetLayerIndex] = newLayer;
+      return state.copyWith(
+        layers: newLayers,
+      );
+    }
+
+    // Append stroke to the first group (for now).
+    final groups = List<StrokeGroup>.from(layer.groups);
+    final firstGroup = groups.first;
+    final updatedGroup = firstGroup.copyWith(
+      strokes: [...firstGroup.strokes, stroke],
+    );
+    groups[0] = updatedGroup;
+
+    final newLayer = layer.copyWith(groups: groups);
+    final newLayers = List<CanvasLayer>.from(state.layers);
+    newLayers[targetLayerIndex] = newLayer;
+
+    return state.copyWith(
+      layers: newLayers,
+    );
   }
 
   String _symmetryId(SymmetryMode m) {
@@ -332,19 +741,23 @@ class CanvasController extends ChangeNotifier {
       case SymmetryMode.quad:
         return 'quad';
       case SymmetryMode.off:
-      default:
         return 'off';
     }
   }
 
+  // ---------------------------------------------------------------------------
+  // DOC LOAD / NEW DOC
+  // ---------------------------------------------------------------------------
+
   void loadFromBundle(CanvasDocumentBundle bundle) {
-    _state = CanvasState(
-      strokes: List<Stroke>.from(bundle.strokes),
-      redoStack: const [],
-    );
+    // Wrap old flat strokes into a single default layer/group.
+    _state = CanvasState.fromStrokes(List<Stroke>.from(bundle.strokes));
     _current = null;
     _activePointerId = null;
     _hasUnsavedChanges = false;
+
+    // Reset history from loaded strokes.
+    _rebuildHistoryFromState();
 
     // Restore background from doc metadata (solid colour only).
     final bg = bundle.doc.background;
@@ -363,15 +776,19 @@ class CanvasController extends ChangeNotifier {
     final mode = gb.glowBlendFromKey(key);
     gb.GlowBlendState.I.setMode(mode);
 
-    _renderer.rebuildFrom(_state.strokes);
+    _renderer.rebuildFrom(_state.allStrokes);
     _tick();
+    notifyListeners();
   }
 
   void newDocument() {
-    _state = const CanvasState();
+    _state = CanvasState.initial();
     _current = null;
     _activePointerId = null;
     _hasUnsavedChanges = false;
+
+    _history.clear();
+    _redoLocations.clear();
 
     // Reset background to default black; not considered a "change".
     backgroundColor = 0xFF000000;
@@ -381,43 +798,118 @@ class CanvasController extends ChangeNotifier {
     _suppressBlendDirty = true;
     gb.GlowBlendState.I.setMode(gb.GlowBlend.additive);
 
-    _renderer.rebuildFrom(_state.strokes);
+    _renderer.rebuildFrom(_state.allStrokes);
     _tick();
+    notifyListeners();
   }
 
   void markSaved() {
     _hasUnsavedChanges = false;
+    notifyListeners();
   }
 
-  void undo() {
-    if (_state.strokes.isEmpty) return;
+  // ---------------------------------------------------------------------------
+  // UNDO / REDO (history-based, stable under layer reordering)
+  // ---------------------------------------------------------------------------
 
-    final last = _state.strokes.last;
+  void undo() {
+    if (_history.isEmpty) return;
+
+    final lastLoc = _history.removeLast();
+
+    final layers = List<CanvasLayer>.from(_state.layers);
+    final layerIndex = layers.indexWhere((l) => l.id == lastLoc.layerId);
+    if (layerIndex == -1) {
+      // Layer no longer exists; nothing sensible to undo.
+      return;
+    }
+
+    final layer = layers[layerIndex];
+    if (layer.groups.isEmpty ||
+        lastLoc.groupIndex < 0 ||
+        lastLoc.groupIndex >= layer.groups.length) {
+      return;
+    }
+
+    final groups = List<StrokeGroup>.from(layer.groups);
+    final group = groups[lastLoc.groupIndex];
+
+    final strokes = List<Stroke>.from(group.strokes);
+    final strokeIndex = strokes.indexWhere((st) => st.id == lastLoc.strokeId);
+    if (strokeIndex == -1) {
+      return;
+    }
+
+    final removed = strokes.removeAt(strokeIndex);
+
+    groups[lastLoc.groupIndex] = group.copyWith(strokes: strokes);
+    layers[layerIndex] = layer.copyWith(groups: groups);
+
+    final newRedo = List<Stroke>.from(_state.redoStack)..add(removed);
 
     _state = _state.copyWith(
-      strokes: List.of(_state.strokes)..removeLast(),
-      redoStack: List.of(_state.redoStack)..add(last),
+      layers: layers,
+      redoStack: newRedo,
     );
 
-    _renderer.rebuildFrom(_state.strokes);
+    _redoLocations.add(lastLoc);
+
+    _renderer.rebuildFrom(_state.allStrokes);
     _hasUnsavedChanges = true;
     _tick();
+    notifyListeners();
   }
 
   void redo() {
-    if (_state.redoStack.isEmpty) return;
+    if (_state.redoStack.isEmpty || _redoLocations.isEmpty) return;
 
-    final s = _state.redoStack.last;
+    // We don't pop until we know redo has actually applied (e.g. layer not locked).
+    final loc = _redoLocations.last;
+    final stroke = _state.redoStack.last;
+
+    final layers = List<CanvasLayer>.from(_state.layers);
+    final layerIndex = layers.indexWhere((l) => l.id == loc.layerId);
+    if (layerIndex == -1) {
+      // Original layer gone; can't sensibly redo.
+      return;
+    }
+
+    final layer = layers[layerIndex];
+    if (layer.locked) {
+      // 🚫 Respect locks: don't consume redo, user can unlock and redo later.
+      return;
+    }
+
+    final groups = List<StrokeGroup>.from(layer.groups);
+    final groupIndex = (loc.groupIndex >= 0 && loc.groupIndex < groups.length)
+        ? loc.groupIndex
+        : 0;
+    final group = groups[groupIndex];
+
+    final strokes = List<Stroke>.from(group.strokes)..add(stroke);
+    groups[groupIndex] = group.copyWith(strokes: strokes);
+    layers[layerIndex] = layer.copyWith(groups: groups);
+
+    final newRedo = List<Stroke>.from(_state.redoStack)..removeLast();
+    _redoLocations.removeLast();
 
     _state = _state.copyWith(
-      strokes: List.of(_state.strokes)..add(s),
-      redoStack: List.of(_state.redoStack)..removeLast(),
+      layers: layers,
+      redoStack: newRedo,
     );
 
-    _renderer.rebuildFrom(_state.strokes);
+    // Add back into history so you can undo the redo.
+    _history.add(loc);
+
+    _renderer.rebuildFrom(_state.allStrokes);
     _hasUnsavedChanges = true;
     _tick();
+    notifyListeners();
   }
+
+  // ---------------------------------------------------------------------------
+  // MISC
+  // ---------------------------------------------------------------------------
 
   void setGlowRadiusScalesWithSize(bool value) {
     if (glowRadiusScalesWithSize == value) return;
@@ -434,8 +926,9 @@ class CanvasController extends ChangeNotifier {
       _hasUnsavedChanges = true;
     }
 
-    _renderer.rebuildFrom(_state.strokes);
+    _renderer.rebuildFrom(_state.allStrokes);
     _tick();
+    notifyListeners();
   }
 
   @override
