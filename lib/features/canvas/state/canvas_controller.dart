@@ -487,24 +487,26 @@ class CanvasController extends ChangeNotifier {
   }
 
   ///Set layer opacity (0..1).
+  // In CanvasController
   void setLayerOpacity(String id, double opacity) {
     final idx = _state.layers.indexWhere((l) => l.id == id);
     if (idx < 0) return;
 
     final layers = List<CanvasLayer>.from(_state.layers);
     final layer = layers[idx];
-    final t = layer.transform;
 
-    final double newOpacity = opacity.clamp(0.0, 1.0);
+    final clamped = opacity.clamp(0.0, 1.0);
 
     layers[idx] = layer.copyWith(
-      transform: t.copyWith(opacity: newOpacity),
+      transform: layer.transform.copyWith(opacity: clamped),
     );
 
     _state = _state.copyWith(layers: layers);
-
-    _renderer.rebuildFrom(_state.allStrokes);
     _hasUnsavedChanges = true;
+
+    // If you are actually using opacity in rendering, you probably
+    // want to rebuild so it takes effect immediately:
+    _renderer.rebuildFrom(_state.allStrokes);
     _tick();
     notifyListeners();
   }

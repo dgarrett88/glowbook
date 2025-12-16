@@ -108,8 +108,8 @@ class CanvasState {
   }
 
   /// Flatten all visible strokes in layer order,
-  /// applying layer transforms around the layer's own bounds centre
-  /// AND per-layer opacity.
+  /// applying layer transforms (position/scale/rotation/opacity)
+  /// around the layer's own bounds centre.
   List<Stroke> get allStrokes {
     final result = <Stroke>[];
 
@@ -118,42 +118,18 @@ class CanvasState {
 
       final t = layer.transform;
 
-      // Layer opacity 0..1
-      final double layerOpacity = t.opacity.clamp(0.0, 1.0);
-      if (layerOpacity <= 0.001) {
-        // Effectively invisible → skip whole layer.
-        continue;
-      }
+      // Fast path: identity transform → just dump strokes as-is.
+      final bool isIdentity = t.position == Offset.zero &&
+          t.scale == 1.0 &&
+          t.rotation == 0.0 &&
+          t.opacity == 1.0;
 
-      // Fast path: identity geometry → just apply opacity to strokes.
-      final bool isIdentityGeometry =
-          t.position == Offset.zero && t.scale == 1.0 && t.rotation == 0.0;
-
-      if (isIdentityGeometry) {
+      if (isIdentity) {
         for (final group in layer.groups) {
-          for (final stroke in group.strokes) {
-            if (layerOpacity >= 0.999) {
-              // Fully opaque → original stroke.
-              result.add(stroke);
-            } else {
-              final int c = stroke.color;
-              final int a = (c >> 24) & 0xFF;
-              final int rgb = c & 0x00FFFFFF;
-              final int newA = (a * layerOpacity).round().clamp(0, 255);
-              final int newColor = (newA << 24) | rgb;
-
-              result.add(
-                stroke.copyWith(color: newColor),
-              );
-            }
-          }
+          result.addAll(group.strokes);
         }
         continue;
       }
-
-      // -------------------------------------------------------------------
-      // Non-identity geometry → we need pivot, rotation, scale, translation.
-      // -------------------------------------------------------------------
 
       // Collect all points in this layer to compute a tight bounding box.
       double? minX, maxX, minY, maxY;
@@ -187,6 +163,9 @@ class CanvasState {
       final double scale = t.scale;
       final Offset offset = t.position;
 
+      // Opacity multiplier for this whole layer (0..1).
+      final double opacityMul = t.opacity.clamp(0.0, 1.0);
+
       // Apply transform to every point in this layer.
       for (final group in layer.groups) {
         for (final stroke in group.strokes) {
@@ -215,26 +194,15 @@ class CanvasState {
             );
           }
 
-          if (layerOpacity >= 0.999) {
-            // Only geometry change
-            result.add(
-              stroke.copyWith(points: transformedPoints),
-            );
-          } else {
-            // Geometry + opacity change
-            final int c = stroke.color;
-            final int a = (c >> 24) & 0xFF;
-            final int rgb = c & 0x00FFFFFF;
-            final int newA = (a * layerOpacity).round().clamp(0, 255);
-            final int newColor = (newA << 24) | rgb;
+          // Apply geometry + opacity. We treat layer.opacity as a multiplier
+          // on both coreOpacity and glowOpacity.
+          final transformedStroke = stroke.copyWith(
+            points: transformedPoints,
+            coreOpacity: (stroke.coreOpacity * opacityMul).clamp(0.0, 1.0),
+            glowOpacity: (stroke.glowOpacity * opacityMul).clamp(0.0, 1.0),
+          );
 
-            result.add(
-              stroke.copyWith(
-                points: transformedPoints,
-                color: newColor,
-              ),
-            );
-          }
+          result.add(transformedStroke);
         }
       }
     }

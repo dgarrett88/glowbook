@@ -41,7 +41,6 @@ class _LayerPanelState extends ConsumerState<LayerPanel> {
                 onAddLayer: controller.addLayer,
               ),
               const Divider(height: 1, color: Color(0xFF262636)),
-              // Scrollable list of rows – will fill whatever height parent gives.
               Expanded(
                 child: ReorderableListView.builder(
                   padding: const EdgeInsets.symmetric(vertical: 4),
@@ -54,7 +53,6 @@ class _LayerPanelState extends ConsumerState<LayerPanel> {
                     final moved = newOrder.removeAt(oldIndex);
                     newOrder.insert(newIndex, moved);
 
-                    // Send IDs in the new bottom→top order.
                     controller.reorderLayersByIds(
                       newOrder.map((l) => l.id).toList(),
                     );
@@ -99,10 +97,11 @@ class _LayerPanelState extends ConsumerState<LayerPanel> {
                         });
                       },
                       onTransformChanged: (tx) {
-                        // tx: x, y, rotationDegrees, scale, opacity (0–1)
                         controller.setLayerPosition(layer.id, tx.x, tx.y);
                         controller.setLayerRotationDegrees(
-                            layer.id, tx.rotationDegrees);
+                          layer.id,
+                          tx.rotationDegrees,
+                        );
                         controller.setLayerScale(layer.id, tx.scale);
                         controller.setLayerOpacity(layer.id, tx.opacity);
                       },
@@ -482,7 +481,7 @@ class _LayerTransformEditor extends StatelessWidget {
       required String label,
       required double value,
       required void Function(double) onValue,
-      double width = 60,
+      double width = 70,
     }) {
       final controller = TextEditingController(text: value.toStringAsFixed(2));
       return SizedBox(
@@ -532,7 +531,36 @@ class _LayerTransformEditor extends StatelessWidget {
         children: [
           const SizedBox(height: 4),
 
-          // X / Y
+          // SCALE (own row)
+          Row(
+            children: [
+              buildNumberField(
+                label: 'Scale',
+                value: values.scale,
+                onValue: (v) =>
+                    onChanged(values.copyWith(scale: v.clamp(0.1, 5.0))),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: SliderTheme(
+                  data: SliderTheme.of(context).copyWith(
+                    trackHeight: 3,
+                    thumbShape:
+                        const RoundSliderThumbShape(enabledThumbRadius: 6),
+                  ),
+                  child: Slider(
+                    min: 0.1,
+                    max: 5.0,
+                    value: values.scale.clamp(0.1, 5.0),
+                    onChanged: (v) => onChanged(values.copyWith(scale: v)),
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 4),
+
+          // X (own row)
           Row(
             children: [
               buildNumberField(
@@ -541,16 +569,54 @@ class _LayerTransformEditor extends StatelessWidget {
                 onValue: (v) => onChanged(values.copyWith(x: v)),
               ),
               const SizedBox(width: 8),
-              buildNumberField(
-                label: 'Y',
-                value: values.y,
-                onValue: (v) => onChanged(values.copyWith(y: v)),
+              Expanded(
+                child: SliderTheme(
+                  data: SliderTheme.of(context).copyWith(
+                    trackHeight: 3,
+                    thumbShape:
+                        const RoundSliderThumbShape(enabledThumbRadius: 6),
+                  ),
+                  child: Slider(
+                    min: -500,
+                    max: 500,
+                    value: values.x.clamp(-500, 500),
+                    onChanged: (v) => onChanged(values.copyWith(x: v)),
+                  ),
+                ),
               ),
             ],
           ),
           const SizedBox(height: 4),
 
-          // Rotation
+          // Y (own row)
+          Row(
+            children: [
+              buildNumberField(
+                label: 'Y',
+                value: values.y,
+                onValue: (v) => onChanged(values.copyWith(y: v)),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: SliderTheme(
+                  data: SliderTheme.of(context).copyWith(
+                    trackHeight: 3,
+                    thumbShape:
+                        const RoundSliderThumbShape(enabledThumbRadius: 6),
+                  ),
+                  child: Slider(
+                    min: -500,
+                    max: 500,
+                    value: values.y.clamp(-500, 500),
+                    onChanged: (v) => onChanged(values.copyWith(y: v)),
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 4),
+
+          // ROTATION (own row)
           Row(
             children: [
               buildNumberField(
@@ -579,35 +645,7 @@ class _LayerTransformEditor extends StatelessWidget {
           ),
           const SizedBox(height: 4),
 
-          // Scale
-          Row(
-            children: [
-              buildNumberField(
-                label: 'Scale',
-                value: values.scale,
-                onValue: (v) => onChanged(values.copyWith(scale: v)),
-              ),
-              const SizedBox(width: 8),
-              Expanded(
-                child: SliderTheme(
-                  data: SliderTheme.of(context).copyWith(
-                    trackHeight: 3,
-                    thumbShape:
-                        const RoundSliderThumbShape(enabledThumbRadius: 6),
-                  ),
-                  child: Slider(
-                    min: 0.1,
-                    max: 5.0,
-                    value: values.scale.clamp(0.1, 5.0),
-                    onChanged: (v) => onChanged(values.copyWith(scale: v)),
-                  ),
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 4),
-
-          // Opacity (0.0 – 1.0)
+          // OPACITY (0.0–1.0, own row)
           Row(
             children: [
               buildNumberField(
@@ -617,7 +655,6 @@ class _LayerTransformEditor extends StatelessWidget {
                   final clamped = v.clamp(0.0, 1.0);
                   onChanged(values.copyWith(opacity: clamped));
                 },
-                width: 70,
               ),
               const SizedBox(width: 8),
               Expanded(
