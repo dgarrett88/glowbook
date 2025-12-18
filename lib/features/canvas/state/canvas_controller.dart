@@ -1,17 +1,19 @@
+// lib/features/canvas/state/canvas_controller.dart
+import 'dart:math' as math;
+import 'dart:ui' show Offset;
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/models/brush.dart';
-import '../../../core/models/stroke.dart';
 import '../../../core/models/canvas_document_bundle.dart';
 import '../../../core/models/canvas_doc.dart' as doc_model;
 import '../../../core/models/canvas_layer.dart';
+import '../../../core/models/stroke.dart';
 
 import '../render/renderer.dart';
-import 'glow_blend.dart' as gb;
-import 'dart:math' as math;
-
 import 'canvas_state.dart';
+import 'glow_blend.dart' as gb;
 
 enum SymmetryMode { off, mirrorV, mirrorH, quad }
 
@@ -49,14 +51,14 @@ class CanvasController extends ChangeNotifier {
 
   // Palette list (we'll only render first `paletteSlots`)
   final List<int> palette = [
-    0xFF00FFFF, // cyan
-    0xFFFF00FF, // magenta
-    0xFFFFFF00, // yellow
-    0xFFFF6EFF, // pink neon
-    0xFF80FF00, // lime
-    0xFFFFA500, // orange
-    0xFF00FF9A, // mint
-    0xFF9A7BFF, // violet
+    0xFF00FFFF,
+    0xFFFF00FF,
+    0xFFFFFF00,
+    0xFFFF6EFF,
+    0xFF80FF00,
+    0xFFFFA500,
+    0xFF00FF9A,
+    0xFF9A7BFF,
     // extra prepared slots for premium
     0xFFFFFFFF,
     0xFFB0B0B0,
@@ -95,7 +97,6 @@ class CanvasController extends ChangeNotifier {
     }
   }
 
-  // ✅ Renderer now uses controller background (and preserves Multiply default)
   late final Renderer _renderer = Renderer(
     repaint,
     () => symmetry,
@@ -146,9 +147,9 @@ class CanvasController extends ChangeNotifier {
 
   CanvasState _state = CanvasState.initial();
 
+  // NOTE: _current is now ALWAYS stored in *layer-local* coordinates.
   Stroke? _current;
   int _startMs = 0;
-
   int? _activePointerId;
 
   bool _hasUnsavedChanges = false;
@@ -157,7 +158,6 @@ class CanvasController extends ChangeNotifier {
   Renderer get painter => _renderer;
 
   /// When true, blend mode/intensity changes should *not* mark the doc dirty.
-  /// Used when restoring state from a document or creating a new one.
   bool _suppressBlendDirty = false;
 
   /// Stroke history for undo/redo – uses logical locations, not visual order.
@@ -178,8 +178,87 @@ class CanvasController extends ChangeNotifier {
     repaint.value++;
   }
 
+  bool _isIdentityTransform(LayerTransform t) {
+    return t.position == Offset.zero &&
+        t.scale == 1.0 &&
+        t.rotation == 0.0 &&
+        t.opacity == 1.0;
+  }
+
+  Offset _computeBoundsPivotForLayer(CanvasLayer layer) {
+    double? minX, maxX, minY, maxY;
+    for (final group in layer.groups) {
+      for (final stroke in group.strokes) {
+        for (final p in stroke.points) {
+          final x = p.x;
+          final y = p.y;
+          if (minX == null || x < minX) minX = x;
+          if (maxX == null || x > maxX) maxX = x;
+          if (minY == null || y < minY) minY = y;
+          if (maxY == null || y > maxY) maxY = y;
+        }
+      }
+    }
+    if (minX == null || minY == null || maxX == null || maxY == null) {
+      return Offset.zero;
+    }
+    return Offset((minX + maxX) / 2.0, (minY + maxY) / 2.0);
+  }
+
+  Offset _forwardTransformPoint(Offset p, LayerTransform t, Offset pivot) {
+    final angle = t.rotation;
+    final cosA = math.cos(angle);
+    final sinA = math.sin(angle);
+
+    final local = p - pivot;
+
+    final rotated = Offset(
+      local.dx * cosA - local.dy * sinA,
+      local.dx * sinA + local.dy * cosA,
+    );
+
+    final scaled = rotated * t.scale;
+
+    return scaled + pivot + t.position;
+  }
+
+  Offset _inverseTransformPoint(Offset pWorld, LayerTransform t, Offset pivot) {
+    final p = pWorld - t.position; // undo translation
+    final local = p - pivot;
+
+    final s = (t.scale == 0.0) ? 1.0 : t.scale;
+    final unscaled = Offset(local.dx / s, local.dy / s);
+
+    final angle = -t.rotation; // undo rotation
+    final cosA = math.cos(angle);
+    final sinA = math.sin(angle);
+
+    final unrotated = Offset(
+      unscaled.dx * cosA - unscaled.dy * sinA,
+      unscaled.dx * sinA + unscaled.dy * cosA,
+    );
+
+    return unrotated + pivot;
+  }
+
+  Stroke _strokeWithTransformedPoints(
+      Stroke s, LayerTransform t, Offset pivot) {
+    final opacityMul = t.opacity.clamp(0.0, 1.0);
+
+    final pts = <PointSample>[];
+    for (final p in s.points) {
+      final world = _forwardTransformPoint(Offset(p.x, p.y), t, pivot);
+      pts.add(PointSample(world.dx, world.dy, p.t));
+    }
+
+    return s.copyWith(
+      points: pts,
+      coreOpacity: (s.coreOpacity * opacityMul).clamp(0.0, 1.0),
+      glowOpacity: (s.glowOpacity * opacityMul).clamp(0.0, 1.0),
+    );
+  }
+
   void _recordStrokeCreation(Stroke s) {
-    // Find where this stroke actually ended up in the layer tree.
     for (final layer in _state.layers) {
       for (int gi = 0; gi < layer.groups.length; gi++) {
         final group = layer.groups[gi];
@@ -190,7 +269,6 @@ class CanvasController extends ChangeNotifier {
             layerId: layer.id,
             groupIndex: gi,
           ));
-          // Any new stroke wipes redo history.
           _redoLocations.clear();
           _state = _state.copyWith(redoStack: []);
           return;
@@ -202,8 +280,7 @@ class CanvasController extends ChangeNotifier {
   void _rebuildHistoryFromState() {
     _history.clear();
     _redoLocations.clear();
-    final layers = _state.layers;
-    for (final layer in layers) {
+    for (final layer in _state.layers) {
       for (int gi = 0; gi < layer.groups.length; gi++) {
         final group = layer.groups[gi];
         for (final s in group.strokes) {
@@ -221,14 +298,12 @@ class CanvasController extends ChangeNotifier {
   // BRUSH / GLOW / BACKGROUND
   // ---------------------------------------------------------------------------
 
-  /// Legacy single-glow setter used by older UI.
   void setBrushGlow(double value) {
     final v = value.clamp(0.0, 1.0);
 
     glowRadius = v;
     glowOpacity = 1.0;
 
-    // brightness scales 0 → 1.0
     final double b = (v * 1.0).clamp(0.0, 1.0);
     glowBrightness = b;
 
@@ -269,24 +344,20 @@ class CanvasController extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Set the canvas background colour.
   void setBackgroundColor(int value) {
     backgroundColor = value;
     _hasCustomBackground = true;
     _hasUnsavedChanges = true;
 
-    // Force repaint immediately (background is painted by renderer now)
     _tick();
     notifyListeners();
   }
 
-  /// ✅ Correct advanced/simple glow behaviour
   void setAdvancedGlowEnabled(bool value) {
     if (_advancedGlowEnabled == value) return;
 
     if (value) {
-      // Turning advanced ON
-      _savedSimpleGlow = brushGlow; // save user's last simple glow
+      _savedSimpleGlow = brushGlow;
 
       glowRadius = _savedAdvancedGlowRadius.clamp(0.0, 1.0);
       glowBrightness = _savedAdvancedGlowBrightness.clamp(0.0, 1.0);
@@ -294,12 +365,10 @@ class CanvasController extends ChangeNotifier {
 
       _recomputeBrushGlow();
     } else {
-      // Turning advanced OFF
       _savedAdvancedGlowRadius = glowRadius.clamp(0.0, 1.0);
       _savedAdvancedGlowBrightness = glowBrightness.clamp(0.0, 1.0);
       _savedAdvancedGlowOpacity = glowOpacity.clamp(0.0, 1.0);
 
-      // Restore user's simple glow instead of forcing defaults
       setBrushGlow(_savedSimpleGlow);
     }
 
@@ -354,7 +423,6 @@ class CanvasController extends ChangeNotifier {
   // LAYER MANAGEMENT
   // ---------------------------------------------------------------------------
 
-  /// Set the active layer for drawing by id.
   void setActiveLayer(String id) {
     if (id == _state.activeLayerId) return;
     final exists = _state.layers.any((l) => l.id == id);
@@ -363,8 +431,6 @@ class CanvasController extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Create a new layer on top, with one empty group.
-  /// Returns the new layer id.
   String addLayer({String? name}) {
     final index = _state.layers.length + 1;
     final id = 'layer-$index';
@@ -400,7 +466,6 @@ class CanvasController extends ChangeNotifier {
     return id;
   }
 
-  /// Remove a layer by id. We never allow removing the last layer.
   void removeLayer(String id) {
     if (_state.layers.length <= 1) return;
 
@@ -419,7 +484,6 @@ class CanvasController extends ChangeNotifier {
       redoStack: const [],
     );
 
-    // Drop any history entries that referenced this layer.
     _history.removeWhere((loc) => loc.layerId == id);
     _redoLocations.removeWhere((loc) => loc.layerId == id);
 
@@ -472,20 +536,16 @@ class CanvasController extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Set layer position (X/Y) in canvas space.
   void setLayerPosition(String id, double x, double y) {
     final idx = _state.layers.indexWhere((l) => l.id == id);
     if (idx < 0) return;
 
     final layers = List<CanvasLayer>.from(_state.layers);
     final layer = layers[idx];
-    final oldT = layer.transform;
 
-    final newT = oldT.copyWith(
-      position: Offset(x, y),
+    layers[idx] = layer.copyWith(
+      transform: layer.transform.copyWith(position: Offset(x, y)),
     );
-
-    layers[idx] = layer.copyWith(transform: newT);
     _state = _state.copyWith(layers: layers);
 
     _renderer.rebuildFrom(_state.allStrokes);
@@ -494,7 +554,6 @@ class CanvasController extends ChangeNotifier {
     notifyListeners();
   }
 
-  ///Set layer opacity (0..1).
   void setLayerOpacity(String id, double opacity) {
     final idx = _state.layers.indexWhere((l) => l.id == id);
     if (idx < 0) return;
@@ -516,22 +575,18 @@ class CanvasController extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Set layer rotation in **degrees** from the UI.
   void setLayerRotationDegrees(String id, double degrees) {
     final idx = _state.layers.indexWhere((l) => l.id == id);
     if (idx < 0) return;
 
     final layers = List<CanvasLayer>.from(_state.layers);
     final layer = layers[idx];
-    final oldT = layer.transform;
 
     final double radians = degrees * math.pi / 180.0;
 
-    final newT = oldT.copyWith(
-      rotation: radians,
+    layers[idx] = layer.copyWith(
+      transform: layer.transform.copyWith(rotation: radians),
     );
-
-    layers[idx] = layer.copyWith(transform: newT);
     _state = _state.copyWith(layers: layers);
 
     _renderer.rebuildFrom(_state.allStrokes);
@@ -540,7 +595,6 @@ class CanvasController extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Set layer scale (uniform).
   void setLayerScale(String id, double scale) {
     final idx = _state.layers.indexWhere((l) => l.id == id);
     if (idx < 0) return;
@@ -549,13 +603,10 @@ class CanvasController extends ChangeNotifier {
 
     final layers = List<CanvasLayer>.from(_state.layers);
     final layer = layers[idx];
-    final oldT = layer.transform;
 
-    final newT = oldT.copyWith(
-      scale: clamped.toDouble(),
+    layers[idx] = layer.copyWith(
+      transform: layer.transform.copyWith(scale: clamped.toDouble()),
     );
-
-    layers[idx] = layer.copyWith(transform: newT);
     _state = _state.copyWith(layers: layers);
 
     _renderer.rebuildFrom(_state.allStrokes);
@@ -564,8 +615,6 @@ class CanvasController extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Reorder layers by internal index.
-  /// 0 = bottom-most layer, last = top-most layer.
   void moveLayer(int fromIndex, int toIndex) {
     if (fromIndex == toIndex) return;
 
@@ -588,21 +637,15 @@ class CanvasController extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Reorder layers to exactly match [orderedIds].
-  /// Length must equal current layers length and IDs must match.
   void reorderLayersByIds(List<String> orderedIds) {
     if (orderedIds.length != _state.layers.length) return;
 
-    final map = {
-      for (final l in _state.layers) l.id: l,
-    };
+    final map = {for (final l in _state.layers) l.id: l};
 
     final newLayers = <CanvasLayer>[];
     for (final id in orderedIds) {
       final layer = map[id];
-      if (layer == null) {
-        return;
-      }
+      if (layer == null) return;
       newLayers.add(layer);
     }
 
@@ -615,19 +658,39 @@ class CanvasController extends ChangeNotifier {
   }
 
   // ---------------------------------------------------------------------------
-  // DRAWING FLOW
+  // DRAWING FLOW (FIXED: store LOCAL, preview/bake WORLD)
   // ---------------------------------------------------------------------------
 
   void pointerDown(int pointer, Offset pos) {
     if (_activePointerId != null) return;
-
-    if (activeLayer.locked) {
-      return;
-    }
+    if (activeLayer.locked) return;
 
     _activePointerId = pointer;
 
+    final layer = activeLayer;
+    final tr = layer.transform;
+    final isIdentity = _isIdentityTransform(tr);
+
+    Offset pivot = Offset.zero;
+    if (!isIdentity) {
+      pivot = tr.pivot ?? _computeBoundsPivotForLayer(layer);
+
+      // Persist pivot once so it stays stable for this layer.
+      if (tr.pivot == null) {
+        final idx = _state.layers.indexWhere((l) => l.id == layer.id);
+        if (idx >= 0) {
+          final layers = List<CanvasLayer>.from(_state.layers);
+          layers[idx] = layer.copyWith(transform: tr.copyWith(pivot: pivot));
+          _state = _state.copyWith(layers: layers);
+        }
+      }
+    }
+
     _startMs = DateTime.now().millisecondsSinceEpoch;
+
+    final startPoint =
+        isIdentity ? pos : _inverseTransformPoint(pos, tr, pivot);
+
     _current = Stroke(
       id: 's${_state.allStrokes.length}_$_startMs',
       brushId: brushId,
@@ -640,21 +703,41 @@ class CanvasController extends ChangeNotifier {
       coreOpacity: coreOpacity,
       glowRadiusScalesWithSize: glowRadiusScalesWithSize,
       seed: 0,
-      points: [PointSample(pos.dx, pos.dy, 0)],
+      points: [PointSample(startPoint.dx, startPoint.dy, 0)],
       symmetryId: _symmetryId(symmetry),
     );
+
+    final sLocal = _current!;
+    final preview =
+        isIdentity ? sLocal : _strokeWithTransformedPoints(sLocal, tr, pivot);
+    _renderer.beginStroke(preview);
+    _tick();
   }
 
   void pointerMove(int pointer, Offset pos) {
     if (_activePointerId != pointer) return;
-    final s = _current;
-    if (s == null) return;
+    final sLocal = _current;
+    if (sLocal == null) return;
+
+    final layer = activeLayer;
+    final tr = layer.transform;
+    final isIdentity = _isIdentityTransform(tr);
+
+    Offset pivot = Offset.zero;
+    if (!isIdentity) {
+      pivot = tr.pivot ?? _computeBoundsPivotForLayer(layer);
+    }
 
     final now = DateTime.now().millisecondsSinceEpoch;
-    final t = now - _startMs;
+    final tMs = now - _startMs;
 
-    s.points.add(PointSample(pos.dx, pos.dy, t));
-    _renderer.updateStroke(s);
+    final localPoint =
+        isIdentity ? pos : _inverseTransformPoint(pos, tr, pivot);
+    sLocal.points.add(PointSample(localPoint.dx, localPoint.dy, tMs));
+
+    final preview =
+        isIdentity ? sLocal : _strokeWithTransformedPoints(sLocal, tr, pivot);
+    _renderer.updateStroke(preview);
     _tick();
   }
 
@@ -662,38 +745,45 @@ class CanvasController extends ChangeNotifier {
     if (_activePointerId != pointer) return;
     _activePointerId = null;
 
-    final s = _current;
-    if (s == null) return;
-
+    final sLocal = _current;
+    if (sLocal == null) return;
     _current = null;
-    _renderer.commitStroke(s);
 
-    _state = _addStrokeToActiveLayer(_state, s);
-    _recordStrokeCreation(s);
+    final layer = activeLayer;
+    final tr = layer.transform;
+    final isIdentity = _isIdentityTransform(tr);
+
+    Offset pivot = Offset.zero;
+    if (!isIdentity) {
+      pivot = tr.pivot ?? _computeBoundsPivotForLayer(layer);
+    }
+
+    // Bake what the user saw on screen (world space)
+    final bakeStroke =
+        isIdentity ? sLocal : _strokeWithTransformedPoints(sLocal, tr, pivot);
+    _renderer.commitStroke(bakeStroke);
+
+    // Store local stroke into the layer
+    _state = _addStrokeToActiveLayer(_state, sLocal);
+    _recordStrokeCreation(sLocal);
 
     _hasUnsavedChanges = true;
     _tick();
     notifyListeners();
   }
 
-  CanvasState _addStrokeToActiveLayer(
-    CanvasState state,
-    Stroke stroke,
-  ) {
+  CanvasState _addStrokeToActiveLayer(CanvasState state, Stroke stroke) {
     if (state.layers.isEmpty) {
       final fresh = CanvasState.initial();
       return _addStrokeToActiveLayer(fresh, stroke);
     }
 
-    final int layerIndex = state.layers.indexWhere(
-      (l) => l.id == state.activeLayerId,
-    );
+    final int layerIndex =
+        state.layers.indexWhere((l) => l.id == state.activeLayerId);
     final int targetLayerIndex = layerIndex >= 0 ? layerIndex : 0;
     final CanvasLayer layer = state.layers[targetLayerIndex];
 
-    if (layer.locked) {
-      return state;
-    }
+    if (layer.locked) return state;
 
     if (layer.groups.isEmpty) {
       final defaultGroup = StrokeGroup(
@@ -705,25 +795,20 @@ class CanvasController extends ChangeNotifier {
       final newLayer = layer.copyWith(groups: [defaultGroup]);
       final newLayers = List<CanvasLayer>.from(state.layers);
       newLayers[targetLayerIndex] = newLayer;
-      return state.copyWith(
-        layers: newLayers,
-      );
+      return state.copyWith(layers: newLayers);
     }
 
     final groups = List<StrokeGroup>.from(layer.groups);
     final firstGroup = groups.first;
-    final updatedGroup = firstGroup.copyWith(
-      strokes: [...firstGroup.strokes, stroke],
-    );
+    final updatedGroup =
+        firstGroup.copyWith(strokes: [...firstGroup.strokes, stroke]);
     groups[0] = updatedGroup;
 
     final newLayer = layer.copyWith(groups: groups);
     final newLayers = List<CanvasLayer>.from(state.layers);
     newLayers[targetLayerIndex] = newLayer;
 
-    return state.copyWith(
-      layers: newLayers,
-    );
+    return state.copyWith(layers: newLayers);
   }
 
   String _symmetryId(SymmetryMode m) {
@@ -829,9 +914,7 @@ class CanvasController extends ChangeNotifier {
 
     final layers = List<CanvasLayer>.from(_state.layers);
     final layerIndex = layers.indexWhere((l) => l.id == lastLoc.layerId);
-    if (layerIndex == -1) {
-      return;
-    }
+    if (layerIndex == -1) return;
 
     final layer = layers[layerIndex];
     if (layer.groups.isEmpty ||
@@ -845,9 +928,7 @@ class CanvasController extends ChangeNotifier {
 
     final strokes = List<Stroke>.from(group.strokes);
     final strokeIndex = strokes.indexWhere((st) => st.id == lastLoc.strokeId);
-    if (strokeIndex == -1) {
-      return;
-    }
+    if (strokeIndex == -1) return;
 
     final removed = strokes.removeAt(strokeIndex);
 
@@ -877,14 +958,10 @@ class CanvasController extends ChangeNotifier {
 
     final layers = List<CanvasLayer>.from(_state.layers);
     final layerIndex = layers.indexWhere((l) => l.id == loc.layerId);
-    if (layerIndex == -1) {
-      return;
-    }
+    if (layerIndex == -1) return;
 
     final layer = layers[layerIndex];
-    if (layer.locked) {
-      return;
-    }
+    if (layer.locked) return;
 
     final groups = List<StrokeGroup>.from(layer.groups);
     final groupIndex = (loc.groupIndex >= 0 && loc.groupIndex < groups.length)

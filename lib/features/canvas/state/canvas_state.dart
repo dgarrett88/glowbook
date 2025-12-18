@@ -109,7 +109,7 @@ class CanvasState {
 
   /// Flatten all visible strokes in layer order,
   /// applying layer transforms (position/scale/rotation/opacity)
-  /// around the layer's own bounds centre.
+  /// around the layer's pivot (saved) or bounds centre (fallback).
   List<Stroke> get allStrokes {
     final result = <Stroke>[];
 
@@ -151,11 +151,12 @@ class CanvasState {
         continue;
       }
 
-      // Pivot at the centre of the layer's bounds.
-      final pivot = Offset(
-        (minX + maxX) / 2.0,
-        (minY + maxY) / 2.0,
-      );
+      // ✅ Pivot: use saved pivot if present, else bounds-centre.
+      final pivot = t.pivot ??
+          Offset(
+            (minX + maxX) / 2.0,
+            (minY + maxY) / 2.0,
+          );
 
       final double angle = t.rotation; // radians
       final double cosA = math.cos(angle);
@@ -194,8 +195,7 @@ class CanvasState {
             );
           }
 
-          // Apply geometry + opacity. We treat layer.opacity as a multiplier
-          // on both coreOpacity and glowOpacity.
+          // Apply geometry + opacity multiplier.
           final transformedStroke = stroke.copyWith(
             points: transformedPoints,
             coreOpacity: (stroke.coreOpacity * opacityMul).clamp(0.0, 1.0),

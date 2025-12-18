@@ -135,11 +135,16 @@ class LayerTransform {
   final double rotation; // radians
   final double opacity; // 0–1
 
+  /// Stable pivot for transforms in canvas coordinates.
+  /// If null, older behaviour falls back to bounds-centre at render time.
+  final Offset? pivot;
+
   const LayerTransform({
     this.position = Offset.zero,
     this.scale = 1.0,
     this.rotation = 0.0,
     this.opacity = 1.0,
+    this.pivot,
   });
 
   LayerTransform copyWith({
@@ -147,12 +152,15 @@ class LayerTransform {
     double? scale,
     double? rotation,
     double? opacity,
+    Offset? pivot,
+    bool clearPivot = false,
   }) {
     return LayerTransform(
       position: position ?? this.position,
       scale: scale ?? this.scale,
       rotation: rotation ?? this.rotation,
       opacity: opacity ?? this.opacity,
+      pivot: clearPivot ? null : (pivot ?? this.pivot),
     );
   }
 
@@ -162,9 +170,14 @@ class LayerTransform {
         'scale': scale,
         'rotation': rotation,
         'opacity': opacity,
+        if (pivot != null) 'pivotX': pivot!.dx,
+        if (pivot != null) 'pivotY': pivot!.dy,
       };
 
   factory LayerTransform.fromJson(Map<String, dynamic> json) {
+    final px = (json['pivotX'] as num?)?.toDouble();
+    final py = (json['pivotY'] as num?)?.toDouble();
+
     return LayerTransform(
       position: Offset(
         (json['x'] as num?)?.toDouble() ?? 0.0,
@@ -173,6 +186,7 @@ class LayerTransform {
       scale: (json['scale'] as num?)?.toDouble() ?? 1.0,
       rotation: (json['rotation'] as num?)?.toDouble() ?? 0.0,
       opacity: (json['opacity'] as num?)?.toDouble() ?? 1.0,
+      pivot: (px != null && py != null) ? Offset(px, py) : null,
     );
   }
 }
