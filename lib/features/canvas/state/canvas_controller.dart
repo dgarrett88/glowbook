@@ -6,6 +6,7 @@ import '../../../core/models/stroke.dart';
 import '../../../core/models/canvas_document_bundle.dart';
 import '../../../core/models/canvas_doc.dart' as doc_model;
 import '../../../core/models/canvas_layer.dart';
+
 import '../render/renderer.dart';
 import 'glow_blend.dart' as gb;
 import 'dart:math' as math;
@@ -94,7 +95,11 @@ class CanvasController extends ChangeNotifier {
     }
   }
 
-  late final Renderer _renderer = Renderer(repaint, () => symmetry);
+  // ✅ Renderer now uses controller background (and preserves Multiply default)
+  late final Renderer _renderer = Renderer(
+    repaint,
+    () => symmetry,
+  );
 
   /// Flattened strokes for save/export/etc.
   List<Stroke> get strokes => List.unmodifiable(_state.allStrokes);
@@ -269,6 +274,9 @@ class CanvasController extends ChangeNotifier {
     backgroundColor = value;
     _hasCustomBackground = true;
     _hasUnsavedChanges = true;
+
+    // Force repaint immediately (background is painted by renderer now)
+    _tick();
     notifyListeners();
   }
 
@@ -487,7 +495,6 @@ class CanvasController extends ChangeNotifier {
   }
 
   ///Set layer opacity (0..1).
-  // In CanvasController
   void setLayerOpacity(String id, double opacity) {
     final idx = _state.layers.indexWhere((l) => l.id == id);
     if (idx < 0) return;
@@ -504,8 +511,6 @@ class CanvasController extends ChangeNotifier {
     _state = _state.copyWith(layers: layers);
     _hasUnsavedChanges = true;
 
-    // If you are actually using opacity in rendering, you probably
-    // want to rebuild so it takes effect immediately:
     _renderer.rebuildFrom(_state.allStrokes);
     _tick();
     notifyListeners();
@@ -577,7 +582,6 @@ class CanvasController extends ChangeNotifier {
 
     _state = _state.copyWith(layers: layers);
 
-    // History refers to layer IDs, so no change needed there.
     _renderer.rebuildFrom(_state.allStrokes);
     _hasUnsavedChanges = true;
     _tick();
@@ -589,7 +593,6 @@ class CanvasController extends ChangeNotifier {
   void reorderLayersByIds(List<String> orderedIds) {
     if (orderedIds.length != _state.layers.length) return;
 
-    // Map id -> layer for quick lookup
     final map = {
       for (final l in _state.layers) l.id: l,
     };
@@ -598,7 +601,6 @@ class CanvasController extends ChangeNotifier {
     for (final id in orderedIds) {
       final layer = map[id];
       if (layer == null) {
-        // Invalid ID list: bail out without touching state.
         return;
       }
       newLayers.add(layer);
@@ -619,7 +621,6 @@ class CanvasController extends ChangeNotifier {
   void pointerDown(int pointer, Offset pos) {
     if (_activePointerId != null) return;
 
-    // 🚫 If active layer is locked, do not start a stroke at all.
     if (activeLayer.locked) {
       return;
     }
@@ -667,10 +668,7 @@ class CanvasController extends ChangeNotifier {
     _current = null;
     _renderer.commitStroke(s);
 
-    // Add to active layer.
     _state = _addStrokeToActiveLayer(_state, s);
-
-    // Record in history for stable undo/redo.
     _recordStrokeCreation(s);
 
     _hasUnsavedChanges = true;
@@ -678,14 +676,11 @@ class CanvasController extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Helper to add a stroke into the active layer's primary group.
-  /// Does NOT touch history; caller is responsible for that.
   CanvasState _addStrokeToActiveLayer(
     CanvasState state,
     Stroke stroke,
   ) {
     if (state.layers.isEmpty) {
-      // If somehow no layers, re-init and recurse once.
       final fresh = CanvasState.initial();
       return _addStrokeToActiveLayer(fresh, stroke);
     }
@@ -697,12 +692,10 @@ class CanvasController extends ChangeNotifier {
     final CanvasLayer layer = state.layers[targetLayerIndex];
 
     if (layer.locked) {
-      // If active layer is locked, just refuse to add (no-op).
       return state;
     }
 
     if (layer.groups.isEmpty) {
-      // Recreate with a default group if needed.
       final defaultGroup = StrokeGroup(
         id: 'group-main',
         name: 'Group 1',
@@ -717,7 +710,6 @@ class CanvasController extends ChangeNotifier {
       );
     }
 
-    // Append stroke to the first group (for now).
     final groups = List<StrokeGroup>.from(layer.groups);
     final firstGroup = groups.first;
     final updatedGroup = firstGroup.copyWith(
@@ -752,16 +744,35 @@ class CanvasController extends ChangeNotifier {
   // ---------------------------------------------------------------------------
 
   void loadFromBundle(CanvasDocumentBundle bundle) {
-    // Wrap old flat strokes into a single default layer/group.
-    _state = CanvasState.fromStrokes(List<Stroke>.from(bundle.strokes));
+    final hasLayers = bundle.layers != null && bundle.layers!.isNotEmpty;
+
+    if (hasLayers) {
+      final restoredLayers = List<CanvasLayer>.from(bundle.layers!);
+
+      final savedActive = bundle.activeLayerId;
+      final fallbackActive =
+          restoredLayers.isNotEmpty ? restoredLayers.last.id : 'layer-main';
+
+      final activeId = (savedActive != null &&
+              restoredLayers.any((l) => l.id == savedActive))
+          ? savedActive
+          : fallbackActive;
+
+      _state = CanvasState(
+        layers: restoredLayers,
+        activeLayerId: activeId,
+        redoStack: const [],
+      );
+    } else {
+      _state = CanvasState.fromStrokes(List<Stroke>.from(bundle.strokes));
+    }
+
     _current = null;
     _activePointerId = null;
     _hasUnsavedChanges = false;
 
-    // Reset history from loaded strokes.
     _rebuildHistoryFromState();
 
-    // Restore background from doc metadata (solid colour only).
     final bg = bundle.doc.background;
     if (bg.type == doc_model.BackgroundType.solid &&
         bg.params['color'] is int) {
@@ -772,7 +783,6 @@ class CanvasController extends ChangeNotifier {
       _hasCustomBackground = false;
     }
 
-    // Restore blend mode, but don't mark as dirty.
     _suppressBlendDirty = true;
     final key = bundle.doc.blendModeKey;
     final mode = gb.glowBlendFromKey(key);
@@ -792,11 +802,9 @@ class CanvasController extends ChangeNotifier {
     _history.clear();
     _redoLocations.clear();
 
-    // Reset background to default black; not considered a "change".
     backgroundColor = 0xFF000000;
     _hasCustomBackground = false;
 
-    // New documents start in Additive, but that shouldn't mark them dirty.
     _suppressBlendDirty = true;
     gb.GlowBlendState.I.setMode(gb.GlowBlend.additive);
 
@@ -822,7 +830,6 @@ class CanvasController extends ChangeNotifier {
     final layers = List<CanvasLayer>.from(_state.layers);
     final layerIndex = layers.indexWhere((l) => l.id == lastLoc.layerId);
     if (layerIndex == -1) {
-      // Layer no longer exists; nothing sensible to undo.
       return;
     }
 
@@ -865,20 +872,17 @@ class CanvasController extends ChangeNotifier {
   void redo() {
     if (_state.redoStack.isEmpty || _redoLocations.isEmpty) return;
 
-    // We don't pop until we know redo has actually applied (e.g. layer not locked).
     final loc = _redoLocations.last;
     final stroke = _state.redoStack.last;
 
     final layers = List<CanvasLayer>.from(_state.layers);
     final layerIndex = layers.indexWhere((l) => l.id == loc.layerId);
     if (layerIndex == -1) {
-      // Original layer gone; can't sensibly redo.
       return;
     }
 
     final layer = layers[layerIndex];
     if (layer.locked) {
-      // 🚫 Respect locks: don't consume redo, user can unlock and redo later.
       return;
     }
 
@@ -900,7 +904,6 @@ class CanvasController extends ChangeNotifier {
       redoStack: newRedo,
     );
 
-    // Add back into history so you can undo the redo.
     _history.add(loc);
 
     _renderer.rebuildFrom(_state.allStrokes);
@@ -921,10 +924,8 @@ class CanvasController extends ChangeNotifier {
 
   void _handleBlendChanged() {
     if (_suppressBlendDirty) {
-      // This change came from restoring state / new document setup.
       _suppressBlendDirty = false;
     } else {
-      // User-driven change → mark as unsaved.
       _hasUnsavedChanges = true;
     }
 

@@ -98,7 +98,13 @@ class _CanvasScreenState extends ConsumerState<CanvasScreen> {
 
     final bundle = CanvasDocumentBundle(
       doc: doc,
+
+      // Keep legacy flat strokes for backward compatibility + quick stats.
       strokes: List.of(controller.strokes),
+
+      // ✅ NEW: persist layered document state
+      layers: List.of(controller.layers),
+      activeLayerId: controller.activeLayerId,
     );
 
     final storage = DocumentStorage.instance;
@@ -122,8 +128,13 @@ class _CanvasScreenState extends ConsumerState<CanvasScreen> {
   @override
   void initState() {
     super.initState();
+
+    // ✅ Always start with layers menu closed
+    _showLayers = false;
+
     final controller = ref.read(canvas_state.canvasControllerProvider);
     final bundle = widget.initialDocument;
+
     if (bundle != null) {
       _currentDocId = bundle.doc.id;
       _currentDoc = bundle.doc;
@@ -181,8 +192,8 @@ class _CanvasScreenState extends ConsumerState<CanvasScreen> {
 
   Future<void> _handleNewDocument(
       canvas_state.CanvasController controller) async {
-    // If there are no unsaved changes, just start a fresh canvas.
     if (!controller.hasUnsavedChanges) {
+      setState(() => _showLayers = false);
       _currentDocId = null;
       _currentDoc = null;
       controller.newDocument();
@@ -199,7 +210,7 @@ class _CanvasScreenState extends ConsumerState<CanvasScreen> {
       await _saveCurrent(controller);
     }
 
-    // For both saveAndNew and discardAndNew we do NOT delete any saved file.
+    setState(() => _showLayers = false);
     _currentDocId = null;
     _currentDoc = null;
     controller.newDocument();
@@ -207,7 +218,6 @@ class _CanvasScreenState extends ConsumerState<CanvasScreen> {
 
   Future<void> _handleExitToMainMenu(
       canvas_state.CanvasController controller) async {
-    // If there are no unsaved changes, just go back to the menu.
     if (!controller.hasUnsavedChanges) {
       if (mounted) {
         Navigator.of(context).pop();
@@ -224,8 +234,6 @@ class _CanvasScreenState extends ConsumerState<CanvasScreen> {
     if (action == _NewPageAction.saveAndNew) {
       await _saveCurrent(controller);
     }
-    // We never delete any saved document here.
-    // "Continue without saving" means leave without saving current changes.
 
     if (mounted) {
       Navigator.of(context).pop();
@@ -237,7 +245,14 @@ class _CanvasScreenState extends ConsumerState<CanvasScreen> {
     final controller = ref.watch(canvas_state.canvasControllerProvider);
 
     // ✅ Always use the controller's background colour.
-    final Color canvasBg = Color(controller.backgroundColor);
+    final mode = gb.GlowBlendState.I.mode;
+    final bool isMultiply = mode == gb.GlowBlend.multiply;
+
+    final int bgArgb = (isMultiply && !controller.hasCustomBackground)
+        ? 0xFFFFFFFF
+        : controller.backgroundColor;
+
+    final Color canvasBg = Color(bgArgb);
 
     return Scaffold(
       appBar: PreferredSize(
