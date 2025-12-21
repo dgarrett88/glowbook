@@ -44,12 +44,17 @@ class _StrokeHit {
   final bool mirrorX;
   final bool mirrorY;
 
+  /// ✅ The closest point ON THE HIT SEGMENT (in the hit-variant world space).
+  /// This becomes the "truth" grab anchor for scaling/rotating so it doesn't drift.
+  final Offset grabWorld;
+
   const _StrokeHit({
     required this.strokeId,
     required this.layerId,
     required this.groupIndex,
     required this.mirrorX,
     required this.mirrorY,
+    required this.grabWorld,
   });
 }
 
@@ -199,7 +204,7 @@ class CanvasController extends ChangeNotifier {
   bool _selectedMirrorX = false;
   bool _selectedMirrorY = false;
 
-  // ✅ First finger down position (WORLD) — pivot for scale/rotate
+  // ✅ "Grab anchor" (WORLD) pinned to closest point on the stroke segment.
   Offset? _selectionAnchorWorld;
 
   bool get hasSelection => _selectedStrokeId != null;
@@ -423,33 +428,15 @@ class CanvasController extends ChangeNotifier {
   // SELECTION: HIT TEST + MOVE (+ symmetry copies)
   // ---------------------------------------------------------------------------
 
-  double _dist2PointToSegment(Offset p, Offset a, Offset b) {
-    final ab = b - a;
-    final ap = p - a;
-    final abLen2 = ab.dx * ab.dx + ab.dy * ab.dy;
-    if (abLen2 == 0) {
-      final dx = p.dx - a.dx;
-      final dy = p.dy - a.dy;
-      return dx * dx + dy * dy;
-    }
-    final t = ((ap.dx * ab.dx) + (ap.dy * ab.dy)) / abLen2;
-    final tt = t.clamp(0.0, 1.0);
-    final proj = Offset(a.dx + ab.dx * tt, a.dy + ab.dy * tt);
-    final dx = p.dx - proj.dx;
-    final dy = p.dy - proj.dy;
-    return dx * dx + dy * dy;
-  }
-
   Offset _mirrorV(Offset p, double cx) => Offset(2 * cx - p.dx, p.dy);
   Offset _mirrorH(Offset p, double cy) => Offset(p.dx, 2 * cy - p.dy);
 
   List<_SymVariant> _symmetryVariantsWithFlags(
       List<Offset> baseWorldPoints, String? symId) {
     if (_canvasSize == Size.zero) {
-      return [const _SymVariant([], mirrorX: false, mirrorY: false)]
-          .map((_) =>
-              _SymVariant(baseWorldPoints, mirrorX: false, mirrorY: false))
-          .toList();
+      return [
+        _SymVariant(baseWorldPoints, mirrorX: false, mirrorY: false),
+      ];
     }
 
     final cx = _canvasSize.width / 2.0;
@@ -487,6 +474,18 @@ class CanvasController extends ChangeNotifier {
     }
   }
 
+  // Closest-point projection of p onto segment ab
+  Offset _closestPointOnSegment(Offset p, Offset a, Offset b) {
+    final ab = b - a;
+    final ap = p - a;
+    final abLen2 = ab.dx * ab.dx + ab.dy * ab.dy;
+    if (abLen2 == 0) return a;
+
+    final t = ((ap.dx * ab.dx) + (ap.dy * ab.dy)) / abLen2;
+    final tt = t.clamp(0.0, 1.0);
+    return Offset(a.dx + ab.dx * tt, a.dy + ab.dy * tt);
+  }
+
   _StrokeHit? _hitTestStrokeWorld(Offset worldPos) {
     for (int li = _state.layers.length - 1; li >= 0; li--) {
       final layer = _state.layers[li];
@@ -522,7 +521,9 @@ class CanvasController extends ChangeNotifier {
             Offset? prev;
             for (final w in variant.pts) {
               if (prev != null) {
-                final d2 = _dist2PointToSegment(worldPos, prev, w);
+                final cp = _closestPointOnSegment(worldPos, prev, w);
+                final d = worldPos - cp;
+                final d2 = d.dx * d.dx + d.dy * d.dy;
                 if (d2 <= hitR2) {
                   return _StrokeHit(
                     strokeId: sLocal.id,
@@ -530,6 +531,7 @@ class CanvasController extends ChangeNotifier {
                     groupIndex: gi,
                     mirrorX: variant.mirrorX,
                     mirrorY: variant.mirrorY,
+                    grabWorld: cp, // ✅ TRUE grab anchor on the stroke
                   );
                 }
               }
@@ -557,8 +559,8 @@ class CanvasController extends ChangeNotifier {
     _selectedMirrorX = hit.mirrorX;
     _selectedMirrorY = hit.mirrorY;
 
-    // ✅ Anchor is first touch point in WORLD
-    _selectionAnchorWorld = worldPos;
+    // ✅ Anchor is NOW the closest point ON the stroke (not raw finger pos)
+    _selectionAnchorWorld = hit.grabWorld;
 
     notifyListeners();
   }
@@ -572,7 +574,7 @@ class CanvasController extends ChangeNotifier {
     final layerIndex = _state.layers.indexWhere((l) => l.id == layerId);
     if (layerIndex < 0) return;
 
-    // ✅ Mirror-truth correction (WORLD) before converting to LOCAL
+    // Mirror-truth correction (WORLD) before converting to LOCAL
     final correctedWorldDelta = _correctedWorldDelta(deltaWorld);
 
     final layers = List<CanvasLayer>.from(_state.layers);
@@ -632,7 +634,7 @@ class CanvasController extends ChangeNotifier {
 
     _activePointerId = pointer;
 
-    // This sets selection + mirror flags + anchor
+    // sets selection + mirror flags + anchor (true on-stroke grab point)
     selectAtWorld(worldPos);
     if (!hasSelection) return;
 
@@ -653,6 +655,9 @@ class CanvasController extends ChangeNotifier {
 
     if (delta.distanceSquared < 0.25) return;
     _moveSelectedByWorldDelta(delta);
+
+    // ✅ keep anchor following finger-1 during drag, so pinch pivot feels consistent
+    // _selectionAnchorWorld = worldPos;
   }
 
   void selectionPointerUp(int pointer) {
@@ -671,6 +676,9 @@ class CanvasController extends ChangeNotifier {
 
     _isDraggingSelection = true;
     _selectionDragLastWorld = worldPos;
+
+    // ✅ make next pinch start feel "locked" to finger-1 again
+    // _selectionAnchorWorld = worldPos;
   }
 
   // 2-finger scale/rotate (selection)
@@ -680,10 +688,6 @@ class CanvasController extends ChangeNotifier {
     required double rotation,
   }) {
     if (!selectionMode || !hasSelection) return;
-
-    // ✅ DO NOT cancel the active pointer.
-    // We keep finger-1 as the "grab", and simply ignore drag moves while gesturing.
-    // (CanvasScreen already gates on controller.isSelectionGesturing)
 
     final layerId = _selectedLayerId;
     final strokeId = _selectedStrokeId;
@@ -703,10 +707,10 @@ class CanvasController extends ChangeNotifier {
     // store initial points (LOCAL space)
     _gestureStartLocalPoints = List<PointSample>.from(group.strokes[si].points);
 
-    // ✅ Pivot should be first-finger anchor (WORLD) if available.
+    // ✅ Pivot should be the true grab anchor (WORLD) if available.
     final anchorWorld = _selectionAnchorWorld ?? focalWorld;
 
-    // ✅ If a mirrored variant was selected, convert anchorWorld (variant space)
+    // If a mirrored variant was selected, convert anchorWorld (variant space)
     // back into base-world before converting to LOCAL.
     Offset pivotWorld = anchorWorld;
     if (_canvasSize != Size.zero) {
@@ -773,21 +777,19 @@ class CanvasController extends ChangeNotifier {
 
     final ds = (scale <= 0.0001) ? 1.0 : scale;
 
-    // ✅ Mirror-truth corrected rotation
+    // Mirror-truth corrected rotation
     final ang = _correctedRotation(rotation);
 
     final cosA = math.cos(ang);
     final sinA = math.sin(ang);
 
-    // ✅ Apply scale + rotation around pivotLocal ONLY (anchor pivot)
+    // Apply scale + rotation around pivotLocal ONLY (no translation)
     final newPts = <PointSample>[];
     for (final p in startPts) {
       final v = Offset(p.x, p.y) - pivotLocal;
 
-      // scale
       final vs = v * ds;
 
-      // rotate
       final vr = Offset(
         vs.dx * cosA - vs.dy * sinA,
         vs.dx * sinA + vs.dy * cosA,
@@ -822,15 +824,6 @@ class CanvasController extends ChangeNotifier {
     _gestureLastScale = 1.0;
     _gestureLastRotation = 0.0;
 
-    void selectionGestureEnd() {
-      _isSelectionGesturing = false;
-      _gestureStartLocalPoints = null;
-      _gestureStartPivotLocal = null;
-      _gestureLastScale = 1.0;
-      _gestureLastRotation = 0.0;
-      notifyListeners();
-    }
-
     notifyListeners();
   }
 
@@ -844,7 +837,6 @@ class CanvasController extends ChangeNotifier {
     _isDraggingSelection = false;
     _selectionDragLastWorld = null;
 
-    // do not clear selection on cancel; just stop dragging
     _tick();
     notifyListeners();
   }
@@ -984,7 +976,6 @@ class CanvasController extends ChangeNotifier {
     if (!exists) return;
     _state = _state.copyWith(activeLayerId: id);
 
-    // if selection is on another layer, clear it (active layer is "only editable")
     if (_selectedLayerId != null && _selectedLayerId != id) {
       clearSelection();
     }
