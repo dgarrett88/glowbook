@@ -1,6 +1,6 @@
 // lib/features/canvas/state/canvas_controller.dart
 import 'dart:math' as math;
-import 'dart:ui' show Offset;
+import 'dart:ui' show Size;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -20,8 +20,6 @@ enum SymmetryMode { off, mirrorV, mirrorH, quad }
 final canvasControllerProvider =
     ChangeNotifierProvider<CanvasController>((ref) => CanvasController());
 
-/// Internal: where a stroke lives in the layer stack.
-/// This lets undo/redo stay stable even if you reorder layers.
 class _StrokeLocation {
   final String strokeId;
   final String layerId;
@@ -34,6 +32,35 @@ class _StrokeLocation {
   });
 }
 
+/// Hit test result for selection (base stroke + which symmetry variant was hit).
+class _StrokeHit {
+  final String strokeId;
+  final String layerId;
+  final int groupIndex;
+
+  /// Mirror flags for the *variant that was hit*.
+  /// mirrorX == mirrored across vertical axis (flip X)
+  /// mirrorY == mirrored across horizontal axis (flip Y)
+  final bool mirrorX;
+  final bool mirrorY;
+
+  const _StrokeHit({
+    required this.strokeId,
+    required this.layerId,
+    required this.groupIndex,
+    required this.mirrorX,
+    required this.mirrorY,
+  });
+}
+
+class _SymVariant {
+  final List<Offset> pts;
+  final bool mirrorX;
+  final bool mirrorY;
+
+  const _SymVariant(this.pts, {required this.mirrorX, required this.mirrorY});
+}
+
 class CanvasController extends ChangeNotifier {
   CanvasController() {
     gb.GlowBlendState.I.addListener(_handleBlendChanged);
@@ -43,13 +70,10 @@ class CanvasController extends ChangeNotifier {
 
   SymmetryMode symmetry = SymmetryMode.off;
 
-  // Current brush
   String brushId = Brush.liquidNeon.id;
 
-  // Palette slots policy: free=8; we can raise to 24/32 for premium later.
   int paletteSlots = 8;
 
-  // Palette list (we'll only render first `paletteSlots`)
   final List<int> palette = [
     0xFF00FFFF,
     0xFFFF00FF,
@@ -59,7 +83,6 @@ class CanvasController extends ChangeNotifier {
     0xFFFFA500,
     0xFF00FF9A,
     0xFF9A7BFF,
-    // extra prepared slots for premium
     0xFFFFFFFF,
     0xFFB0B0B0,
     0xFF00BFFF,
@@ -102,52 +125,41 @@ class CanvasController extends ChangeNotifier {
     () => symmetry,
   );
 
-  /// Flattened strokes for save/export/etc.
   List<Stroke> get strokes => List.unmodifiable(_state.allStrokes);
 
-  /// Expose layers & active layer for UI / tools.
   List<CanvasLayer> get layers => List.unmodifiable(_state.layers);
   String get activeLayerId => _state.activeLayerId;
   CanvasLayer get activeLayer => _state.activeLayer;
 
-  int color = 0xFF00FFFF; // default cyan
+  int color = 0xFF00FFFF;
   double brushSize = 10.0;
 
-  /// Canvas background colour (ARGB). Default black.
   int backgroundColor = 0xFF000000;
   bool _hasCustomBackground = false;
   bool get hasCustomBackground => _hasCustomBackground;
 
-  /// How solid the inner stroke core is (0..1).
   double coreOpacity = 0.86;
 
-  // Simple glow – base 0.3 (30%)
   double _brushGlow = 0.3;
   double get brushGlow => _brushGlow;
 
-  // Multi-glow controls (0..1)
   double glowRadius = 0.3;
   double glowOpacity = 1.0;
   double glowBrightness = 0.3;
 
-  /// If true, glow radius scales with brush size when rendering.
   bool glowRadiusScalesWithSize = false;
 
-  // Whether the HUD is in "advanced glow" mode.
   bool _advancedGlowEnabled = false;
   bool get advancedGlowEnabled => _advancedGlowEnabled;
 
-  // Advanced glow saved settings
   double _savedAdvancedGlowRadius = 15.0 / 300.0;
   double _savedAdvancedGlowBrightness = 50.0 / 100.0;
   double _savedAdvancedGlowOpacity = 1.0;
 
-  // Store the user's simple-glow setting when switching modes
   double _savedSimpleGlow = 0.3;
 
   CanvasState _state = CanvasState.initial();
 
-  // NOTE: _current is now ALWAYS stored in *layer-local* coordinates.
   Stroke? _current;
   int _startMs = 0;
   int? _activePointerId;
@@ -157,12 +169,93 @@ class CanvasController extends ChangeNotifier {
 
   Renderer get painter => _renderer;
 
-  /// When true, blend mode/intensity changes should *not* mark the doc dirty.
   bool _suppressBlendDirty = false;
 
-  /// Stroke history for undo/redo – uses logical locations, not visual order.
   final List<_StrokeLocation> _history = [];
   final List<_StrokeLocation> _redoLocations = [];
+
+  // ---------------------------------------------------------------------------
+  // CANVAS SIZE (needed for symmetry selection hit test)
+  // ---------------------------------------------------------------------------
+
+  Size _canvasSize = Size.zero;
+
+  void setCanvasSize(Size s) {
+    if (_canvasSize == s) return;
+    _canvasSize = s;
+  }
+
+  // ---------------------------------------------------------------------------
+  // SELECTION MODE
+  // ---------------------------------------------------------------------------
+
+  bool selectionMode = false;
+
+  String? _selectedStrokeId;
+  String? _selectedLayerId;
+  int? _selectedGroupIndex;
+
+  // ✅ Which symmetry variant was selected becomes "truth"
+  bool _selectedMirrorX = false;
+  bool _selectedMirrorY = false;
+
+  // ✅ First finger down position (WORLD) — pivot for scale/rotate
+  Offset? _selectionAnchorWorld;
+
+  bool get hasSelection => _selectedStrokeId != null;
+
+  bool _isDraggingSelection = false;
+  Offset? _selectionDragLastWorld;
+
+  // Gesture (pinch/rotate) state
+  bool _isSelectionGesturing = false;
+  bool get isSelectionGesturing => _isSelectionGesturing;
+
+  List<PointSample>? _gestureStartLocalPoints;
+
+  // ✅ Pivot in LOCAL (stroke) space for gesture transforms
+  Offset? _gestureStartPivotLocal;
+
+  double _gestureLastScale = 1.0;
+  double _gestureLastRotation = 0.0;
+
+  void setSelectionMode(bool value) {
+    if (selectionMode == value) return;
+    selectionMode = value;
+
+    if (!selectionMode) {
+      clearSelection();
+    } else {
+      notifyListeners();
+    }
+  }
+
+  void clearSelection() {
+    _selectedStrokeId = null;
+    _selectedLayerId = null;
+    _selectedGroupIndex = null;
+
+    _selectedMirrorX = false;
+    _selectedMirrorY = false;
+    _selectionAnchorWorld = null;
+
+    _isDraggingSelection = false;
+    _selectionDragLastWorld = null;
+
+    _isSelectionGesturing = false;
+    _gestureStartLocalPoints = null;
+    _gestureStartPivotLocal = null;
+    _gestureLastScale = 1.0;
+    _gestureLastRotation = 0.0;
+
+    notifyListeners();
+  }
+
+  // Used by CanvasScreen to stop draw/select pointers when a gesture begins
+  void cancelActivePointer() {
+    final pid = _activePointerId;
+    if (pid != null) cancelPointer(pid);
+  }
 
   // ---------------------------------------------------------------------------
   // INTERNAL HELPERS
@@ -205,6 +298,23 @@ class CanvasController extends ChangeNotifier {
     return Offset((minX + maxX) / 2.0, (minY + maxY) / 2.0);
   }
 
+  void _ensureLayerPivotPersisted(String layerId) {
+    final idx = _state.layers.indexWhere((l) => l.id == layerId);
+    if (idx < 0) return;
+
+    final layer = _state.layers[idx];
+    final tr = layer.transform;
+
+    if (_isIdentityTransform(tr)) return;
+    if (tr.pivot != null) return;
+
+    final pivot = _computeBoundsPivotForLayer(layer);
+
+    final layers = List<CanvasLayer>.from(_state.layers);
+    layers[idx] = layer.copyWith(transform: tr.copyWith(pivot: pivot));
+    _state = _state.copyWith(layers: layers);
+  }
+
   Offset _forwardTransformPoint(Offset p, LayerTransform t, Offset pivot) {
     final angle = t.rotation;
     final cosA = math.cos(angle);
@@ -223,13 +333,13 @@ class CanvasController extends ChangeNotifier {
   }
 
   Offset _inverseTransformPoint(Offset pWorld, LayerTransform t, Offset pivot) {
-    final p = pWorld - t.position; // undo translation
+    final p = pWorld - t.position;
     final local = p - pivot;
 
     final s = (t.scale == 0.0) ? 1.0 : t.scale;
     final unscaled = Offset(local.dx / s, local.dy / s);
 
-    final angle = -t.rotation; // undo rotation
+    final angle = -t.rotation;
     final cosA = math.cos(angle);
     final sinA = math.sin(angle);
 
@@ -292,6 +402,451 @@ class CanvasController extends ChangeNotifier {
         }
       }
     }
+  }
+
+  // ---------------------------------------------------------------------------
+  // SELECTION: MIRROR/TRUTH CORRECTIONS
+  // ---------------------------------------------------------------------------
+
+  Offset _correctedWorldDelta(Offset d) {
+    final dx = _selectedMirrorX ? -d.dx : d.dx;
+    final dy = _selectedMirrorY ? -d.dy : d.dy;
+    return Offset(dx, dy);
+  }
+
+  double _correctedRotation(double r) {
+    final oddMirror = _selectedMirrorX ^ _selectedMirrorY;
+    return oddMirror ? -r : r;
+  }
+
+  // ---------------------------------------------------------------------------
+  // SELECTION: HIT TEST + MOVE (+ symmetry copies)
+  // ---------------------------------------------------------------------------
+
+  double _dist2PointToSegment(Offset p, Offset a, Offset b) {
+    final ab = b - a;
+    final ap = p - a;
+    final abLen2 = ab.dx * ab.dx + ab.dy * ab.dy;
+    if (abLen2 == 0) {
+      final dx = p.dx - a.dx;
+      final dy = p.dy - a.dy;
+      return dx * dx + dy * dy;
+    }
+    final t = ((ap.dx * ab.dx) + (ap.dy * ab.dy)) / abLen2;
+    final tt = t.clamp(0.0, 1.0);
+    final proj = Offset(a.dx + ab.dx * tt, a.dy + ab.dy * tt);
+    final dx = p.dx - proj.dx;
+    final dy = p.dy - proj.dy;
+    return dx * dx + dy * dy;
+  }
+
+  Offset _mirrorV(Offset p, double cx) => Offset(2 * cx - p.dx, p.dy);
+  Offset _mirrorH(Offset p, double cy) => Offset(p.dx, 2 * cy - p.dy);
+
+  List<_SymVariant> _symmetryVariantsWithFlags(
+      List<Offset> baseWorldPoints, String? symId) {
+    if (_canvasSize == Size.zero) {
+      return [const _SymVariant([], mirrorX: false, mirrorY: false)]
+          .map((_) =>
+              _SymVariant(baseWorldPoints, mirrorX: false, mirrorY: false))
+          .toList();
+    }
+
+    final cx = _canvasSize.width / 2.0;
+    final cy = _canvasSize.height / 2.0;
+
+    List<Offset> v(List<Offset> pts) => [for (final p in pts) _mirrorV(p, cx)];
+    List<Offset> h(List<Offset> pts) => [for (final p in pts) _mirrorH(p, cy)];
+
+    switch (symId ?? 'off') {
+      case 'mirrorV':
+        return [
+          _SymVariant(baseWorldPoints, mirrorX: false, mirrorY: false),
+          _SymVariant(v(baseWorldPoints), mirrorX: true, mirrorY: false),
+        ];
+      case 'mirrorH':
+        return [
+          _SymVariant(baseWorldPoints, mirrorX: false, mirrorY: false),
+          _SymVariant(h(baseWorldPoints), mirrorX: false, mirrorY: true),
+        ];
+      case 'quad':
+        final vv = v(baseWorldPoints);
+        final hh = h(baseWorldPoints);
+        final vh = h(vv);
+        return [
+          _SymVariant(baseWorldPoints, mirrorX: false, mirrorY: false),
+          _SymVariant(vv, mirrorX: true, mirrorY: false),
+          _SymVariant(hh, mirrorX: false, mirrorY: true),
+          _SymVariant(vh, mirrorX: true, mirrorY: true),
+        ];
+      case 'off':
+      default:
+        return [
+          _SymVariant(baseWorldPoints, mirrorX: false, mirrorY: false),
+        ];
+    }
+  }
+
+  _StrokeHit? _hitTestStrokeWorld(Offset worldPos) {
+    for (int li = _state.layers.length - 1; li >= 0; li--) {
+      final layer = _state.layers[li];
+      if (!layer.visible) continue;
+
+      final tr = layer.transform;
+      final isIdentity = _isIdentityTransform(tr);
+      final pivot = isIdentity
+          ? Offset.zero
+          : (tr.pivot ?? _computeBoundsPivotForLayer(layer));
+
+      for (int gi = layer.groups.length - 1; gi >= 0; gi--) {
+        final group = layer.groups[gi];
+
+        for (int si = group.strokes.length - 1; si >= 0; si--) {
+          final sLocal = group.strokes[si];
+
+          final hitRadius = math.max(12.0, sLocal.size * 0.9);
+          final hitR2 = hitRadius * hitRadius;
+
+          final baseWorldPts = <Offset>[];
+          for (final p in sLocal.points) {
+            final local = Offset(p.x, p.y);
+            final world =
+                isIdentity ? local : _forwardTransformPoint(local, tr, pivot);
+            baseWorldPts.add(world);
+          }
+
+          final variants =
+              _symmetryVariantsWithFlags(baseWorldPts, sLocal.symmetryId);
+
+          for (final variant in variants) {
+            Offset? prev;
+            for (final w in variant.pts) {
+              if (prev != null) {
+                final d2 = _dist2PointToSegment(worldPos, prev, w);
+                if (d2 <= hitR2) {
+                  return _StrokeHit(
+                    strokeId: sLocal.id,
+                    layerId: layer.id,
+                    groupIndex: gi,
+                    mirrorX: variant.mirrorX,
+                    mirrorY: variant.mirrorY,
+                  );
+                }
+              }
+              prev = w;
+            }
+          }
+        }
+      }
+    }
+    return null;
+  }
+
+  void selectAtWorld(Offset worldPos) {
+    final hit = _hitTestStrokeWorld(worldPos);
+    if (hit == null) {
+      clearSelection();
+      return;
+    }
+
+    _selectedStrokeId = hit.strokeId;
+    _selectedLayerId = hit.layerId;
+    _selectedGroupIndex = hit.groupIndex;
+
+    // ✅ Store which symmetry variant became "truth"
+    _selectedMirrorX = hit.mirrorX;
+    _selectedMirrorY = hit.mirrorY;
+
+    // ✅ Anchor is first touch point in WORLD
+    _selectionAnchorWorld = worldPos;
+
+    notifyListeners();
+  }
+
+  void _moveSelectedByWorldDelta(Offset deltaWorld) {
+    final layerId = _selectedLayerId;
+    final strokeId = _selectedStrokeId;
+    final gi = _selectedGroupIndex;
+    if (layerId == null || strokeId == null || gi == null) return;
+
+    final layerIndex = _state.layers.indexWhere((l) => l.id == layerId);
+    if (layerIndex < 0) return;
+
+    // ✅ Mirror-truth correction (WORLD) before converting to LOCAL
+    final correctedWorldDelta = _correctedWorldDelta(deltaWorld);
+
+    final layers = List<CanvasLayer>.from(_state.layers);
+    final layer = layers[layerIndex];
+
+    if (gi < 0 || gi >= layer.groups.length) return;
+    final groups = List<StrokeGroup>.from(layer.groups);
+    final group = groups[gi];
+
+    final strokes = List<Stroke>.from(group.strokes);
+    final si = strokes.indexWhere((s) => s.id == strokeId);
+    if (si < 0) return;
+
+    final tr = layer.transform;
+    final isIdentity = _isIdentityTransform(tr);
+
+    Offset deltaLocal;
+    if (isIdentity) {
+      deltaLocal = correctedWorldDelta;
+    } else {
+      final s = (tr.scale == 0.0) ? 1.0 : tr.scale;
+      final angle = -tr.rotation;
+      final cosA = math.cos(angle);
+      final sinA = math.sin(angle);
+
+      final unscaled =
+          Offset(correctedWorldDelta.dx / s, correctedWorldDelta.dy / s);
+      deltaLocal = Offset(
+        unscaled.dx * cosA - unscaled.dy * sinA,
+        unscaled.dx * sinA + unscaled.dy * cosA,
+      );
+    }
+
+    final s0 = strokes[si];
+    final movedPts = <PointSample>[
+      for (final p in s0.points)
+        PointSample(p.x + deltaLocal.dx, p.y + deltaLocal.dy, p.t),
+    ];
+    strokes[si] = s0.copyWith(points: movedPts);
+
+    groups[gi] = group.copyWith(strokes: strokes);
+    layers[layerIndex] = layer.copyWith(groups: groups);
+    _state = _state.copyWith(layers: layers);
+
+    _ensureLayerPivotPersisted(layerId);
+
+    _renderer.rebuildFrom(_state.allStrokes);
+    _hasUnsavedChanges = true;
+    _tick();
+    notifyListeners();
+  }
+
+  // 1-finger drag (selection)
+  void selectionPointerDown(int pointer, Offset worldPos) {
+    if (_activePointerId != null) return;
+    if (_isSelectionGesturing) return;
+
+    _activePointerId = pointer;
+
+    // This sets selection + mirror flags + anchor
+    selectAtWorld(worldPos);
+    if (!hasSelection) return;
+
+    _isDraggingSelection = true;
+    _selectionDragLastWorld = worldPos;
+  }
+
+  void selectionPointerMove(int pointer, Offset worldPos) {
+    if (_activePointerId != pointer) return;
+    if (_isSelectionGesturing) return;
+    if (!_isDraggingSelection) return;
+
+    final last = _selectionDragLastWorld;
+    if (last == null) return;
+
+    final delta = worldPos - last;
+    _selectionDragLastWorld = worldPos;
+
+    if (delta.distanceSquared < 0.25) return;
+    _moveSelectedByWorldDelta(delta);
+  }
+
+  void selectionPointerUp(int pointer) {
+    if (_activePointerId != pointer) return;
+    _activePointerId = null;
+
+    _isDraggingSelection = false;
+    _selectionDragLastWorld = null;
+  }
+
+  /// Called by CanvasScreen when the 2-finger gesture ends while finger-1
+  /// is still down. Keeps the stroke grabbed and prevents jump.
+  void selectionResumeDragAt(Offset worldPos) {
+    if (!selectionMode || !hasSelection) return;
+    if (_activePointerId == null) return; // finger-1 not down
+
+    _isDraggingSelection = true;
+    _selectionDragLastWorld = worldPos;
+  }
+
+  // 2-finger scale/rotate (selection)
+  void selectionGestureStart({
+    required Offset focalWorld,
+    required double scale,
+    required double rotation,
+  }) {
+    if (!selectionMode || !hasSelection) return;
+
+    // ✅ DO NOT cancel the active pointer.
+    // We keep finger-1 as the "grab", and simply ignore drag moves while gesturing.
+    // (CanvasScreen already gates on controller.isSelectionGesturing)
+
+    final layerId = _selectedLayerId;
+    final strokeId = _selectedStrokeId;
+    final gi = _selectedGroupIndex;
+    if (layerId == null || strokeId == null || gi == null) return;
+
+    final layerIndex = _state.layers.indexWhere((l) => l.id == layerId);
+    if (layerIndex < 0) return;
+
+    final layer = _state.layers[layerIndex];
+    if (gi < 0 || gi >= layer.groups.length) return;
+
+    final group = layer.groups[gi];
+    final si = group.strokes.indexWhere((s) => s.id == strokeId);
+    if (si < 0) return;
+
+    // store initial points (LOCAL space)
+    _gestureStartLocalPoints = List<PointSample>.from(group.strokes[si].points);
+
+    // ✅ Pivot should be first-finger anchor (WORLD) if available.
+    final anchorWorld = _selectionAnchorWorld ?? focalWorld;
+
+    // ✅ If a mirrored variant was selected, convert anchorWorld (variant space)
+    // back into base-world before converting to LOCAL.
+    Offset pivotWorld = anchorWorld;
+    if (_canvasSize != Size.zero) {
+      final cx = _canvasSize.width / 2.0;
+      final cy = _canvasSize.height / 2.0;
+
+      // "Unmirror" back to base
+      if (_selectedMirrorX) pivotWorld = _mirrorV(pivotWorld, cx);
+      if (_selectedMirrorY) pivotWorld = _mirrorH(pivotWorld, cy);
+    }
+
+    // convert pivot (WORLD) -> LOCAL (stroke space)
+    final tr = layer.transform;
+    final isIdentity = _isIdentityTransform(tr);
+    final pivotLayer = isIdentity
+        ? Offset.zero
+        : (tr.pivot ?? _computeBoundsPivotForLayer(layer));
+
+    final pivotLocal = isIdentity
+        ? pivotWorld
+        : _inverseTransformPoint(pivotWorld, tr, pivotLayer);
+
+    _gestureStartPivotLocal = pivotLocal;
+
+    _gestureLastScale = scale;
+    _gestureLastRotation = _correctedRotation(rotation);
+
+    _isSelectionGesturing = true;
+    notifyListeners();
+  }
+
+  void selectionGestureUpdate({
+    required Offset focalWorld,
+    required double scale,
+    required double rotation,
+  }) {
+    if (!_isSelectionGesturing) return;
+
+    final startPts = _gestureStartLocalPoints;
+    final pivotLocal = _gestureStartPivotLocal;
+    final layerId = _selectedLayerId;
+    final strokeId = _selectedStrokeId;
+    final gi = _selectedGroupIndex;
+
+    if (startPts == null ||
+        pivotLocal == null ||
+        layerId == null ||
+        strokeId == null ||
+        gi == null) return;
+
+    final layerIndex = _state.layers.indexWhere((l) => l.id == layerId);
+    if (layerIndex < 0) return;
+
+    final layers = List<CanvasLayer>.from(_state.layers);
+    final layer = layers[layerIndex];
+
+    if (gi < 0 || gi >= layer.groups.length) return;
+    final groups = List<StrokeGroup>.from(layer.groups);
+    final group = groups[gi];
+
+    final strokes = List<Stroke>.from(group.strokes);
+    final si = strokes.indexWhere((s) => s.id == strokeId);
+    if (si < 0) return;
+
+    final ds = (scale <= 0.0001) ? 1.0 : scale;
+
+    // ✅ Mirror-truth corrected rotation
+    final ang = _correctedRotation(rotation);
+
+    final cosA = math.cos(ang);
+    final sinA = math.sin(ang);
+
+    // ✅ Apply scale + rotation around pivotLocal ONLY (anchor pivot)
+    final newPts = <PointSample>[];
+    for (final p in startPts) {
+      final v = Offset(p.x, p.y) - pivotLocal;
+
+      // scale
+      final vs = v * ds;
+
+      // rotate
+      final vr = Offset(
+        vs.dx * cosA - vs.dy * sinA,
+        vs.dx * sinA + vs.dy * cosA,
+      );
+
+      final out = pivotLocal + vr;
+      newPts.add(PointSample(out.dx, out.dy, p.t));
+    }
+
+    final s0 = strokes[si];
+    strokes[si] = s0.copyWith(points: newPts);
+
+    groups[gi] = group.copyWith(strokes: strokes);
+    layers[layerIndex] = layer.copyWith(groups: groups);
+    _state = _state.copyWith(layers: layers);
+
+    _ensureLayerPivotPersisted(layerId);
+
+    _renderer.rebuildFrom(_state.allStrokes);
+    _hasUnsavedChanges = true;
+    _tick();
+    notifyListeners();
+
+    _gestureLastScale = scale;
+    _gestureLastRotation = ang;
+  }
+
+  void selectionGestureEnd() {
+    _isSelectionGesturing = false;
+    _gestureStartLocalPoints = null;
+    _gestureStartPivotLocal = null;
+    _gestureLastScale = 1.0;
+    _gestureLastRotation = 0.0;
+
+    void selectionGestureEnd() {
+      _isSelectionGesturing = false;
+      _gestureStartLocalPoints = null;
+      _gestureStartPivotLocal = null;
+      _gestureLastScale = 1.0;
+      _gestureLastRotation = 0.0;
+      notifyListeners();
+    }
+
+    notifyListeners();
+  }
+
+  // Called on PointerCancel from CanvasScreen
+  void cancelPointer(int pointer) {
+    if (_activePointerId == pointer) {
+      _activePointerId = null;
+    }
+    _current = null;
+
+    _isDraggingSelection = false;
+    _selectionDragLastWorld = null;
+
+    // do not clear selection on cancel; just stop dragging
+    _tick();
+    notifyListeners();
   }
 
   // ---------------------------------------------------------------------------
@@ -428,6 +983,12 @@ class CanvasController extends ChangeNotifier {
     final exists = _state.layers.any((l) => l.id == id);
     if (!exists) return;
     _state = _state.copyWith(activeLayerId: id);
+
+    // if selection is on another layer, clear it (active layer is "only editable")
+    if (_selectedLayerId != null && _selectedLayerId != id) {
+      clearSelection();
+    }
+
     notifyListeners();
   }
 
@@ -487,6 +1048,8 @@ class CanvasController extends ChangeNotifier {
     _history.removeWhere((loc) => loc.layerId == id);
     _redoLocations.removeWhere((loc) => loc.layerId == id);
 
+    if (_selectedLayerId == id) clearSelection();
+
     _renderer.rebuildFrom(_state.allStrokes);
     _hasUnsavedChanges = true;
     _tick();
@@ -503,6 +1066,8 @@ class CanvasController extends ChangeNotifier {
 
     layers[idx] = layer.copyWith(visible: visible);
     _state = _state.copyWith(layers: layers);
+
+    _ensureLayerPivotPersisted(id);
 
     _renderer.rebuildFrom(_state.allStrokes);
     _hasUnsavedChanges = true;
@@ -548,6 +1113,8 @@ class CanvasController extends ChangeNotifier {
     );
     _state = _state.copyWith(layers: layers);
 
+    _ensureLayerPivotPersisted(id);
+
     _renderer.rebuildFrom(_state.allStrokes);
     _hasUnsavedChanges = true;
     _tick();
@@ -570,6 +1137,8 @@ class CanvasController extends ChangeNotifier {
     _state = _state.copyWith(layers: layers);
     _hasUnsavedChanges = true;
 
+    _ensureLayerPivotPersisted(id);
+
     _renderer.rebuildFrom(_state.allStrokes);
     _tick();
     notifyListeners();
@@ -588,6 +1157,8 @@ class CanvasController extends ChangeNotifier {
       transform: layer.transform.copyWith(rotation: radians),
     );
     _state = _state.copyWith(layers: layers);
+
+    _ensureLayerPivotPersisted(id);
 
     _renderer.rebuildFrom(_state.allStrokes);
     _hasUnsavedChanges = true;
@@ -608,6 +1179,8 @@ class CanvasController extends ChangeNotifier {
       transform: layer.transform.copyWith(scale: clamped.toDouble()),
     );
     _state = _state.copyWith(layers: layers);
+
+    _ensureLayerPivotPersisted(id);
 
     _renderer.rebuildFrom(_state.allStrokes);
     _hasUnsavedChanges = true;
@@ -658,12 +1231,13 @@ class CanvasController extends ChangeNotifier {
   }
 
   // ---------------------------------------------------------------------------
-  // DRAWING FLOW (FIXED: store LOCAL, preview/bake WORLD)
+  // DRAWING FLOW (store LOCAL, preview/bake WORLD)
   // ---------------------------------------------------------------------------
 
   void pointerDown(int pointer, Offset pos) {
     if (_activePointerId != null) return;
     if (activeLayer.locked) return;
+    if (_isSelectionGesturing) return;
 
     _activePointerId = pointer;
 
@@ -675,7 +1249,6 @@ class CanvasController extends ChangeNotifier {
     if (!isIdentity) {
       pivot = tr.pivot ?? _computeBoundsPivotForLayer(layer);
 
-      // Persist pivot once so it stays stable for this layer.
       if (tr.pivot == null) {
         final idx = _state.layers.indexWhere((l) => l.id == layer.id);
         if (idx >= 0) {
@@ -758,12 +1331,10 @@ class CanvasController extends ChangeNotifier {
       pivot = tr.pivot ?? _computeBoundsPivotForLayer(layer);
     }
 
-    // Bake what the user saw on screen (world space)
     final bakeStroke =
         isIdentity ? sLocal : _strokeWithTransformedPoints(sLocal, tr, pivot);
     _renderer.commitStroke(bakeStroke);
 
-    // Store local stroke into the layer
     _state = _addStrokeToActiveLayer(_state, sLocal);
     _recordStrokeCreation(sLocal);
 
@@ -856,6 +1427,8 @@ class CanvasController extends ChangeNotifier {
     _activePointerId = null;
     _hasUnsavedChanges = false;
 
+    clearSelection();
+
     _rebuildHistoryFromState();
 
     final bg = bundle.doc.background;
@@ -873,6 +1446,10 @@ class CanvasController extends ChangeNotifier {
     final mode = gb.glowBlendFromKey(key);
     gb.GlowBlendState.I.setMode(mode);
 
+    for (final l in _state.layers) {
+      _ensureLayerPivotPersisted(l.id);
+    }
+
     _renderer.rebuildFrom(_state.allStrokes);
     _tick();
     notifyListeners();
@@ -883,6 +1460,8 @@ class CanvasController extends ChangeNotifier {
     _current = null;
     _activePointerId = null;
     _hasUnsavedChanges = false;
+
+    clearSelection();
 
     _history.clear();
     _redoLocations.clear();
@@ -904,7 +1483,7 @@ class CanvasController extends ChangeNotifier {
   }
 
   // ---------------------------------------------------------------------------
-  // UNDO / REDO (history-based, stable under layer reordering)
+  // UNDO / REDO
   // ---------------------------------------------------------------------------
 
   void undo() {
@@ -943,6 +1522,10 @@ class CanvasController extends ChangeNotifier {
     );
 
     _redoLocations.add(lastLoc);
+
+    if (_selectedStrokeId == removed.id) clearSelection();
+
+    _ensureLayerPivotPersisted(lastLoc.layerId);
 
     _renderer.rebuildFrom(_state.allStrokes);
     _hasUnsavedChanges = true;
@@ -983,6 +1566,8 @@ class CanvasController extends ChangeNotifier {
 
     _history.add(loc);
 
+    _ensureLayerPivotPersisted(loc.layerId);
+
     _renderer.rebuildFrom(_state.allStrokes);
     _hasUnsavedChanges = true;
     _tick();
@@ -1004,6 +1589,10 @@ class CanvasController extends ChangeNotifier {
       _suppressBlendDirty = false;
     } else {
       _hasUnsavedChanges = true;
+    }
+
+    for (final l in _state.layers) {
+      _ensureLayerPivotPersisted(l.id);
     }
 
     _renderer.rebuildFrom(_state.allStrokes);

@@ -7,13 +7,10 @@ import 'brush_hud.dart';
 import 'color_wheel_dialog.dart';
 import 'dice_dots_icon.dart';
 
-class BottomDock extends StatelessWidget {
+class BottomDock extends StatefulWidget {
   final CanvasController controller;
 
-  /// NEW: whether the layer panel is currently visible.
   final bool showLayers;
-
-  /// NEW: callback to toggle layer panel visibility.
   final VoidCallback onToggleLayers;
 
   const BottomDock({
@@ -24,143 +21,220 @@ class BottomDock extends StatelessWidget {
   });
 
   @override
+  State<BottomDock> createState() => _BottomDockState();
+}
+
+class _BottomDockState extends State<BottomDock> {
+  final PageController _page = PageController();
+  int _pageIndex = 0;
+
+  CanvasController get controller => widget.controller;
+
+  @override
+  void dispose() {
+    _page.dispose();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
-    return SafeArea(
-      top: false,
-      child: Container(
-        decoration: BoxDecoration(
-          gradient: LinearGradient(
-            colors: [
-              Colors.black.withValues(alpha: 0.0),
-              Colors.black.withValues(alpha: 0.35),
-            ],
-            begin: Alignment.topCenter,
-            end: Alignment.bottomCenter,
-          ),
-        ),
-        child: Container(
-          decoration: BoxDecoration(
-            color: Colors.black.withValues(alpha: 0.35),
-            border: Border(
-              top: BorderSide(
-                color: Colors.white.withValues(alpha: 0.12),
+
+    // ✅ IMPORTANT: always reflect real controller state (selectionMode, colors, etc.)
+    return AnimatedBuilder(
+      animation: controller,
+      builder: (context, _) {
+        final bool selectOn = controller.selectionMode;
+
+        return SafeArea(
+          top: false,
+          child: Container(
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                colors: [
+                  Colors.black.withValues(alpha: 0.0),
+                  Colors.black.withValues(alpha: 0.35),
+                ],
+                begin: Alignment.topCenter,
+                end: Alignment.bottomCenter,
               ),
             ),
-            boxShadow: const [
-              BoxShadow(
-                blurRadius: 30,
-                spreadRadius: 10,
-                color: Colors.black26,
+            child: Container(
+              decoration: BoxDecoration(
+                color: Colors.black.withValues(alpha: 0.35),
+                border: Border(
+                  top: BorderSide(color: Colors.white.withValues(alpha: 0.12)),
+                ),
+                boxShadow: const [
+                  BoxShadow(
+                    blurRadius: 30,
+                    spreadRadius: 10,
+                    color: Colors.black26,
+                  ),
+                ],
               ),
-            ],
-          ),
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-          child: Row(
-            children: [
-              _DockButton(
-                icon: Icons.brush,
-                label: 'Brush',
-                onTap: () => showModalBottomSheet(
-                  context: context,
-                  backgroundColor: Colors.transparent,
-                  isScrollControlled: true,
-                  builder: (ctx) {
-                    final screenH = MediaQuery.of(ctx).size.height;
-                    return Align(
-                      alignment: Alignment.bottomCenter,
-                      child: SizedBox(
-                        height: screenH * 0.85,
-                        child: Container(
-                          decoration: BoxDecoration(
-                            color: cs.surface,
-                            borderRadius: const BorderRadius.vertical(
-                              top: Radius.circular(16),
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  // swipe dots
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      _Dot(active: _pageIndex == 0),
+                      const SizedBox(width: 6),
+                      _Dot(active: _pageIndex == 1),
+                    ],
+                  ),
+                  const SizedBox(height: 6),
+
+                  SizedBox(
+                    height: 58,
+                    child: PageView(
+                      controller: _page,
+                      onPageChanged: (i) => setState(() => _pageIndex = i),
+                      physics: const BouncingScrollPhysics(),
+                      children: [
+                        // Page 1: brush/draw stuff
+                        _DockRow(
+                          children: [
+                            _DockButton(
+                              icon: Icons.brush,
+                              label: 'Brush',
+                              onTap: () => _openBrushSheet(context, cs),
                             ),
-                          ),
-                          child: const Padding(
-                            padding: EdgeInsets.all(8.0),
-                            child: BrushHUD(),
-                          ),
+                            _DockButton(
+                              customIcon: _symIcon(controller.symmetry),
+                              label: 'Sym',
+                              onTap: _cycleSymmetry,
+                              onLongPress: () => _openSymmetryMenu(context),
+                            ),
+                            _DockButton(
+                              customIcon: Container(
+                                width: 22,
+                                height: 22,
+                                decoration: BoxDecoration(
+                                  color: Color(controller.color),
+                                  shape: BoxShape.circle,
+                                  border: Border.all(color: Colors.white24),
+                                ),
+                              ),
+                              label: 'Color',
+                              onTap: () async {
+                                final picked = await showDialog<Color?>(
+                                  context: context,
+                                  barrierDismissible: true,
+                                  builder: (_) => ColorWheelDialog(
+                                    initial: Color(controller.color),
+                                  ),
+                                );
+                                if (picked != null)
+                                  controller.setColor(picked.value);
+                              },
+                            ),
+                            _DockButton(
+                              customIcon: Container(
+                                width: 22,
+                                height: 22,
+                                decoration: BoxDecoration(
+                                  color: Color(controller.backgroundColor),
+                                  shape: BoxShape.circle,
+                                  border: Border.all(color: Colors.white24),
+                                ),
+                              ),
+                              label: 'BG',
+                              onTap: () async {
+                                final picked = await showDialog<Color?>(
+                                  context: context,
+                                  barrierDismissible: true,
+                                  builder: (_) => ColorWheelDialog(
+                                    initial: Color(controller.backgroundColor),
+                                  ),
+                                );
+                                if (picked != null) {
+                                  controller.setBackgroundColor(picked.value);
+                                }
+                              },
+                            ),
+                            _DockButton(
+                              icon: Icons.auto_awesome,
+                              label: 'Blend',
+                              onTap: () => _openBlendSheet(context),
+                            ),
+                          ],
                         ),
-                      ),
-                    );
-                  },
-                ),
-              ),
-              _DockButton(
-                customIcon: _symIcon(controller.symmetry),
-                label: 'Sym',
-                onTap: _cycleSymmetry,
-                onLongPress: () => _openSymmetryMenu(context),
-              ),
-              _DockButton(
-                customIcon: Container(
-                  width: 22,
-                  height: 22,
-                  decoration: BoxDecoration(
-                    color: Color(controller.color),
-                    shape: BoxShape.circle,
-                    border: Border.all(color: Colors.white24),
-                  ),
-                ),
-                label: 'Color',
-                onTap: () async {
-                  final picked = await showDialog<Color?>(
-                    context: context,
-                    barrierDismissible: true,
-                    builder: (_) =>
-                        ColorWheelDialog(initial: Color(controller.color)),
-                  );
-                  if (picked != null) controller.setColor(picked.value);
-                },
-              ),
-              _DockButton(
-                customIcon: Container(
-                  width: 22,
-                  height: 22,
-                  decoration: BoxDecoration(
-                    color: Color(controller.backgroundColor),
-                    shape: BoxShape.circle,
-                    border: Border.all(color: Colors.white24),
-                  ),
-                ),
-                label: 'BG',
-                onTap: () async {
-                  final picked = await showDialog<Color?>(
-                    context: context,
-                    barrierDismissible: true,
-                    builder: (_) => ColorWheelDialog(
-                      initial: Color(controller.backgroundColor),
+
+                        // Page 2: layers + select
+                        _DockRow(
+                          children: [
+                            _DockButton(
+                              customIcon: Icon(
+                                Icons.layers,
+                                size: 22,
+                                color: widget.showLayers
+                                    ? Colors.cyanAccent
+                                    : Colors.white,
+                              ),
+                              label: 'Layers',
+                              onTap: widget.onToggleLayers,
+                            ),
+                            _DockButton(
+                              customIcon: Icon(
+                                Icons.select_all,
+                                size: 22,
+                                color:
+                                    selectOn ? Colors.cyanAccent : Colors.white,
+                              ),
+                              label: selectOn ? 'Select ON' : 'Select',
+                              onTap: () => controller
+                                  .setSelectionMode(!controller.selectionMode),
+                              onLongPress: () {
+                                if (controller.selectionMode) {
+                                  controller.clearSelection();
+                                }
+                              },
+                            ),
+                          ],
+                        ),
+                      ],
                     ),
-                  );
-                  if (picked != null) {
-                    controller.setBackgroundColor(picked.value);
-                  }
-                },
+                  ),
+                ],
               ),
-              _DockButton(
-                icon: Icons.auto_awesome,
-                label: 'Blend',
-                onTap: () => _openBlendSheet(context),
-              ),
-
-              const Spacer(),
-
-              // NEW: Layers toggle button on the far right
-              _DockButton(
-                customIcon: Icon(
-                  Icons.layers,
-                  size: 22,
-                  color: showLayers ? Colors.cyanAccent : Colors.white,
-                ),
-                label: 'Layers',
-                onTap: onToggleLayers,
-              ),
-            ],
+            ),
           ),
-        ),
-      ),
+        );
+      },
+    );
+  }
+
+  // --- helpers ---------------------------------------------------------------
+
+  void _openBrushSheet(BuildContext context, ColorScheme cs) {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      isScrollControlled: true,
+      builder: (ctx) {
+        final screenH = MediaQuery.of(ctx).size.height;
+        return Align(
+          alignment: Alignment.bottomCenter,
+          child: SizedBox(
+            height: screenH * 0.85,
+            child: Container(
+              decoration: BoxDecoration(
+                color: cs.surface,
+                borderRadius:
+                    const BorderRadius.vertical(top: Radius.circular(16)),
+              ),
+              child: const Padding(
+                padding: EdgeInsets.all(8.0),
+                child: BrushHUD(),
+              ),
+            ),
+          ),
+        );
+      },
     );
   }
 
@@ -208,7 +282,6 @@ class BottomDock extends StatelessWidget {
               children: [
                 _SymRow('Off', const Icon(Icons.blur_circular),
                     () => controller.setSymmetry(SymmetryMode.off)),
-                // NOTE: labels swapped per your request
                 _SymRow(
                     'Horizontal',
                     const DiceDotsIcon(pattern: DiceDotsPattern.twoH),
@@ -234,7 +307,7 @@ class BottomDock extends StatelessWidget {
     showModalBottomSheet(
       context: context,
       backgroundColor: Colors.transparent,
-      barrierColor: Colors.transparent, // no dark overlay
+      barrierColor: Colors.transparent,
       isScrollControlled: false,
       builder: (ctx) {
         return SafeArea(
@@ -245,9 +318,8 @@ class BottomDock extends StatelessWidget {
               margin: const EdgeInsets.only(bottom: 4),
               decoration: BoxDecoration(
                 color: cs.surface.withOpacity(0.95),
-                borderRadius: const BorderRadius.vertical(
-                  top: Radius.circular(12),
-                ),
+                borderRadius:
+                    const BorderRadius.vertical(top: Radius.circular(12)),
                 boxShadow: const [
                   BoxShadow(
                     blurRadius: 8,
@@ -256,7 +328,6 @@ class BottomDock extends StatelessWidget {
                   ),
                 ],
               ),
-              // 🔥 Force it to be a short bar
               child: SizedBox(
                 height: 52,
                 child: Padding(
@@ -267,33 +338,23 @@ class BottomDock extends StatelessWidget {
                     builder: (context, _) {
                       final state = gb.GlowBlendState.I;
                       return Row(
-                        mainAxisSize: MainAxisSize.min,
                         children: [
-                          // [Additive] – compact dropdown showing current blend mode.
                           ConstrainedBox(
                             constraints: const BoxConstraints(
-                              minWidth: 90,
-                              maxWidth: 140,
-                            ),
+                                minWidth: 90, maxWidth: 140),
                             child: GlowBlendDropdown(controller: controller),
                           ),
                           const SizedBox(width: 8),
-
-                          // ---------o-----  slider controlling intensity
                           Expanded(
                             child: Slider(
                               value: state.intensity,
                               min: 0.0,
                               max: 1.0,
-                              onChanged: (v) {
-                                gb.GlowBlendState.I.setIntensity(v);
-                              },
+                              onChanged: (v) =>
+                                  gb.GlowBlendState.I.setIntensity(v),
                             ),
                           ),
-
                           const SizedBox(width: 6),
-
-                          // 65% – small percentage label
                           SizedBox(
                             width: 40,
                             child: Text(
@@ -312,6 +373,41 @@ class BottomDock extends StatelessWidget {
           ),
         );
       },
+    );
+  }
+}
+
+class _DockRow extends StatelessWidget {
+  final List<Widget> children;
+  const _DockRow({required this.children});
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: Wrap(
+        alignment: WrapAlignment.center,
+        spacing: 2,
+        runSpacing: 0,
+        children: children,
+      ),
+    );
+  }
+}
+
+class _Dot extends StatelessWidget {
+  final bool active;
+  const _Dot({required this.active});
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedContainer(
+      duration: const Duration(milliseconds: 180),
+      width: active ? 18 : 8,
+      height: 6,
+      decoration: BoxDecoration(
+        color: active ? Colors.white70 : Colors.white24,
+        borderRadius: BorderRadius.circular(999),
+      ),
     );
   }
 }
@@ -345,25 +441,21 @@ class _DockButton extends StatelessWidget {
   final VoidCallback? onLongPress;
 
   const _DockButton({
-    Key? key,
+    super.key,
     this.icon,
     this.customIcon,
     required this.label,
     this.onTap,
     this.onLongPress,
-  }) : super(key: key);
+  });
 
   @override
   Widget build(BuildContext context) {
-    final ic = customIcon ??
-        Icon(
-          icon,
-          size: 22,
-        );
+    final ic = customIcon ?? Icon(icon, size: 22);
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 4),
       child: GestureDetector(
-        behavior: HitTestBehavior.opaque, // 👈 whole padded area tappable
+        behavior: HitTestBehavior.opaque,
         onTap: onTap,
         onLongPress: onLongPress,
         child: Container(

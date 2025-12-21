@@ -1,7 +1,10 @@
 import 'dart:ui';
+import 'dart:math'
+    as math; // ✅ fixes "Undefined name 'math'" if any math is used
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+
 import '../state/canvas_controller.dart' as canvas_state;
 import '../../../core/services/gallery_saver.dart';
 import '../../../core/services/document_storage.dart';
@@ -35,6 +38,10 @@ class _CanvasScreenState extends ConsumerState<CanvasScreen> {
 
   bool _showLayers = false;
 
+  // ✅ Track finger-1 in selection mode so we can "resume grab" after pinch ends.
+  int? _selectionPointerId;
+  Offset? _selectionPointerPos;
+
   Future<_NewPageAction?> _showSaveOrDiscardDialog() {
     return showDialog<_NewPageAction>(
       context: context,
@@ -66,9 +73,7 @@ class _CanvasScreenState extends ConsumerState<CanvasScreen> {
   }
 
   void _toggleLayers() {
-    setState(() {
-      _showLayers = !_showLayers;
-    });
+    setState(() => _showLayers = !_showLayers);
   }
 
   Future<void> _saveCurrent(canvas_state.CanvasController controller) async {
@@ -90,25 +95,18 @@ class _CanvasScreenState extends ConsumerState<CanvasScreen> {
             ))
         .copyWith(
       updatedAt: now,
-      // Save current blend mode with this document.
       blendModeKey: gb.glowBlendToKey(gb.GlowBlendState.I.mode),
-      // Save current background colour with this document.
       background: doc_model.Background.solid(controller.backgroundColor),
     );
 
     final bundle = CanvasDocumentBundle(
       doc: doc,
-
-      // Keep legacy flat strokes for backward compatibility + quick stats.
       strokes: List.of(controller.strokes),
-
-      // ✅ NEW: persist layered document state
       layers: List.of(controller.layers),
       activeLayerId: controller.activeLayerId,
     );
 
-    final storage = DocumentStorage.instance;
-    final savedId = await storage.saveBundle(
+    final savedId = await DocumentStorage.instance.saveBundle(
       bundle,
       existingId: _currentDocId,
     );
@@ -119,18 +117,14 @@ class _CanvasScreenState extends ConsumerState<CanvasScreen> {
     controller.markSaved();
 
     if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Drawing saved')),
-      );
+      ScaffoldMessenger.of(context)
+          .showSnackBar(const SnackBar(content: Text('Drawing saved')));
     }
   }
 
   @override
   void initState() {
     super.initState();
-
-    // ✅ Always start with layers menu closed
-    _showLayers = false;
 
     final controller = ref.read(canvas_state.canvasControllerProvider);
     final bundle = widget.initialDocument;
@@ -140,103 +134,37 @@ class _CanvasScreenState extends ConsumerState<CanvasScreen> {
       _currentDoc = bundle.doc;
       controller.loadFromBundle(bundle);
     } else {
-      _currentDocId = null;
-      _currentDoc = null;
       controller.newDocument();
     }
   }
 
-  Future<void> _exportPng() async {
-    try {
-      final boundary = _repaintKey.currentContext?.findRenderObject()
-          as RenderRepaintBoundary?;
-      if (boundary == null) {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Export failed: boundary not found')),
-          );
-        }
-        return;
-      }
-      final image = await boundary.toImage(pixelRatio: 2.0);
-      final byteData = await image.toByteData(format: ImageByteFormat.png);
-      if (byteData == null) {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Export failed: empty bytes')),
-          );
-        }
-        return;
-      }
-      final bytes = byteData.buffer.asUint8List();
-      final ts = DateTime.now()
-          .toIso8601String()
-          .replaceAll(':', '-')
-          .split('.')
-          .first;
-      final name = 'GlowBook_$ts.png';
-      await GallerySaverService.savePngToGallery(bytes, filename: name);
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Saved to Gallery: $name')),
-        );
-      }
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Export failed: $e')),
-        );
-      }
+  void _routePointerDown(
+      canvas_state.CanvasController controller, int pointer, Offset pos) {
+    if (controller.isSelectionGesturing) return;
+
+    if (controller.selectionMode) {
+      controller.selectionPointerDown(pointer, pos);
+    } else {
+      controller.pointerDown(pointer, pos);
     }
   }
 
-  Future<void> _handleNewDocument(
-      canvas_state.CanvasController controller) async {
-    if (!controller.hasUnsavedChanges) {
-      setState(() => _showLayers = false);
-      _currentDocId = null;
-      _currentDoc = null;
-      controller.newDocument();
-      return;
+  void _routePointerMove(
+      canvas_state.CanvasController controller, int pointer, Offset pos) {
+    if (controller.isSelectionGesturing) return;
+
+    if (controller.selectionMode) {
+      controller.selectionPointerMove(pointer, pos);
+    } else {
+      controller.pointerMove(pointer, pos);
     }
-
-    final action = await _showSaveOrDiscardDialog();
-
-    if (!mounted || action == null || action == _NewPageAction.cancel) {
-      return;
-    }
-
-    if (action == _NewPageAction.saveAndNew) {
-      await _saveCurrent(controller);
-    }
-
-    setState(() => _showLayers = false);
-    _currentDocId = null;
-    _currentDoc = null;
-    controller.newDocument();
   }
 
-  Future<void> _handleExitToMainMenu(
-      canvas_state.CanvasController controller) async {
-    if (!controller.hasUnsavedChanges) {
-      if (mounted) {
-        Navigator.of(context).pop();
-      }
-      return;
-    }
-
-    final action = await _showSaveOrDiscardDialog();
-
-    if (!mounted || action == null || action == _NewPageAction.cancel) {
-      return;
-    }
-
-    if (action == _NewPageAction.saveAndNew) {
-      await _saveCurrent(controller);
-    }
-
-    if (mounted) {
-      Navigator.of(context).pop();
+  void _routePointerUp(canvas_state.CanvasController controller, int pointer) {
+    if (controller.selectionMode) {
+      controller.selectionPointerUp(pointer);
+    } else {
+      controller.pointerUp(pointer);
     }
   }
 
@@ -244,7 +172,6 @@ class _CanvasScreenState extends ConsumerState<CanvasScreen> {
   Widget build(BuildContext context) {
     final controller = ref.watch(canvas_state.canvasControllerProvider);
 
-    // ✅ Always use the controller's background colour.
     final mode = gb.GlowBlendState.I.mode;
     final bool isMultiply = mode == gb.GlowBlend.multiply;
 
@@ -269,42 +196,190 @@ class _CanvasScreenState extends ConsumerState<CanvasScreen> {
         showLayers: _showLayers,
         onToggleLayers: _toggleLayers,
       ),
-      body: Stack(
-        children: [
-          // 🎨 Main canvas
-          Listener(
-            behavior: HitTestBehavior.translucent,
-            onPointerDown: (event) => controller.pointerDown(
-              event.pointer,
-              event.localPosition,
-            ),
-            onPointerMove: (event) =>
-                controller.pointerMove(event.pointer, event.localPosition),
-            onPointerUp: (event) => controller.pointerUp(event.pointer),
-            child: RepaintBoundary(
-              key: _repaintKey,
-              child: Container(
-                color: canvasBg,
-                child: CustomPaint(
-                  painter: controller.painter,
-                  size: Size.infinite,
+      body: LayoutBuilder(
+        builder: (context, constraints) {
+          controller
+              .setCanvasSize(Size(constraints.maxWidth, constraints.maxHeight));
+
+          return Stack(
+            children: [
+              Listener(
+                behavior: HitTestBehavior.translucent,
+                onPointerDown: (e) {
+                  // ✅ Capture finger-1 when in selection mode
+                  if (controller.selectionMode) {
+                    _selectionPointerId ??= e.pointer;
+                    if (_selectionPointerId == e.pointer) {
+                      _selectionPointerPos = e.localPosition;
+                    }
+                  }
+
+                  _routePointerDown(controller, e.pointer, e.localPosition);
+                },
+                onPointerMove: (e) {
+                  // ✅ Keep tracking finger-1 position even during pinch
+                  if (controller.selectionMode &&
+                      _selectionPointerId == e.pointer) {
+                    _selectionPointerPos = e.localPosition;
+                  }
+
+                  // While gesturing, don't forward moves into the controller.
+                  if (controller.isSelectionGesturing) return;
+
+                  _routePointerMove(controller, e.pointer, e.localPosition);
+                },
+                onPointerUp: (e) {
+                  if (controller.selectionMode &&
+                      _selectionPointerId == e.pointer) {
+                    _selectionPointerPos = e.localPosition;
+                    _selectionPointerId = null;
+                  }
+
+                  _routePointerUp(controller, e.pointer);
+                },
+                onPointerCancel: (e) {
+                  if (controller.selectionMode &&
+                      _selectionPointerId == e.pointer) {
+                    _selectionPointerId = null;
+                    _selectionPointerPos = null;
+                  }
+                  controller.cancelPointer(e.pointer);
+                },
+                child: RepaintBoundary(
+                  key: _repaintKey,
+                  child: Container(
+                    color: canvasBg,
+                    child: CustomPaint(
+                      painter: controller.painter,
+                      size: Size.infinite,
+                    ),
+                  ),
                 ),
               ),
-            ),
-          ),
 
-          // 📚 Bottom layer panel
-          if (_showLayers)
-            Align(
-              alignment: Alignment.bottomCenter,
-              child: FractionallySizedBox(
-                heightFactor: 0.30, // 30% screen height
-                widthFactor: 1.0, // full width
-                child: const LayerPanel(),
-              ),
-            ),
-        ],
+              if (_showLayers)
+                Align(
+                  alignment: Alignment.bottomCenter,
+                  child: FractionallySizedBox(
+                    heightFactor: 0.30,
+                    widthFactor: 1.0,
+                    child: const LayerPanel(),
+                  ),
+                ),
+
+              // ✅ Always present in selection mode so it can "see" finger-1
+              // from the beginning (gesture arena reliability).
+              if (controller.selectionMode)
+                Positioned.fill(
+                  child: GestureDetector(
+                    behavior: HitTestBehavior.translucent,
+                    onScaleStart: (d) {
+                      if (!controller.hasSelection) return;
+                      if (d.pointerCount < 2) return;
+
+                      controller.selectionGestureStart(
+                        focalWorld: d.localFocalPoint,
+                        scale: 1.0,
+                        rotation: 0.0,
+                      );
+                    },
+                    onScaleUpdate: (d) {
+                      if (!controller.hasSelection) return;
+
+                      // Don’t steal single-finger drag.
+                      if (!controller.isSelectionGesturing &&
+                          d.pointerCount < 2) return;
+
+                      // If 2nd finger arrives after drag started, kick in immediately.
+                      if (!controller.isSelectionGesturing &&
+                          d.pointerCount >= 2) {
+                        controller.selectionGestureStart(
+                          focalWorld: d.localFocalPoint,
+                          scale: 1.0,
+                          rotation: 0.0,
+                        );
+                      }
+
+                      controller.selectionGestureUpdate(
+                        focalWorld: d.localFocalPoint,
+                        scale: d.scale,
+                        rotation: d.rotation,
+                      );
+                    },
+                    onScaleEnd: (_) {
+                      if (controller.isSelectionGesturing) {
+                        controller.selectionGestureEnd();
+
+                        // ✅ If finger-1 is still down, keep the stroke "grabbed"
+                        // even if it moved away from under the finger.
+                        final p = _selectionPointerPos;
+                        if (p != null) {
+                          controller.selectionResumeDragAt(p);
+                        }
+                      }
+                    },
+                  ),
+                ),
+            ],
+          );
+        },
       ),
     );
+  }
+
+  Future<void> _exportPng() async {
+    try {
+      final boundary = _repaintKey.currentContext?.findRenderObject()
+          as RenderRepaintBoundary?;
+      if (boundary == null) return;
+
+      final image = await boundary.toImage(pixelRatio: 2.0);
+      final byteData = await image.toByteData(format: ImageByteFormat.png);
+      if (byteData == null) return;
+
+      final bytes = byteData.buffer.asUint8List();
+      final name = 'GlowBook_${DateTime.now().millisecondsSinceEpoch}.png';
+
+      await GallerySaverService.savePngToGallery(bytes, filename: name);
+
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('Saved: $name')));
+      }
+    } catch (_) {}
+  }
+
+  Future<void> _handleNewDocument(
+      canvas_state.CanvasController controller) async {
+    if (!controller.hasUnsavedChanges) {
+      controller.newDocument();
+      return;
+    }
+
+    final action = await _showSaveOrDiscardDialog();
+    if (!mounted || action == null) return;
+
+    if (action == _NewPageAction.saveAndNew) {
+      await _saveCurrent(controller);
+    }
+
+    controller.newDocument();
+  }
+
+  Future<void> _handleExitToMainMenu(
+      canvas_state.CanvasController controller) async {
+    if (!controller.hasUnsavedChanges) {
+      if (mounted) Navigator.of(context).pop();
+      return;
+    }
+
+    final action = await _showSaveOrDiscardDialog();
+    if (!mounted || action == null) return;
+
+    if (action == _NewPageAction.saveAndNew) {
+      await _saveCurrent(controller);
+    }
+
+    if (mounted) Navigator.of(context).pop();
   }
 }

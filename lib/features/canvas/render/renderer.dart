@@ -10,7 +10,6 @@ import 'brushes/hyper_neon.dart';
 import 'brushes/edge_glow.dart';
 import 'brushes/ghost_trail.dart';
 import 'brushes/inner_glow.dart';
-import 'brushes/inner_glow.dart';
 
 class Renderer extends CustomPainter {
   Renderer(this.repaint, this.symmetryFn) : super(repaint: repaint);
