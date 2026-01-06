@@ -6,16 +6,28 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../state/canvas_controller.dart' as canvas_state;
 import '../../../core/models/canvas_layer.dart';
 
+import 'widgets/synth_knob.dart';
+
 class LayerPanel extends ConsumerStatefulWidget {
-  const LayerPanel({super.key});
+  const LayerPanel({super.key, this.scrollController});
+
+  final ScrollController? scrollController;
 
   @override
   ConsumerState<LayerPanel> createState() => _LayerPanelState();
 }
 
 class _LayerPanelState extends ConsumerState<LayerPanel> {
-  /// Which layers are expanded (by id).
   final Set<String> _expanded = <String>{};
+
+  // ✅ locks list scroll + reorder while knobs are touched
+  final ValueNotifier<bool> _knobIsActive = ValueNotifier<bool>(false);
+
+  @override
+  void dispose() {
+    _knobIsActive.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -42,68 +54,75 @@ class _LayerPanelState extends ConsumerState<LayerPanel> {
               ),
               const Divider(height: 1, color: Color(0xFF262636)),
               Expanded(
-                child: ReorderableListView.builder(
-                  padding: const EdgeInsets.symmetric(vertical: 4),
-                  buildDefaultDragHandles: false,
-                  itemCount: layers.length,
-                  onReorder: (oldIndex, newIndex) {
-                    if (newIndex > oldIndex) newIndex -= 1;
+                child: ValueListenableBuilder<bool>(
+                  valueListenable: _knobIsActive,
+                  builder: (context, knobActive, _) {
+                    return ReorderableListView.builder(
+                      scrollController: widget.scrollController,
+                      padding: const EdgeInsets.symmetric(vertical: 4),
+                      buildDefaultDragHandles: false,
+                      physics: knobActive
+                          ? const NeverScrollableScrollPhysics()
+                          : null,
+                      itemCount: layers.length,
+                      onReorder: (oldIndex, newIndex) {
+                        // ✅ no reorder while interacting with knobs
+                        if (knobActive) return;
 
-                    final newOrder = List<CanvasLayer>.from(layers);
-                    final moved = newOrder.removeAt(oldIndex);
-                    newOrder.insert(newIndex, moved);
+                        if (newIndex > oldIndex) newIndex -= 1;
 
-                    controller.reorderLayersByIds(
-                      newOrder.map((l) => l.id).toList(),
-                    );
-                  },
-                  itemBuilder: (context, index) {
-                    final layer = layers[index];
-                    final bool isActive = layer.id == activeId;
-                    final bool isOnlyLayer = layers.length == 1;
-                    final bool isExpanded = _expanded.contains(layer.id);
+                        final newOrder = List<CanvasLayer>.from(layers);
+                        final moved = newOrder.removeAt(oldIndex);
+                        newOrder.insert(newIndex, moved);
 
-                    return _LayerTile(
-                      key: ValueKey(layer.id),
-                      layer: layer,
-                      isActive: isActive,
-                      isOnlyLayer: isOnlyLayer,
-                      isExpanded: isExpanded,
-                      index: index,
-                      onSelect: () {
-                        controller.setActiveLayer(layer.id);
-                      },
-                      onToggleVisible: () {
-                        controller.setLayerVisibility(layer.id, !layer.visible);
-                      },
-                      onToggleLocked: () {
-                        controller.setLayerLocked(layer.id, !layer.locked);
-                      },
-                      onDelete: isOnlyLayer
-                          ? null
-                          : () {
-                              controller.removeLayer(layer.id);
-                            },
-                      onRename: () {
-                        _promptRenameLayer(context, controller, layer);
-                      },
-                      onToggleExpanded: () {
-                        setState(() {
-                          if (isExpanded) {
-                            _expanded.remove(layer.id);
-                          } else {
-                            _expanded.add(layer.id);
-                          }
-                        });
-                      },
-                      onTransformChanged: (tx) {
-                        controller.setLayerPosition(layer.id, tx.x, tx.y);
-                        controller.setLayerRotationDegrees(
-                          layer.id,
-                          tx.rotationDegrees,
+                        controller.reorderLayersByIds(
+                          newOrder.map((l) => l.id).toList(),
                         );
-                        controller.setLayerScale(layer.id, tx.scale);
-                        controller.setLayerOpacity(layer.id, tx.opacity);
+                      },
+                      itemBuilder: (context, index) {
+                        final layer = layers[index];
+                        final bool isActive = layer.id == activeId;
+                        final bool isOnlyLayer = layers.length == 1;
+                        final bool isExpanded = _expanded.contains(layer.id);
+
+                        return _LayerTile(
+                          key: ValueKey(layer.id),
+                          layer: layer,
+                          isActive: isActive,
+                          isOnlyLayer: isOnlyLayer,
+                          isExpanded: isExpanded,
+                          index: index,
+                          reorderEnabled: !knobActive, // ✅
+                          onAnyKnobInteraction: (active) {
+                            _knobIsActive.value = active;
+                          },
+                          onSelect: () => controller.setActiveLayer(layer.id),
+                          onToggleVisible: () => controller.setLayerVisibility(
+                              layer.id, !layer.visible),
+                          onToggleLocked: () => controller.setLayerLocked(
+                              layer.id, !layer.locked),
+                          onDelete: isOnlyLayer
+                              ? null
+                              : () => controller.removeLayer(layer.id),
+                          onRename: () =>
+                              _promptRenameLayer(context, controller, layer),
+                          onToggleExpanded: () {
+                            setState(() {
+                              if (isExpanded) {
+                                _expanded.remove(layer.id);
+                              } else {
+                                _expanded.add(layer.id);
+                              }
+                            });
+                          },
+                          onTransformChanged: (tx) {
+                            controller.setLayerPosition(layer.id, tx.x, tx.y);
+                            controller.setLayerRotationDegrees(
+                                layer.id, tx.rotationDegrees);
+                            controller.setLayerScale(layer.id, tx.scale);
+                            controller.setLayerOpacity(layer.id, tx.opacity);
+                          },
+                        );
                       },
                     );
                   },
@@ -131,9 +150,7 @@ class _LayerPanelHeader extends StatelessWidget {
     final cs = Theme.of(context).colorScheme;
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-      decoration: const BoxDecoration(
-        color: Color(0xFF11111C),
-      ),
+      decoration: const BoxDecoration(color: Color(0xFF11111C)),
       child: Row(
         children: [
           const Text(
@@ -153,10 +170,7 @@ class _LayerPanelHeader extends StatelessWidget {
             ),
             child: Text(
               '$layerCount',
-              style: const TextStyle(
-                color: Colors.white70,
-                fontSize: 11,
-              ),
+              style: const TextStyle(color: Colors.white70, fontSize: 11),
             ),
           ),
           const Spacer(),
@@ -165,9 +179,7 @@ class _LayerPanelHeader extends StatelessWidget {
             iconSize: 20,
             visualDensity: VisualDensity.compact,
             icon: Icon(Icons.add, color: cs.primary),
-            onPressed: () {
-              onAddLayer();
-            },
+            onPressed: () => onAddLayer(),
           ),
         ],
       ),
@@ -175,13 +187,12 @@ class _LayerPanelHeader extends StatelessWidget {
   }
 }
 
-/// Simple struct for transform values from the UI.
 class _LayerTransformValues {
   final double x;
   final double y;
   final double rotationDegrees;
   final double scale;
-  final double opacity; // 0.0 – 1.0
+  final double opacity;
 
   const _LayerTransformValues({
     required this.x,
@@ -216,6 +227,8 @@ class _LayerTile extends StatefulWidget {
     required this.isOnlyLayer,
     required this.isExpanded,
     required this.index,
+    required this.reorderEnabled,
+    required this.onAnyKnobInteraction,
     required this.onSelect,
     required this.onToggleVisible,
     required this.onToggleLocked,
@@ -230,6 +243,9 @@ class _LayerTile extends StatefulWidget {
   final bool isOnlyLayer;
   final bool isExpanded;
   final int index;
+
+  final bool reorderEnabled;
+  final ValueChanged<bool> onAnyKnobInteraction;
 
   final VoidCallback onSelect;
   final VoidCallback onToggleVisible;
@@ -260,9 +276,7 @@ class _LayerTileState extends State<_LayerTile> {
   }
 
   void _updateAndSend(_LayerTransformValues v) {
-    setState(() {
-      _values = v;
-    });
+    setState(() => _values = v);
     widget.onTransformChanged(v);
   }
 
@@ -285,20 +299,61 @@ class _LayerTileState extends State<_LayerTile> {
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
     final layer = widget.layer;
-    final isActive = widget.isActive;
-    final isExpanded = widget.isExpanded;
 
     final Color bgColor =
-        isActive ? const Color(0xFF1B2233) : Colors.transparent;
+        widget.isActive ? const Color(0xFF1B2233) : Colors.transparent;
     final Color borderColor =
-        isActive ? cs.primary.withOpacity(0.4) : Colors.white10;
+        widget.isActive ? cs.primary.withOpacity(0.4) : Colors.white10;
     final Color textColor =
         layer.visible ? Colors.white : Colors.white.withOpacity(0.5);
 
     final strokeCount = _strokeCount(layer);
 
+    Widget dragNameRow() {
+      final row = Row(
+        children: [
+          Container(
+            width: 16,
+            height: 16,
+            margin: const EdgeInsets.only(right: 6),
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(3),
+              color: layer.locked
+                  ? Colors.orange
+                  : (layer.visible ? cs.primary : Colors.grey),
+            ),
+          ),
+          Text(
+            '#${widget.index + 1}',
+            style: const TextStyle(color: Colors.white54, fontSize: 11),
+          ),
+          const SizedBox(width: 6),
+          ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 110),
+            child: Text(
+              layer.name,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                color: textColor,
+                fontWeight: widget.isActive ? FontWeight.bold : FontWeight.w500,
+                fontSize: 13,
+              ),
+            ),
+          ),
+        ],
+      );
+
+      // ✅ Disable drag handle entirely while knobs are active
+      if (!widget.reorderEnabled) return row;
+
+      return ReorderableDragStartListener(
+        index: widget.index,
+        child: row,
+      );
+    }
+
     return Container(
-      key: widget.key,
       margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
       decoration: BoxDecoration(
         color: bgColor,
@@ -314,51 +369,8 @@ class _LayerTileState extends State<_LayerTile> {
               padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
               child: Row(
                 children: [
-                  // Drag handle + name area
-                  ReorderableDragStartListener(
-                    index: widget.index,
-                    child: Row(
-                      children: [
-                        Container(
-                          width: 16,
-                          height: 16,
-                          margin: const EdgeInsets.only(right: 6),
-                          decoration: BoxDecoration(
-                            borderRadius: BorderRadius.circular(3),
-                            color: layer.locked
-                                ? Colors.orange
-                                : (layer.visible ? cs.primary : Colors.grey),
-                          ),
-                        ),
-                        Text(
-                          '#${widget.index + 1}',
-                          style: const TextStyle(
-                            color: Colors.white54,
-                            fontSize: 11,
-                          ),
-                        ),
-                        const SizedBox(width: 6),
-                        ConstrainedBox(
-                          constraints: const BoxConstraints(maxWidth: 110),
-                          child: Text(
-                            layer.name,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: TextStyle(
-                              color: textColor,
-                              fontWeight:
-                                  isActive ? FontWeight.bold : FontWeight.w500,
-                              fontSize: 13,
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-
+                  dragNameRow(),
                   const Spacer(),
-
-                  // Stroke count
                   Container(
                     padding:
                         const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
@@ -368,14 +380,11 @@ class _LayerTileState extends State<_LayerTile> {
                     ),
                     child: Text(
                       '$strokeCount',
-                      style: const TextStyle(
-                        color: Colors.white70,
-                        fontSize: 10,
-                      ),
+                      style:
+                          const TextStyle(color: Colors.white70, fontSize: 10),
                     ),
                   ),
                   const SizedBox(width: 4),
-
                   IconButton(
                     tooltip: layer.visible ? 'Hide layer' : 'Show layer',
                     iconSize: 18,
@@ -386,7 +395,6 @@ class _LayerTileState extends State<_LayerTile> {
                       color: Colors.white70,
                     ),
                   ),
-
                   IconButton(
                     tooltip: layer.locked ? 'Unlock layer' : 'Lock layer',
                     iconSize: 18,
@@ -398,19 +406,14 @@ class _LayerTileState extends State<_LayerTile> {
                           layer.locked ? Colors.orangeAccent : Colors.white70,
                     ),
                   ),
-
                   IconButton(
                     tooltip: 'Rename layer',
                     iconSize: 18,
                     visualDensity: VisualDensity.compact,
                     onPressed: widget.onRename,
-                    icon: const Icon(
-                      Icons.edit,
-                      color: Colors.white70,
-                      size: 18,
-                    ),
+                    icon:
+                        const Icon(Icons.edit, color: Colors.white70, size: 18),
                   ),
-
                   IconButton(
                     tooltip: widget.isOnlyLayer
                         ? 'Cannot delete last layer'
@@ -426,14 +429,15 @@ class _LayerTileState extends State<_LayerTile> {
                       size: 18,
                     ),
                   ),
-
                   IconButton(
-                    tooltip: isExpanded ? 'Hide transforms' : 'Show transforms',
+                    tooltip: widget.isExpanded
+                        ? 'Hide transforms'
+                        : 'Show transforms',
                     iconSize: 18,
                     visualDensity: VisualDensity.compact,
                     onPressed: widget.onToggleExpanded,
                     icon: Icon(
-                      isExpanded
+                      widget.isExpanded
                           ? Icons.keyboard_arrow_down
                           : Icons.keyboard_arrow_up,
                       color: Colors.white70,
@@ -443,12 +447,11 @@ class _LayerTileState extends State<_LayerTile> {
               ),
             ),
           ),
-
-          // Expanded transform controls
-          if (isExpanded)
+          if (widget.isExpanded)
             _LayerTransformEditor(
               values: _values,
               onChanged: _updateAndSend,
+              onAnyKnobInteraction: widget.onAnyKnobInteraction,
             ),
         ],
       ),
@@ -468,211 +471,86 @@ class _LayerTransformEditor extends StatelessWidget {
   const _LayerTransformEditor({
     required this.values,
     required this.onChanged,
+    required this.onAnyKnobInteraction,
   });
 
   final _LayerTransformValues values;
   final ValueChanged<_LayerTransformValues> onChanged;
+  final ValueChanged<bool> onAnyKnobInteraction;
 
   @override
   Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
-
-    Widget buildNumberField({
-      required String label,
-      required double value,
-      required void Function(double) onValue,
-      double width = 70,
-    }) {
-      final controller = TextEditingController(text: value.toStringAsFixed(2));
-      return SizedBox(
-        width: width,
-        child: TextField(
-          controller: controller,
-          keyboardType: const TextInputType.numberWithOptions(
-              signed: true, decimal: true),
-          style: const TextStyle(color: Colors.white, fontSize: 11),
-          decoration: InputDecoration(
-            labelText: label,
-            labelStyle: const TextStyle(
-              color: Colors.white54,
-              fontSize: 10,
-            ),
-            isDense: true,
-            contentPadding:
-                const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
-            enabledBorder: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(6),
-              borderSide: const BorderSide(color: Colors.white24),
-            ),
-            focusedBorder: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(6),
-              borderSide: BorderSide(color: cs.primary),
-            ),
-          ),
-          onSubmitted: (text) {
-            final parsed = double.tryParse(text);
-            if (parsed != null) {
-              onValue(parsed);
-            }
-          },
-        ),
-      );
-    }
-
     return Container(
-      padding: const EdgeInsets.fromLTRB(10, 0, 10, 8),
+      padding: const EdgeInsets.fromLTRB(10, 10, 10, 10),
       decoration: const BoxDecoration(
         color: Color(0xFF151524),
-        borderRadius: BorderRadius.vertical(
-          bottom: Radius.circular(10),
-        ),
+        borderRadius: BorderRadius.vertical(bottom: Radius.circular(10)),
       ),
       child: Column(
         children: [
-          const SizedBox(height: 4),
-
-          // SCALE (own row)
-          Row(
+          Wrap(
+            alignment: WrapAlignment.center,
+            spacing: 10,
+            runSpacing: 10,
             children: [
-              buildNumberField(
-                label: 'Scale',
-                value: values.scale,
-                onValue: (v) =>
-                    onChanged(values.copyWith(scale: v.clamp(0.1, 5.0))),
-              ),
-              const SizedBox(width: 8),
-              Expanded(
-                child: SliderTheme(
-                  data: SliderTheme.of(context).copyWith(
-                    trackHeight: 3,
-                    thumbShape:
-                        const RoundSliderThumbShape(enabledThumbRadius: 6),
-                  ),
-                  child: Slider(
-                    min: 0.1,
-                    max: 5.0,
-                    value: values.scale.clamp(0.1, 5.0),
-                    onChanged: (v) => onChanged(values.copyWith(scale: v)),
-                  ),
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 4),
-
-          // X (own row)
-          Row(
-            children: [
-              buildNumberField(
+              SynthKnob(
                 label: 'X',
-                value: values.x,
-                onValue: (v) => onChanged(values.copyWith(x: v)),
+                value: values.x.clamp(-500, 500),
+                min: -500,
+                max: 500,
+                defaultValue: 0,
+                valueFormatter: (v) => v.toStringAsFixed(0),
+                onInteractionChanged: onAnyKnobInteraction,
+                onChanged: (v) => onChanged(values.copyWith(x: v)),
               ),
-              const SizedBox(width: 8),
-              Expanded(
-                child: SliderTheme(
-                  data: SliderTheme.of(context).copyWith(
-                    trackHeight: 3,
-                    thumbShape:
-                        const RoundSliderThumbShape(enabledThumbRadius: 6),
-                  ),
-                  child: Slider(
-                    min: -500,
-                    max: 500,
-                    value: values.x.clamp(-500, 500),
-                    onChanged: (v) => onChanged(values.copyWith(x: v)),
-                  ),
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 4),
-
-          // Y (own row)
-          Row(
-            children: [
-              buildNumberField(
+              SynthKnob(
                 label: 'Y',
-                value: values.y,
-                onValue: (v) => onChanged(values.copyWith(y: v)),
+                value: values.y.clamp(-500, 500),
+                min: -500,
+                max: 500,
+                defaultValue: 0,
+                valueFormatter: (v) => v.toStringAsFixed(0),
+                onInteractionChanged: onAnyKnobInteraction,
+                onChanged: (v) => onChanged(values.copyWith(y: v)),
               ),
-              const SizedBox(width: 8),
-              Expanded(
-                child: SliderTheme(
-                  data: SliderTheme.of(context).copyWith(
-                    trackHeight: 3,
-                    thumbShape:
-                        const RoundSliderThumbShape(enabledThumbRadius: 6),
-                  ),
-                  child: Slider(
-                    min: -500,
-                    max: 500,
-                    value: values.y.clamp(-500, 500),
-                    onChanged: (v) => onChanged(values.copyWith(y: v)),
-                  ),
-                ),
+              SynthKnob(
+                label: 'Scale',
+                value: values.scale.clamp(0.1, 5.0),
+                min: 0.1,
+                max: 5.0,
+                defaultValue: 1.0,
+                valueFormatter: (v) => v.toStringAsFixed(2),
+                onInteractionChanged: onAnyKnobInteraction,
+                onChanged: (v) => onChanged(values.copyWith(scale: v)),
               ),
-            ],
-          ),
-          const SizedBox(height: 4),
-
-          // ROTATION (own row)
-          Row(
-            children: [
-              buildNumberField(
-                label: 'Rot°',
-                value: values.rotationDegrees,
-                onValue: (v) => onChanged(values.copyWith(rotationDegrees: v)),
+              SynthKnob(
+                label: 'Rot',
+                value: values.rotationDegrees.clamp(-360, 360),
+                min: -360,
+                max: 360,
+                defaultValue: 0.0,
+                valueFormatter: (v) => '${v.toStringAsFixed(0)}°',
+                onInteractionChanged: onAnyKnobInteraction,
+                onChanged: (v) =>
+                    onChanged(values.copyWith(rotationDegrees: v)),
               ),
-              const SizedBox(width: 8),
-              Expanded(
-                child: SliderTheme(
-                  data: SliderTheme.of(context).copyWith(
-                    trackHeight: 3,
-                    thumbShape:
-                        const RoundSliderThumbShape(enabledThumbRadius: 6),
-                  ),
-                  child: Slider(
-                    min: -360,
-                    max: 360,
-                    value: values.rotationDegrees.clamp(-360, 360),
-                    onChanged: (v) =>
-                        onChanged(values.copyWith(rotationDegrees: v)),
-                  ),
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 4),
-
-          // OPACITY (0.0–1.0, own row)
-          Row(
-            children: [
-              buildNumberField(
+              SynthKnob(
                 label: 'Opacity',
-                value: values.opacity,
-                onValue: (v) {
-                  final clamped = v.clamp(0.0, 1.0);
-                  onChanged(values.copyWith(opacity: clamped));
-                },
-              ),
-              const SizedBox(width: 8),
-              Expanded(
-                child: SliderTheme(
-                  data: SliderTheme.of(context).copyWith(
-                    trackHeight: 3,
-                    thumbShape:
-                        const RoundSliderThumbShape(enabledThumbRadius: 6),
-                  ),
-                  child: Slider(
-                    min: 0.0,
-                    max: 1.0,
-                    value: values.opacity.clamp(0.0, 1.0),
-                    onChanged: (v) => onChanged(values.copyWith(opacity: v)),
-                  ),
-                ),
+                value: values.opacity.clamp(0.0, 1.0),
+                min: 0.0,
+                max: 1.0,
+                defaultValue: 1.0,
+                valueFormatter: (v) => '${(v * 100).round()}%',
+                onInteractionChanged: onAnyKnobInteraction,
+                onChanged: (v) => onChanged(values.copyWith(opacity: v)),
               ),
             ],
+          ),
+          const SizedBox(height: 8),
+          const Text(
+            'Tip: long-press a knob to type an exact value • double-tap to reset',
+            style: TextStyle(color: Colors.white38, fontSize: 10),
+            textAlign: TextAlign.center,
           ),
         ],
       ),
@@ -692,10 +570,8 @@ Future<void> _promptRenameLayer(
     builder: (ctx) {
       return AlertDialog(
         backgroundColor: const Color(0xFF1C1C24),
-        title: const Text(
-          'Rename layer',
-          style: TextStyle(color: Colors.white),
-        ),
+        title:
+            const Text('Rename layer', style: TextStyle(color: Colors.white)),
         content: TextField(
           controller: textController,
           autofocus: true,

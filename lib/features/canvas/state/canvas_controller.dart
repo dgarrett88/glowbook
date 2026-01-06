@@ -1,9 +1,9 @@
-// lib/features/canvas/state/canvas_controller.dart
 import 'dart:math' as math;
 import 'dart:ui' show Size;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter/scheduler.dart';
 
 import '../../../core/models/brush.dart';
 import '../../../core/models/canvas_document_bundle.dart';
@@ -39,13 +39,10 @@ class _StrokeHit {
   final int groupIndex;
 
   /// Mirror flags for the *variant that was hit*.
-  /// mirrorX == mirrored across vertical axis (flip X)
-  /// mirrorY == mirrored across horizontal axis (flip Y)
   final bool mirrorX;
   final bool mirrorY;
 
-  /// ✅ The closest point ON THE HIT SEGMENT (in the hit-variant world space).
-  /// This becomes the "truth" grab anchor for scaling/rotating so it doesn't drift.
+  /// The closest point on the hit segment in hit-variant world space.
   final Offset grabWorld;
 
   const _StrokeHit({
@@ -66,9 +63,54 @@ class _SymVariant {
   const _SymVariant(this.pts, {required this.mirrorX, required this.mirrorY});
 }
 
+// -----------------------------------------------------------------------------
+// Rotation animation state (constant only for now; LFO later)
+// -----------------------------------------------------------------------------
+
+class LayerRotationAnim {
+  final bool constantEnabled;
+  final double constantDegPerSec;
+
+  const LayerRotationAnim({
+    this.constantEnabled = false,
+    this.constantDegPerSec = 0.0,
+  });
+
+  LayerRotationAnim copyWith({
+    bool? constantEnabled,
+    double? constantDegPerSec,
+  }) {
+    return LayerRotationAnim(
+      constantEnabled: constantEnabled ?? this.constantEnabled,
+      constantDegPerSec: constantDegPerSec ?? this.constantDegPerSec,
+    );
+  }
+
+  bool get isActive => constantEnabled && constantDegPerSec.abs() > 0.000001;
+}
+
 class CanvasController extends ChangeNotifier {
   CanvasController() {
     gb.GlowBlendState.I.addListener(_handleBlendChanged);
+
+    _ticker = Ticker(_onTick);
+
+    // -----------------------------------------------------------------------
+    // DEV VISUAL TOGGLE:
+    // If you want to SEE it immediately, set this true.
+    // It will auto-spin layer-main after app starts / newDocument.
+    // -----------------------------------------------------------------------
+    _maybeDevEnableSpin = true;
+
+    if (_maybeDevEnableSpin) {
+      // Make sure the default layer is actually spinning immediately on launch
+      _layerRotation['layer-main'] = const LayerRotationAnim(
+          constantEnabled: true, constantDegPerSec: 25.0);
+
+      _renderer.rebuildFromLayers(_state.layers);
+      _ensureTickerState();
+      _tick();
+    }
   }
 
   final ValueNotifier<int> repaint = ValueNotifier<int>(0);
@@ -125,9 +167,60 @@ class CanvasController extends ChangeNotifier {
     }
   }
 
+  // ---------------------------------------------------------------------------
+  // TIME SOURCE for animation
+  // ---------------------------------------------------------------------------
+
+  late final Ticker _ticker;
+  double _timeSec = 0.0;
+  bool _tickerRunning = false;
+
+  // DEV toggle (see constructor)
+  late bool _maybeDevEnableSpin;
+
+  // Per-layer anim config
+  final Map<String, LayerRotationAnim> _layerRotation = {};
+
+  void _onTick(Duration elapsed) {
+    _timeSec = elapsed.inMicroseconds / 1000000.0;
+    // repaint only; no notifyListeners needed for UI panels
+    _tick();
+  }
+
+  void _ensureTickerState() {
+    final anyActive = _layerRotation.values.any((a) => a.isActive);
+    if (anyActive && !_tickerRunning) {
+      _ticker.start();
+      _tickerRunning = true;
+    } else if (!anyActive && _tickerRunning) {
+      _ticker.stop();
+      _tickerRunning = false;
+      _timeSec = 0.0;
+      _tick(); // final repaint to settle
+    }
+  }
+
+  // This is what the renderer calls:
+  double _layerExtraRotationRadians(String layerId) {
+    final anim = _layerRotation[layerId];
+    if (anim == null || !anim.isActive) return 0.0;
+
+    // constant deg/sec * time
+    final deg = anim.constantDegPerSec * _timeSec;
+
+    // keep it bounded to avoid huge floats over long sessions
+    final wrapped = deg % 360.0;
+
+    return wrapped * math.pi / 180.0;
+  }
+
+  String? _selectedStrokeIdFn() => _selectedStrokeId;
+
   late final Renderer _renderer = Renderer(
     repaint,
     () => symmetry,
+    layerExtraRotationRadians: _layerExtraRotationRadians,
+    selectedStrokeIdFn: _selectedStrokeIdFn,
   );
 
   List<Stroke> get strokes => List.unmodifiable(_state.allStrokes);
@@ -191,7 +284,7 @@ class CanvasController extends ChangeNotifier {
   }
 
   // ---------------------------------------------------------------------------
-  // SELECTION MODE
+  // SELECTION MODE (UNCHANGED)
   // ---------------------------------------------------------------------------
 
   bool selectionMode = false;
@@ -200,11 +293,9 @@ class CanvasController extends ChangeNotifier {
   String? _selectedLayerId;
   int? _selectedGroupIndex;
 
-  // ✅ Which symmetry variant was selected becomes "truth"
   bool _selectedMirrorX = false;
   bool _selectedMirrorY = false;
 
-  // ✅ "Grab anchor" (WORLD) pinned to closest point on the stroke segment.
   Offset? _selectionAnchorWorld;
 
   bool get hasSelection => _selectedStrokeId != null;
@@ -212,13 +303,10 @@ class CanvasController extends ChangeNotifier {
   bool _isDraggingSelection = false;
   Offset? _selectionDragLastWorld;
 
-  // Gesture (pinch/rotate) state
   bool _isSelectionGesturing = false;
   bool get isSelectionGesturing => _isSelectionGesturing;
 
   List<PointSample>? _gestureStartLocalPoints;
-
-  // ✅ Pivot in LOCAL (stroke) space for gesture transforms
   Offset? _gestureStartPivotLocal;
 
   double _gestureLastScale = 1.0;
@@ -256,7 +344,6 @@ class CanvasController extends ChangeNotifier {
     notifyListeners();
   }
 
-  // Used by CanvasScreen to stop draw/select pointers when a gesture begins
   void cancelActivePointer() {
     final pid = _activePointerId;
     if (pid != null) cancelPointer(pid);
@@ -356,23 +443,6 @@ class CanvasController extends ChangeNotifier {
     return unrotated + pivot;
   }
 
-  Stroke _strokeWithTransformedPoints(
-      Stroke s, LayerTransform t, Offset pivot) {
-    final opacityMul = t.opacity.clamp(0.0, 1.0);
-
-    final pts = <PointSample>[];
-    for (final p in s.points) {
-      final world = _forwardTransformPoint(Offset(p.x, p.y), t, pivot);
-      pts.add(PointSample(world.dx, world.dy, p.t));
-    }
-
-    return s.copyWith(
-      points: pts,
-      coreOpacity: (s.coreOpacity * opacityMul).clamp(0.0, 1.0),
-      glowOpacity: (s.glowOpacity * opacityMul).clamp(0.0, 1.0),
-    );
-  }
-
   void _recordStrokeCreation(Stroke s) {
     for (final layer in _state.layers) {
       for (int gi = 0; gi < layer.groups.length; gi++) {
@@ -410,7 +480,7 @@ class CanvasController extends ChangeNotifier {
   }
 
   // ---------------------------------------------------------------------------
-  // SELECTION: MIRROR/TRUTH CORRECTIONS
+  // SELECTION: MIRROR/TRUTH CORRECTIONS (UNCHANGED)
   // ---------------------------------------------------------------------------
 
   Offset _correctedWorldDelta(Offset d) {
@@ -425,7 +495,7 @@ class CanvasController extends ChangeNotifier {
   }
 
   // ---------------------------------------------------------------------------
-  // SELECTION: HIT TEST + MOVE (+ symmetry copies)
+  // SELECTION: HIT TEST + MOVE (+ symmetry copies) (UNCHANGED)
   // ---------------------------------------------------------------------------
 
   Offset _mirrorV(Offset p, double cx) => Offset(2 * cx - p.dx, p.dy);
@@ -474,7 +544,6 @@ class CanvasController extends ChangeNotifier {
     }
   }
 
-  // Closest-point projection of p onto segment ab
   Offset _closestPointOnSegment(Offset p, Offset a, Offset b) {
     final ab = b - a;
     final ap = p - a;
@@ -531,7 +600,7 @@ class CanvasController extends ChangeNotifier {
                     groupIndex: gi,
                     mirrorX: variant.mirrorX,
                     mirrorY: variant.mirrorY,
-                    grabWorld: cp, // ✅ TRUE grab anchor on the stroke
+                    grabWorld: cp,
                   );
                 }
               }
@@ -555,11 +624,9 @@ class CanvasController extends ChangeNotifier {
     _selectedLayerId = hit.layerId;
     _selectedGroupIndex = hit.groupIndex;
 
-    // ✅ Store which symmetry variant became "truth"
     _selectedMirrorX = hit.mirrorX;
     _selectedMirrorY = hit.mirrorY;
 
-    // ✅ Anchor is NOW the closest point ON the stroke (not raw finger pos)
     _selectionAnchorWorld = hit.grabWorld;
 
     notifyListeners();
@@ -574,7 +641,6 @@ class CanvasController extends ChangeNotifier {
     final layerIndex = _state.layers.indexWhere((l) => l.id == layerId);
     if (layerIndex < 0) return;
 
-    // Mirror-truth correction (WORLD) before converting to LOCAL
     final correctedWorldDelta = _correctedWorldDelta(deltaWorld);
 
     final layers = List<CanvasLayer>.from(_state.layers);
@@ -621,20 +687,18 @@ class CanvasController extends ChangeNotifier {
 
     _ensureLayerPivotPersisted(layerId);
 
-    _renderer.rebuildFrom(_state.allStrokes);
+    _renderer.rebuildFromLayers(_state.layers);
     _hasUnsavedChanges = true;
     _tick();
     notifyListeners();
   }
 
-  // 1-finger drag (selection)
   void selectionPointerDown(int pointer, Offset worldPos) {
     if (_activePointerId != null) return;
     if (_isSelectionGesturing) return;
 
     _activePointerId = pointer;
 
-    // sets selection + mirror flags + anchor (true on-stroke grab point)
     selectAtWorld(worldPos);
     if (!hasSelection) return;
 
@@ -655,9 +719,6 @@ class CanvasController extends ChangeNotifier {
 
     if (delta.distanceSquared < 0.25) return;
     _moveSelectedByWorldDelta(delta);
-
-    // ✅ keep anchor following finger-1 during drag, so pinch pivot feels consistent
-    // _selectionAnchorWorld = worldPos;
   }
 
   void selectionPointerUp(int pointer) {
@@ -668,20 +729,14 @@ class CanvasController extends ChangeNotifier {
     _selectionDragLastWorld = null;
   }
 
-  /// Called by CanvasScreen when the 2-finger gesture ends while finger-1
-  /// is still down. Keeps the stroke grabbed and prevents jump.
   void selectionResumeDragAt(Offset worldPos) {
     if (!selectionMode || !hasSelection) return;
-    if (_activePointerId == null) return; // finger-1 not down
+    if (_activePointerId == null) return;
 
     _isDraggingSelection = true;
     _selectionDragLastWorld = worldPos;
-
-    // ✅ make next pinch start feel "locked" to finger-1 again
-    // _selectionAnchorWorld = worldPos;
   }
 
-  // 2-finger scale/rotate (selection)
   void selectionGestureStart({
     required Offset focalWorld,
     required double scale,
@@ -704,25 +759,19 @@ class CanvasController extends ChangeNotifier {
     final si = group.strokes.indexWhere((s) => s.id == strokeId);
     if (si < 0) return;
 
-    // store initial points (LOCAL space)
     _gestureStartLocalPoints = List<PointSample>.from(group.strokes[si].points);
 
-    // ✅ Pivot should be the true grab anchor (WORLD) if available.
     final anchorWorld = _selectionAnchorWorld ?? focalWorld;
 
-    // If a mirrored variant was selected, convert anchorWorld (variant space)
-    // back into base-world before converting to LOCAL.
     Offset pivotWorld = anchorWorld;
     if (_canvasSize != Size.zero) {
       final cx = _canvasSize.width / 2.0;
       final cy = _canvasSize.height / 2.0;
 
-      // "Unmirror" back to base
       if (_selectedMirrorX) pivotWorld = _mirrorV(pivotWorld, cx);
       if (_selectedMirrorY) pivotWorld = _mirrorH(pivotWorld, cy);
     }
 
-    // convert pivot (WORLD) -> LOCAL (stroke space)
     final tr = layer.transform;
     final isIdentity = _isIdentityTransform(tr);
     final pivotLayer = isIdentity
@@ -777,13 +826,11 @@ class CanvasController extends ChangeNotifier {
 
     final ds = (scale <= 0.0001) ? 1.0 : scale;
 
-    // Mirror-truth corrected rotation
     final ang = _correctedRotation(rotation);
 
     final cosA = math.cos(ang);
     final sinA = math.sin(ang);
 
-    // Apply scale + rotation around pivotLocal ONLY (no translation)
     final newPts = <PointSample>[];
     for (final p in startPts) {
       final v = Offset(p.x, p.y) - pivotLocal;
@@ -808,7 +855,7 @@ class CanvasController extends ChangeNotifier {
 
     _ensureLayerPivotPersisted(layerId);
 
-    _renderer.rebuildFrom(_state.allStrokes);
+    _renderer.rebuildFromLayers(_state.layers);
     _hasUnsavedChanges = true;
     _tick();
     notifyListeners();
@@ -827,7 +874,6 @@ class CanvasController extends ChangeNotifier {
     notifyListeners();
   }
 
-  // Called on PointerCancel from CanvasScreen
   void cancelPointer(int pointer) {
     if (_activePointerId == pointer) {
       _activePointerId = null;
@@ -842,7 +888,7 @@ class CanvasController extends ChangeNotifier {
   }
 
   // ---------------------------------------------------------------------------
-  // BRUSH / GLOW / BACKGROUND
+  // BRUSH / GLOW / BACKGROUND (unchanged)
   // ---------------------------------------------------------------------------
 
   void setBrushGlow(double value) {
@@ -967,7 +1013,43 @@ class CanvasController extends ChangeNotifier {
   }
 
   // ---------------------------------------------------------------------------
-  // LAYER MANAGEMENT
+  // LAYER ROTATION API (new, safe)
+  // ---------------------------------------------------------------------------
+
+  /// Enable/disable constant rotation for a specific layer.
+  /// Does not change active layer and does not affect selection logic.
+  void setLayerConstantRotation(
+    String layerId, {
+    required bool enabled,
+    required double degPerSec,
+  }) {
+    final prev = _layerRotation[layerId] ?? const LayerRotationAnim();
+    _layerRotation[layerId] = prev.copyWith(
+      constantEnabled: enabled,
+      constantDegPerSec: degPerSec,
+    );
+
+    // If we changed an animation state, baked cache might need recalculation.
+    _renderer.rebuildFromLayers(_state.layers);
+
+    _ensureTickerState();
+    _tick();
+  }
+
+  /// Convenience: toggle constant rotation on the active layer.
+  void toggleActiveLayerConstantRotation({double degPerSec = 25.0}) {
+    final id = activeLayerId;
+    final prev = _layerRotation[id] ?? const LayerRotationAnim();
+    final nextEnabled = !prev.constantEnabled;
+    setLayerConstantRotation(
+      id,
+      enabled: nextEnabled,
+      degPerSec: nextEnabled ? degPerSec : 0.0,
+    );
+  }
+
+  // ---------------------------------------------------------------------------
+  // LAYER MANAGEMENT (unchanged except renderer rebuild call)
   // ---------------------------------------------------------------------------
 
   void setActiveLayer(String id) {
@@ -1011,7 +1093,7 @@ class CanvasController extends ChangeNotifier {
       activeLayerId: id,
     );
 
-    _renderer.rebuildFrom(_state.allStrokes);
+    _renderer.rebuildFromLayers(_state.layers);
     _hasUnsavedChanges = true;
     _tick();
     notifyListeners();
@@ -1039,9 +1121,13 @@ class CanvasController extends ChangeNotifier {
     _history.removeWhere((loc) => loc.layerId == id);
     _redoLocations.removeWhere((loc) => loc.layerId == id);
 
+    // cleanup rotation state
+    _layerRotation.remove(id);
+    _ensureTickerState();
+
     if (_selectedLayerId == id) clearSelection();
 
-    _renderer.rebuildFrom(_state.allStrokes);
+    _renderer.rebuildFromLayers(_state.layers);
     _hasUnsavedChanges = true;
     _tick();
     notifyListeners();
@@ -1060,7 +1146,7 @@ class CanvasController extends ChangeNotifier {
 
     _ensureLayerPivotPersisted(id);
 
-    _renderer.rebuildFrom(_state.allStrokes);
+    _renderer.rebuildFromLayers(_state.layers);
     _hasUnsavedChanges = true;
     _tick();
     notifyListeners();
@@ -1106,7 +1192,7 @@ class CanvasController extends ChangeNotifier {
 
     _ensureLayerPivotPersisted(id);
 
-    _renderer.rebuildFrom(_state.allStrokes);
+    _renderer.rebuildFromLayers(_state.layers);
     _hasUnsavedChanges = true;
     _tick();
     notifyListeners();
@@ -1130,7 +1216,7 @@ class CanvasController extends ChangeNotifier {
 
     _ensureLayerPivotPersisted(id);
 
-    _renderer.rebuildFrom(_state.allStrokes);
+    _renderer.rebuildFromLayers(_state.layers);
     _tick();
     notifyListeners();
   }
@@ -1151,7 +1237,7 @@ class CanvasController extends ChangeNotifier {
 
     _ensureLayerPivotPersisted(id);
 
-    _renderer.rebuildFrom(_state.allStrokes);
+    _renderer.rebuildFromLayers(_state.layers);
     _hasUnsavedChanges = true;
     _tick();
     notifyListeners();
@@ -1173,29 +1259,7 @@ class CanvasController extends ChangeNotifier {
 
     _ensureLayerPivotPersisted(id);
 
-    _renderer.rebuildFrom(_state.allStrokes);
-    _hasUnsavedChanges = true;
-    _tick();
-    notifyListeners();
-  }
-
-  void moveLayer(int fromIndex, int toIndex) {
-    if (fromIndex == toIndex) return;
-
-    final layers = List<CanvasLayer>.from(_state.layers);
-    if (fromIndex < 0 ||
-        fromIndex >= layers.length ||
-        toIndex < 0 ||
-        toIndex >= layers.length) {
-      return;
-    }
-
-    final moved = layers.removeAt(fromIndex);
-    layers.insert(toIndex, moved);
-
-    _state = _state.copyWith(layers: layers);
-
-    _renderer.rebuildFrom(_state.allStrokes);
+    _renderer.rebuildFromLayers(_state.layers);
     _hasUnsavedChanges = true;
     _tick();
     notifyListeners();
@@ -1215,14 +1279,14 @@ class CanvasController extends ChangeNotifier {
 
     _state = _state.copyWith(layers: newLayers);
 
-    _renderer.rebuildFrom(_state.allStrokes);
+    _renderer.rebuildFromLayers(_state.layers);
     _hasUnsavedChanges = true;
     _tick();
     notifyListeners();
   }
 
   // ---------------------------------------------------------------------------
-  // DRAWING FLOW (store LOCAL, preview/bake WORLD)
+  // DRAWING FLOW (store LOCAL; renderer transforms to WORLD)
   // ---------------------------------------------------------------------------
 
   void pointerDown(int pointer, Offset pos) {
@@ -1271,10 +1335,7 @@ class CanvasController extends ChangeNotifier {
       symmetryId: _symmetryId(symmetry),
     );
 
-    final sLocal = _current!;
-    final preview =
-        isIdentity ? sLocal : _strokeWithTransformedPoints(sLocal, tr, pivot);
-    _renderer.beginStroke(preview);
+    _renderer.beginStroke(_current!, layer.id, layer.transform);
     _tick();
   }
 
@@ -1299,9 +1360,7 @@ class CanvasController extends ChangeNotifier {
         isIdentity ? pos : _inverseTransformPoint(pos, tr, pivot);
     sLocal.points.add(PointSample(localPoint.dx, localPoint.dy, tMs));
 
-    final preview =
-        isIdentity ? sLocal : _strokeWithTransformedPoints(sLocal, tr, pivot);
-    _renderer.updateStroke(preview);
+    _renderer.updateStroke(sLocal);
     _tick();
   }
 
@@ -1313,21 +1372,12 @@ class CanvasController extends ChangeNotifier {
     if (sLocal == null) return;
     _current = null;
 
-    final layer = activeLayer;
-    final tr = layer.transform;
-    final isIdentity = _isIdentityTransform(tr);
-
-    Offset pivot = Offset.zero;
-    if (!isIdentity) {
-      pivot = tr.pivot ?? _computeBoundsPivotForLayer(layer);
-    }
-
-    final bakeStroke =
-        isIdentity ? sLocal : _strokeWithTransformedPoints(sLocal, tr, pivot);
-    _renderer.commitStroke(bakeStroke);
+    _renderer.commitStroke();
 
     _state = _addStrokeToActiveLayer(_state, sLocal);
     _recordStrokeCreation(sLocal);
+
+    _renderer.rebuildFromLayers(_state.layers);
 
     _hasUnsavedChanges = true;
     _tick();
@@ -1441,7 +1491,8 @@ class CanvasController extends ChangeNotifier {
       _ensureLayerPivotPersisted(l.id);
     }
 
-    _renderer.rebuildFrom(_state.allStrokes);
+    _renderer.rebuildFromLayers(_state.layers);
+    _ensureTickerState();
     _tick();
     notifyListeners();
   }
@@ -1463,7 +1514,20 @@ class CanvasController extends ChangeNotifier {
     _suppressBlendDirty = true;
     gb.GlowBlendState.I.setMode(gb.GlowBlend.additive);
 
-    _renderer.rebuildFrom(_state.allStrokes);
+    for (final l in _state.layers) {
+      _ensureLayerPivotPersisted(l.id);
+    }
+
+    // DEV: optional auto spin so you can see it working
+    if (_maybeDevEnableSpin) {
+      _layerRotation['layer-main'] =
+          const LayerRotationAnim(constantEnabled: true, constantDegPerSec: 25);
+    } else {
+      _layerRotation.remove('layer-main');
+    }
+
+    _renderer.rebuildFromLayers(_state.layers);
+    _ensureTickerState();
     _tick();
     notifyListeners();
   }
@@ -1474,7 +1538,7 @@ class CanvasController extends ChangeNotifier {
   }
 
   // ---------------------------------------------------------------------------
-  // UNDO / REDO
+  // UNDO / REDO (only renderer rebuild call changed)
   // ---------------------------------------------------------------------------
 
   void undo() {
@@ -1518,7 +1582,7 @@ class CanvasController extends ChangeNotifier {
 
     _ensureLayerPivotPersisted(lastLoc.layerId);
 
-    _renderer.rebuildFrom(_state.allStrokes);
+    _renderer.rebuildFromLayers(_state.layers);
     _hasUnsavedChanges = true;
     _tick();
     notifyListeners();
@@ -1559,7 +1623,7 @@ class CanvasController extends ChangeNotifier {
 
     _ensureLayerPivotPersisted(loc.layerId);
 
-    _renderer.rebuildFrom(_state.allStrokes);
+    _renderer.rebuildFromLayers(_state.layers);
     _hasUnsavedChanges = true;
     _tick();
     notifyListeners();
@@ -1586,7 +1650,7 @@ class CanvasController extends ChangeNotifier {
       _ensureLayerPivotPersisted(l.id);
     }
 
-    _renderer.rebuildFrom(_state.allStrokes);
+    _renderer.rebuildFromLayers(_state.layers);
     _tick();
     notifyListeners();
   }
@@ -1594,6 +1658,8 @@ class CanvasController extends ChangeNotifier {
   @override
   void dispose() {
     gb.GlowBlendState.I.removeListener(_handleBlendChanged);
+    if (_tickerRunning) _ticker.stop();
+    _ticker.dispose();
     super.dispose();
   }
 }

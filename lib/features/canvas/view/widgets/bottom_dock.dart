@@ -1,6 +1,9 @@
 import 'package:flutter/material.dart';
+
 import '../../state/canvas_controller.dart';
 import '../../state/glow_blend.dart' as gb;
+
+import '../layer_panel.dart'; // widgets -> view
 import 'glow_blend_dropdown.dart';
 
 import 'brush_hud.dart';
@@ -10,7 +13,10 @@ import 'dice_dots_icon.dart';
 class BottomDock extends StatefulWidget {
   final CanvasController controller;
 
+  /// ✅ kept for backwards-compat with canvas_screen.dart
   final bool showLayers;
+
+  /// ✅ kept for backwards-compat with canvas_screen.dart
   final VoidCallback onToggleLayers;
 
   const BottomDock({
@@ -28,11 +34,16 @@ class _BottomDockState extends State<BottomDock> {
   final PageController _page = PageController();
   int _pageIndex = 0;
 
+  // ✅ lets us resize programmatically from the handle drag
+  final DraggableScrollableController _layersSheetCtrl =
+      DraggableScrollableController();
+
   CanvasController get controller => widget.controller;
 
   @override
   void dispose() {
     _page.dispose();
+    _layersSheetCtrl.dispose();
     super.dispose();
   }
 
@@ -40,7 +51,6 @@ class _BottomDockState extends State<BottomDock> {
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
 
-    // ✅ IMPORTANT: always reflect real controller state (selectionMode, colors, etc.)
     return AnimatedBuilder(
       animation: controller,
       builder: (context, _) {
@@ -128,8 +138,9 @@ class _BottomDockState extends State<BottomDock> {
                                     initial: Color(controller.color),
                                   ),
                                 );
-                                if (picked != null)
-                                  controller.setColor(picked.value);
+                                if (picked != null) {
+                                  controller.setColor(picked.toARGB32());
+                                }
                               },
                             ),
                             _DockButton(
@@ -152,7 +163,8 @@ class _BottomDockState extends State<BottomDock> {
                                   ),
                                 );
                                 if (picked != null) {
-                                  controller.setBackgroundColor(picked.value);
+                                  controller
+                                      .setBackgroundColor(picked.toARGB32());
                                 }
                               },
                             ),
@@ -176,7 +188,10 @@ class _BottomDockState extends State<BottomDock> {
                                     : Colors.white,
                               ),
                               label: 'Layers',
-                              onTap: widget.onToggleLayers,
+                              // ✅ OPTION A: open resizable sheet
+                              onTap: () => _openLayersSheet(context),
+                              // long-press keeps your old toggle behaviour
+                              onLongPress: widget.onToggleLayers,
                             ),
                             _DockButton(
                               customIcon: Icon(
@@ -233,6 +248,77 @@ class _BottomDockState extends State<BottomDock> {
               ),
             ),
           ),
+        );
+      },
+    );
+  }
+
+  void _openLayersSheet(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+
+    // ✅ EDIT THESE:
+    const double kInitial = 0.42; // default height
+    const double kMin = 0.22; // smallest
+    const double kMax = 0.85; // biggest
+
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      isScrollControlled: true,
+      builder: (ctx) {
+        final screenH = MediaQuery.of(ctx).size.height;
+
+        return DraggableScrollableSheet(
+          controller: _layersSheetCtrl,
+          initialChildSize: kInitial,
+          minChildSize: kMin,
+          maxChildSize: kMax,
+          expand: false,
+          builder: (context, scrollController) {
+            return ClipRRect(
+              borderRadius:
+                  const BorderRadius.vertical(top: Radius.circular(16)),
+              child: Container(
+                decoration: BoxDecoration(
+                  color: cs.surface,
+                  borderRadius:
+                      const BorderRadius.vertical(top: Radius.circular(16)),
+                ),
+                child: Column(
+                  children: [
+                    // ✅ drag handle that ALWAYS resizes the sheet (not the list)
+                    GestureDetector(
+                      behavior: HitTestBehavior.opaque,
+                      onVerticalDragUpdate: (d) {
+                        // drag up => bigger
+                        final delta = -d.delta.dy / screenH;
+                        final next =
+                            (_layersSheetCtrl.size + delta).clamp(kMin, kMax);
+                        _layersSheetCtrl.jumpTo(next);
+                      },
+                      child: Padding(
+                        padding: const EdgeInsets.only(top: 10, bottom: 8),
+                        child: Container(
+                          width: 44,
+                          height: 5,
+                          decoration: BoxDecoration(
+                            color: Colors.white.withValues(alpha: 0.25),
+                            borderRadius: BorderRadius.circular(999),
+                          ),
+                        ),
+                      ),
+                    ),
+
+                    Expanded(
+                      child: LayerPanel(
+                        scrollController: scrollController,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            );
+          },
         );
       },
     );
@@ -317,7 +403,7 @@ class _BottomDockState extends State<BottomDock> {
             child: Container(
               margin: const EdgeInsets.only(bottom: 4),
               decoration: BoxDecoration(
-                color: cs.surface.withOpacity(0.95),
+                color: cs.surface.withValues(alpha: 0.95),
                 borderRadius:
                     const BorderRadius.vertical(top: Radius.circular(12)),
                 boxShadow: const [
@@ -420,7 +506,6 @@ class _SymRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
     return ListTile(
       leading: icon,
       title: Text(label),
@@ -428,7 +513,6 @@ class _SymRow extends StatelessWidget {
         onTap();
         Navigator.of(context).pop();
       },
-      iconColor: cs.primary,
     );
   }
 }
