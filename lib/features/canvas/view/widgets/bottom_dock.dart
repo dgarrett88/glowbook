@@ -1,4 +1,6 @@
+import 'dart:math' as math;
 import 'package:flutter/material.dart';
+import 'package:flutter/physics.dart';
 
 import '../../state/canvas_controller.dart';
 import '../../state/glow_blend.dart' as gb;
@@ -30,20 +32,37 @@ class BottomDock extends StatefulWidget {
   State<BottomDock> createState() => _BottomDockState();
 }
 
-class _BottomDockState extends State<BottomDock> {
+class _BottomDockState extends State<BottomDock>
+    with SingleTickerProviderStateMixin {
   final PageController _page = PageController();
   int _pageIndex = 0;
 
-  // ✅ lets us resize programmatically from the handle drag
+  // ✅ lets us resize programmatically from the handle/header drag
   final DraggableScrollableController _layersSheetCtrl =
       DraggableScrollableController();
 
+  // ✅ inertial/snap animation for the sheet size
+  late final AnimationController _sheetAnim;
+
   CanvasController get controller => widget.controller;
+
+  @override
+  void initState() {
+    super.initState();
+
+    // Drive the sheet size directly from this controller's value.
+    _sheetAnim = AnimationController.unbounded(vsync: this)
+      ..addListener(() {
+        if (!_layersSheetCtrl.isAttached) return;
+        _layersSheetCtrl.jumpTo(_sheetAnim.value);
+      });
+  }
 
   @override
   void dispose() {
     _page.dispose();
     _layersSheetCtrl.dispose();
+    _sheetAnim.dispose();
     super.dispose();
   }
 
@@ -188,9 +207,7 @@ class _BottomDockState extends State<BottomDock> {
                                     : Colors.white,
                               ),
                               label: 'Layers',
-                              // ✅ OPTION A: open resizable sheet
                               onTap: () => _openLayersSheet(context),
-                              // long-press keeps your old toggle behaviour
                               onLongPress: widget.onToggleLayers,
                             ),
                             _DockButton(
@@ -220,6 +237,153 @@ class _BottomDockState extends State<BottomDock> {
           ),
         );
       },
+    );
+  }
+
+  // --- snap + motion helpers -------------------------------------------------
+  // NOTE: We are intentionally NOT using these for handle/header anymore.
+  // Handle/header now live inside the same scrollable as the list, so they
+  // inherit the exact same "smooth glide" feel as the layers area.
+
+  void _stopSheetMotion() {
+    if (_sheetAnim.isAnimating) _sheetAnim.stop();
+  }
+
+  double _pickSnapTarget({
+    required double current,
+    required double v, // fraction/sec (positive = grow, negative = shrink)
+    required List<double> snaps,
+    required double minSize,
+  }) {
+    final s = snaps.toList()..sort();
+
+    // Find nearest snap index
+    int nearestIndex = 0;
+    double bestDist = double.infinity;
+    for (int i = 0; i < s.length; i++) {
+      final d = (current - s[i]).abs();
+      if (d < bestDist) {
+        bestDist = d;
+        nearestIndex = i;
+      }
+    }
+
+    const double closeThreshold = 0.15; // ✅ only close near bottom
+    const double flickThreshold = 0.22;
+    const double dragBias = 0.04; // how far user must drag past snap
+
+    double prevSnap() => s[(nearestIndex - 1).clamp(0, s.length - 1)];
+    double nextSnap() => s[(nearestIndex + 1).clamp(0, s.length - 1)];
+
+    // ---- Flick behaviour ----
+    if (v.abs() >= flickThreshold) {
+      if (v > 0) {
+        return nextSnap();
+      } else {
+        if (current <= closeThreshold) return minSize;
+
+        final p = prevSnap();
+        if (p <= minSize + 1e-6) {
+          return s.length > 1 ? s[1] : minSize;
+        }
+        return p;
+      }
+    }
+
+    // ---- Gentle drag behaviour ----
+    if (v < 0 && current < s[nearestIndex] - dragBias) {
+      final p = prevSnap();
+      if (p <= minSize + 1e-6 && current > closeThreshold) {
+        return s.length > 1 ? s[1] : minSize;
+      }
+      return p;
+    }
+
+    if (v > 0 && current > s[nearestIndex] + dragBias) {
+      return nextSnap();
+    }
+
+    final nearest = s[nearestIndex];
+    if (nearest <= minSize + 1e-6 && current > closeThreshold) {
+      return s.length > 1 ? s[1] : minSize;
+    }
+
+    return nearest;
+  }
+
+  void _springTo({
+    required double from,
+    required double to,
+    required double velocity, // fraction/sec
+    required double minSize,
+    required double maxSize,
+  }) {
+    final clampedTo = to.clamp(minSize, maxSize);
+
+    const spring = SpringDescription(
+      mass: 1.0,
+      stiffness: 720.0,
+      damping: 62.0,
+    );
+
+    _sheetAnim
+      ..stop()
+      ..value = from;
+
+    _sheetAnim.animateWith(
+      _ClampedSpringSimulation(
+        SpringSimulation(spring, from, clampedTo, velocity),
+        minSize,
+        maxSize,
+      ),
+    );
+  }
+
+  void _startReleaseMotion({
+    required double screenH,
+    required double minSize,
+    required double maxSize,
+    required double velocityPixelsPerSecondDy,
+    required List<double> snapPoints,
+  }) {
+    if (!_layersSheetCtrl.isAttached) return;
+
+    final current = _layersSheetCtrl.size;
+    final vRaw = (-velocityPixelsPerSecondDy) / screenH;
+
+    const double vCap = 2.0;
+    const double vScale = 1.35;
+    final v = vCap * _tanh(vRaw / vScale);
+
+    const double glideDrag = 1.65;
+
+    final projected = _projectFrictionEnd(
+      x0: current,
+      v0: v,
+      drag: glideDrag,
+      minSize: minSize,
+      maxSize: maxSize,
+    );
+
+    final target = _pickSnapTarget(
+      current: current,
+      v: v,
+      snaps: snapPoints,
+      minSize: minSize,
+    );
+
+    final better = _nearestSnap(projected, snapPoints);
+
+    final chosen = ((projected - better).abs() <= (projected - target).abs())
+        ? better
+        : target;
+
+    _springTo(
+      from: current,
+      to: chosen,
+      velocity: v,
+      minSize: minSize,
+      maxSize: maxSize,
     );
   }
 
@@ -253,21 +417,60 @@ class _BottomDockState extends State<BottomDock> {
     );
   }
 
+  double _projectFrictionEnd({
+    required double x0,
+    required double v0,
+    required double drag,
+    required double minSize,
+    required double maxSize,
+  }) {
+    final sim = FrictionSimulation(drag, x0, v0);
+
+    double t = 0.0;
+    for (int i = 0; i < 120; i++) {
+      t += 1 / 60;
+      if (sim.isDone(t)) break;
+    }
+
+    return sim.x(t).clamp(minSize, maxSize);
+  }
+
+  double _nearestSnap(double x, List<double> snaps) {
+    final s = snaps.toList()..sort();
+    double best = s.first;
+    double bestDist = (x - best).abs();
+    for (final p in s) {
+      final d = (x - p).abs();
+      if (d < bestDist) {
+        bestDist = d;
+        best = p;
+      }
+    }
+    return best;
+  }
+
   void _openLayersSheet(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
 
-    // ✅ EDIT THESE:
-    const double kInitial = 0.42; // default height
-    const double kMin = 0.22; // smallest
-    const double kMax = 0.85; // biggest
+    // ✅ SHEET BEHAVIOUR
+    const double kInitial = 0.42;
+    const double kMin = 0.15; // ✅ close point higher
+    const double kMax = 0.90;
+
+    // ✅ SNAP STOPS (still used if you later re-enable snapping)
+    const List<double> kSnaps = <double>[
+      kMin,
+      0.30,
+      kInitial,
+      0.62,
+      kMax,
+    ];
 
     showModalBottomSheet(
       context: context,
       backgroundColor: Colors.transparent,
       isScrollControlled: true,
       builder: (ctx) {
-        final screenH = MediaQuery.of(ctx).size.height;
-
         return DraggableScrollableSheet(
           controller: _layersSheetCtrl,
           initialChildSize: kInitial,
@@ -286,32 +489,14 @@ class _BottomDockState extends State<BottomDock> {
                 ),
                 child: Column(
                   children: [
-                    // ✅ drag handle that ALWAYS resizes the sheet (not the list)
-                    GestureDetector(
-                      behavior: HitTestBehavior.opaque,
-                      onVerticalDragUpdate: (d) {
-                        // drag up => bigger
-                        final delta = -d.delta.dy / screenH;
-                        final next =
-                            (_layersSheetCtrl.size + delta).clamp(kMin, kMax);
-                        _layersSheetCtrl.jumpTo(next);
-                      },
-                      child: Padding(
-                        padding: const EdgeInsets.only(top: 10, bottom: 8),
-                        child: Container(
-                          width: 44,
-                          height: 5,
-                          decoration: BoxDecoration(
-                            color: Colors.white.withValues(alpha: 0.25),
-                            borderRadius: BorderRadius.circular(999),
-                          ),
-                        ),
-                      ),
-                    ),
-
+                    // ✅ KEY CHANGE:
+                    // We no longer drag from handle/header manually.
+                    // Handle + header are now inside LayerPanel's scrollable header,
+                    // so they feel EXACTLY like dragging the layers area.
                     Expanded(
                       child: LayerPanel(
                         scrollController: scrollController,
+                        showHeader: true, // ✅ now LayerPanel owns header+handle
                       ),
                     ),
                   ],
@@ -463,6 +648,8 @@ class _BottomDockState extends State<BottomDock> {
   }
 }
 
+// --- Small widgets -----------------------------------------------------------
+
 class _DockRow extends StatelessWidget {
   final List<Widget> children;
   const _DockRow({required this.children});
@@ -556,4 +743,40 @@ class _DockButton extends StatelessWidget {
       ),
     );
   }
+}
+
+/// Clamp spring motion so it never exceeds sheet bounds.
+class _ClampedSpringSimulation extends Simulation {
+  final SpringSimulation _inner;
+  final double minX;
+  final double maxX;
+
+  _ClampedSpringSimulation(this._inner, this.minX, this.maxX);
+
+  @override
+  double x(double time) => _inner.x(time).clamp(minX, maxX);
+
+  @override
+  double dx(double time) {
+    final raw = _inner.x(time);
+    if (raw < minX || raw > maxX) return 0.0;
+    return _inner.dx(time);
+  }
+
+  @override
+  bool isDone(double time) {
+    final raw = _inner.x(time);
+    if (raw < minX || raw > maxX) return true;
+    return _inner.isDone(time);
+  }
+}
+
+/// Hyperbolic tangent for older SDKs without math.tanh.
+double _tanh(double x) {
+  if (x > 10) return 1.0;
+  if (x < -10) return -1.0;
+
+  final ex = math.exp(x);
+  final emx = 1.0 / ex;
+  return (ex - emx) / (ex + emx);
 }

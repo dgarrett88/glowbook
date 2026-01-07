@@ -32,6 +32,18 @@ class _StrokeLocation {
   });
 }
 
+class _StrokeRef {
+  final String layerId;
+  final int groupIndex;
+  final String strokeId;
+
+  const _StrokeRef({
+    required this.layerId,
+    required this.groupIndex,
+    required this.strokeId,
+  });
+}
+
 /// Hit test result for selection (base stroke + which symmetry variant was hit).
 class _StrokeHit {
   final String strokeId;
@@ -347,6 +359,104 @@ class CanvasController extends ChangeNotifier {
   void cancelActivePointer() {
     final pid = _activePointerId;
     if (pid != null) cancelPointer(pid);
+  }
+
+  /// Select a stroke from UI (Layer panel) without hit-testing.
+  /// This is the "Figma click the stroke row" behaviour.
+  void selectStrokeRef(String layerId, int groupIndex, String strokeId) {
+    // Turn selection mode on automatically (feels better for panel tapping).
+    if (!selectionMode) selectionMode = true;
+
+    _selectedLayerId = layerId;
+    _selectedGroupIndex = groupIndex;
+    _selectedStrokeId = strokeId;
+
+    // Panel selection is always the "truth" (not a mirrored variant)
+    _selectedMirrorX = false;
+    _selectedMirrorY = false;
+
+    // No anchor from panel selection (anchor comes from hit-test normally)
+    _selectionAnchorWorld = null;
+
+    notifyListeners();
+  }
+
+  /// Change stroke thickness (size) from UI.
+  void setStrokeSizeRef(
+    String layerId,
+    int groupIndex,
+    String strokeId,
+    double newSize,
+  ) {
+    final li = _state.layers.indexWhere((l) => l.id == layerId);
+    if (li < 0) return;
+
+    final layers = List<CanvasLayer>.from(_state.layers);
+    final layer = layers[li];
+
+    if (groupIndex < 0 || groupIndex >= layer.groups.length) return;
+
+    final groups = List<StrokeGroup>.from(layer.groups);
+    final group = groups[groupIndex];
+
+    final strokes = List<Stroke>.from(group.strokes);
+    final si = strokes.indexWhere((s) => s.id == strokeId);
+    if (si < 0) return;
+
+    final clamped = newSize.clamp(0.5, 200.0).toDouble();
+    strokes[si] = strokes[si].copyWith(size: clamped);
+
+    groups[groupIndex] = group.copyWith(strokes: strokes);
+    layers[li] = layer.copyWith(groups: groups);
+    _state = _state.copyWith(layers: layers);
+
+    _renderer.rebuildFromLayers(_state.layers);
+    _hasUnsavedChanges = true;
+    _tick();
+    notifyListeners();
+  }
+
+  /// Delete stroke from UI.
+  void deleteStrokeRef(String layerId, int groupIndex, String strokeId) {
+    final li = _state.layers.indexWhere((l) => l.id == layerId);
+    if (li < 0) return;
+
+    final layers = List<CanvasLayer>.from(_state.layers);
+    final layer = layers[li];
+
+    if (groupIndex < 0 || groupIndex >= layer.groups.length) return;
+
+    final groups = List<StrokeGroup>.from(layer.groups);
+    final group = groups[groupIndex];
+
+    final strokes = List<Stroke>.from(group.strokes);
+    final si = strokes.indexWhere((s) => s.id == strokeId);
+    if (si < 0) return;
+
+    strokes.removeAt(si);
+
+    groups[groupIndex] = group.copyWith(strokes: strokes);
+    layers[li] = layer.copyWith(groups: groups);
+    _state = _state.copyWith(layers: layers);
+
+    // clean history/redo so undo/redo doesn’t resurrect deleted IDs weirdly
+    _history.removeWhere((h) =>
+        h.layerId == layerId &&
+        h.groupIndex == groupIndex &&
+        h.strokeId == strokeId);
+    _redoLocations.removeWhere((h) =>
+        h.layerId == layerId &&
+        h.groupIndex == groupIndex &&
+        h.strokeId == strokeId);
+
+    if (_selectedStrokeId == strokeId) {
+      clearSelection();
+    }
+
+    _renderer.rebuildFromLayers(_state.layers);
+    _hasUnsavedChanges = true;
+    _tick();
+    notifyListeners();
   }
 
   // ---------------------------------------------------------------------------
@@ -1049,6 +1159,85 @@ class CanvasController extends ChangeNotifier {
   }
 
   // ---------------------------------------------------------------------------
+  // STROKE UPDATE API (for LayerPanel stroke rows, future groups, etc.)
+  // ---------------------------------------------------------------------------
+
+  /// Update a stroke anywhere in the document by id.
+  /// This is the one function the UI can call for stroke knobs (size/glow/etc).
+  void updateStrokeById(
+    String layerId,
+    int groupIndex,
+    String strokeId,
+    Stroke Function(Stroke s) update,
+  ) {
+    final layerIndex = _state.layers.indexWhere((l) => l.id == layerId);
+    if (layerIndex < 0) return;
+
+    final layers = List<CanvasLayer>.from(_state.layers);
+    final layer = layers[layerIndex];
+
+    if (groupIndex < 0 || groupIndex >= layer.groups.length) return;
+
+    final groups = List<StrokeGroup>.from(layer.groups);
+    final group = groups[groupIndex];
+
+    final strokes = List<Stroke>.from(group.strokes);
+    final si = strokes.indexWhere((s) => s.id == strokeId);
+    if (si < 0) return;
+
+    strokes[si] = update(strokes[si]);
+
+    groups[groupIndex] = group.copyWith(strokes: strokes);
+    layers[layerIndex] = layer.copyWith(groups: groups);
+    _state = _state.copyWith(layers: layers);
+
+    _ensureLayerPivotPersisted(layerId);
+
+    _renderer.rebuildFromLayers(_state.layers);
+    _hasUnsavedChanges = true;
+    _tick();
+    notifyListeners();
+  }
+
+  /// Convenience: find the stroke's group automatically (slower, but easy).
+  /// Use this if your UI only knows layerId + strokeId (no group index).
+  void updateStrokeByIdAuto(
+    String layerId,
+    String strokeId,
+    Stroke Function(Stroke s) update,
+  ) {
+    final layerIndex = _state.layers.indexWhere((l) => l.id == layerId);
+    if (layerIndex < 0) return;
+
+    final layer = _state.layers[layerIndex];
+    for (int gi = 0; gi < layer.groups.length; gi++) {
+      final group = layer.groups[gi];
+      final si = group.strokes.indexWhere((s) => s.id == strokeId);
+      if (si != -1) {
+        updateStrokeById(layerId, gi, strokeId, update);
+        return;
+      }
+    }
+  }
+
+  /// Helper for the UI: flatten strokes for a layer but still keep their group index.
+  /// This gives you a "Figma-like list" without changing your data model yet.
+  List<StrokeRef> strokesForLayer(String layerId) {
+    final layerIndex = _state.layers.indexWhere((l) => l.id == layerId);
+    if (layerIndex < 0) return const [];
+
+    final layer = _state.layers[layerIndex];
+    final out = <StrokeRef>[];
+    for (int gi = 0; gi < layer.groups.length; gi++) {
+      final g = layer.groups[gi];
+      for (final s in g.strokes) {
+        out.add(StrokeRef(layerId: layerId, groupIndex: gi, stroke: s));
+      }
+    }
+    return out;
+  }
+
+  // ---------------------------------------------------------------------------
   // LAYER MANAGEMENT (unchanged except renderer rebuild call)
   // ---------------------------------------------------------------------------
 
@@ -1662,4 +1851,17 @@ class CanvasController extends ChangeNotifier {
     _ticker.dispose();
     super.dispose();
   }
+}
+
+/// Small DTO for UI lists: stroke + where it lives.
+class StrokeRef {
+  final String layerId;
+  final int groupIndex;
+  final Stroke stroke;
+
+  const StrokeRef({
+    required this.layerId,
+    required this.groupIndex,
+    required this.stroke,
+  });
 }

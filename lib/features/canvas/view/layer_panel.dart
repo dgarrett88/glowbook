@@ -5,13 +5,22 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../state/canvas_controller.dart' as canvas_state;
 import '../../../core/models/canvas_layer.dart';
+import '../../../core/models/stroke.dart';
 
 import 'widgets/synth_knob.dart';
 
 class LayerPanel extends ConsumerStatefulWidget {
-  const LayerPanel({super.key, this.scrollController});
+  const LayerPanel({
+    super.key,
+    this.scrollController,
+    this.showHeader = true,
+  });
 
   final ScrollController? scrollController;
+
+  /// ✅ When used inside the draggable sheet, BottomDock provides its own header.
+  /// Set this false to avoid the double header.
+  final bool showHeader;
 
   @override
   ConsumerState<LayerPanel> createState() => _LayerPanelState();
@@ -46,89 +55,107 @@ class _LayerPanelState extends ConsumerState<LayerPanel> {
               top: BorderSide(color: Color(0xFF303040)),
             ),
           ),
-          child: Column(
-            children: [
-              _LayerPanelHeader(
-                layerCount: layers.length,
-                onAddLayer: controller.addLayer,
-              ),
-              const Divider(height: 1, color: Color(0xFF262636)),
-              Expanded(
-                child: ValueListenableBuilder<bool>(
-                  valueListenable: _knobIsActive,
-                  builder: (context, knobActive, _) {
-                    return ReorderableListView.builder(
-                      scrollController: widget.scrollController,
-                      padding: const EdgeInsets.symmetric(vertical: 4),
-                      buildDefaultDragHandles: false,
-                      physics: knobActive
-                          ? const NeverScrollableScrollPhysics()
-                          : null,
-                      itemCount: layers.length,
-                      onReorder: (oldIndex, newIndex) {
-                        // ✅ no reorder while interacting with knobs
-                        if (knobActive) return;
+          child: ValueListenableBuilder<bool>(
+            valueListenable: _knobIsActive,
+            builder: (context, knobActive, _) {
+              return ReorderableListView.builder(
+                scrollController: widget.scrollController,
+                padding: const EdgeInsets.symmetric(vertical: 4),
+                buildDefaultDragHandles: false,
+                physics:
+                    knobActive ? const NeverScrollableScrollPhysics() : null,
+                itemCount: layers.length,
 
-                        if (newIndex > oldIndex) newIndex -= 1;
+                // ✅ KEY CHANGE:
+                // Putting grip + header INSIDE the list header means dragging them
+                // feels exactly like dragging the layers area (same scroll physics).
+                header: widget.showHeader
+                    ? Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Padding(
+                            padding: const EdgeInsets.only(top: 10, bottom: 8),
+                            child: Center(
+                              child: Container(
+                                width: 44,
+                                height: 5,
+                                decoration: BoxDecoration(
+                                  color: Colors.white.withOpacity(0.25),
+                                  borderRadius: BorderRadius.circular(999),
+                                ),
+                              ),
+                            ),
+                          ),
+                          _LayerPanelHeader(
+                            layerCount: layers.length,
+                            onAddLayer: controller.addLayer,
+                          ),
+                          const Divider(height: 1, color: Color(0xFF262636)),
+                        ],
+                      )
+                    : null,
 
-                        final newOrder = List<CanvasLayer>.from(layers);
-                        final moved = newOrder.removeAt(oldIndex);
-                        newOrder.insert(newIndex, moved);
+                onReorder: (oldIndex, newIndex) {
+                  // ✅ no reorder while interacting with knobs
+                  if (knobActive) return;
 
-                        controller.reorderLayersByIds(
-                          newOrder.map((l) => l.id).toList(),
-                        );
-                      },
-                      itemBuilder: (context, index) {
-                        final layer = layers[index];
-                        final bool isActive = layer.id == activeId;
-                        final bool isOnlyLayer = layers.length == 1;
-                        final bool isExpanded = _expanded.contains(layer.id);
+                  if (newIndex > oldIndex) newIndex -= 1;
 
-                        return _LayerTile(
-                          key: ValueKey(layer.id),
-                          layer: layer,
-                          isActive: isActive,
-                          isOnlyLayer: isOnlyLayer,
-                          isExpanded: isExpanded,
-                          index: index,
-                          reorderEnabled: !knobActive, // ✅
-                          onAnyKnobInteraction: (active) {
-                            _knobIsActive.value = active;
-                          },
-                          onSelect: () => controller.setActiveLayer(layer.id),
-                          onToggleVisible: () => controller.setLayerVisibility(
-                              layer.id, !layer.visible),
-                          onToggleLocked: () => controller.setLayerLocked(
-                              layer.id, !layer.locked),
-                          onDelete: isOnlyLayer
-                              ? null
-                              : () => controller.removeLayer(layer.id),
-                          onRename: () =>
-                              _promptRenameLayer(context, controller, layer),
-                          onToggleExpanded: () {
-                            setState(() {
-                              if (isExpanded) {
-                                _expanded.remove(layer.id);
-                              } else {
-                                _expanded.add(layer.id);
-                              }
-                            });
-                          },
-                          onTransformChanged: (tx) {
-                            controller.setLayerPosition(layer.id, tx.x, tx.y);
-                            controller.setLayerRotationDegrees(
-                                layer.id, tx.rotationDegrees);
-                            controller.setLayerScale(layer.id, tx.scale);
-                            controller.setLayerOpacity(layer.id, tx.opacity);
-                          },
-                        );
-                      },
-                    );
-                  },
-                ),
-              ),
-            ],
+                  final newOrder = List<CanvasLayer>.from(layers);
+                  final moved = newOrder.removeAt(oldIndex);
+                  newOrder.insert(newIndex, moved);
+
+                  controller.reorderLayersByIds(
+                    newOrder.map((l) => l.id).toList(),
+                  );
+                },
+                itemBuilder: (context, index) {
+                  final layer = layers[index];
+                  final bool isActive = layer.id == activeId;
+                  final bool isOnlyLayer = layers.length == 1;
+                  final bool isExpanded = _expanded.contains(layer.id);
+
+                  return _LayerTile(
+                    key: ValueKey(layer.id),
+                    layer: layer,
+                    isActive: isActive,
+                    isOnlyLayer: isOnlyLayer,
+                    isExpanded: isExpanded,
+                    index: index,
+                    reorderEnabled: !knobActive, // ✅
+                    onAnyKnobInteraction: (active) {
+                      _knobIsActive.value = active;
+                    },
+                    onSelect: () => controller.setActiveLayer(layer.id),
+                    onToggleVisible: () =>
+                        controller.setLayerVisibility(layer.id, !layer.visible),
+                    onToggleLocked: () =>
+                        controller.setLayerLocked(layer.id, !layer.locked),
+                    onDelete: isOnlyLayer
+                        ? null
+                        : () => controller.removeLayer(layer.id),
+                    onRename: () =>
+                        _promptRenameLayer(context, controller, layer),
+                    onToggleExpanded: () {
+                      setState(() {
+                        if (isExpanded) {
+                          _expanded.remove(layer.id);
+                        } else {
+                          _expanded.add(layer.id);
+                        }
+                      });
+                    },
+                    onTransformChanged: (tx) {
+                      controller.setLayerPosition(layer.id, tx.x, tx.y);
+                      controller.setLayerRotationDegrees(
+                          layer.id, tx.rotationDegrees);
+                      controller.setLayerScale(layer.id, tx.scale);
+                      controller.setLayerOpacity(layer.id, tx.opacity);
+                    },
+                  );
+                },
+              );
+            },
           ),
         ),
       ),
@@ -186,6 +213,8 @@ class _LayerPanelHeader extends StatelessWidget {
     );
   }
 }
+
+// ------------------ rest of your file unchanged ------------------
 
 class _LayerTransformValues {
   final double x;
@@ -447,12 +476,19 @@ class _LayerTileState extends State<_LayerTile> {
               ),
             ),
           ),
-          if (widget.isExpanded)
+          if (widget.isExpanded) ...[
             _LayerTransformEditor(
               values: _values,
               onChanged: _updateAndSend,
               onAnyKnobInteraction: widget.onAnyKnobInteraction,
             ),
+            const SizedBox(height: 6),
+            _StrokeList(
+              layer: layer,
+              layerId: layer.id,
+              onAnyKnobInteraction: widget.onAnyKnobInteraction,
+            ),
+          ],
         ],
       ),
     );
@@ -597,5 +633,200 @@ Future<void> _promptRenameLayer(
 
   if (result != null && result.isNotEmpty) {
     controller.renameLayer(layer.id, result);
+  }
+}
+
+class _StrokeList extends ConsumerWidget {
+  const _StrokeList({
+    required this.layer,
+    required this.layerId,
+    required this.onAnyKnobInteraction,
+  });
+
+  final CanvasLayer layer;
+  final String layerId;
+  final ValueChanged<bool> onAnyKnobInteraction;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final controller = ref.watch(canvas_state.canvasControllerProvider);
+
+    // For now: show only Group 0 (matches how you currently add strokes).
+    // Later we’ll show group headers + allow grouping.
+    final int gi = 0;
+    if (layer.groups.isEmpty) return const SizedBox.shrink();
+    if (gi >= layer.groups.length) return const SizedBox.shrink();
+
+    final strokes = layer.groups[gi].strokes;
+    if (strokes.isEmpty) {
+      return Padding(
+        padding: const EdgeInsets.only(bottom: 10),
+        child: Text(
+          'No strokes yet',
+          style: TextStyle(color: Colors.white.withOpacity(0.35), fontSize: 11),
+        ),
+      );
+    }
+
+    return Container(
+      margin: const EdgeInsets.fromLTRB(10, 0, 10, 10),
+      padding: const EdgeInsets.fromLTRB(8, 8, 8, 8),
+      decoration: BoxDecoration(
+        color: const Color(0xFF0F0F18),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: Colors.white10),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Text(
+            'Strokes (${strokes.length})',
+            style: const TextStyle(
+              color: Colors.white70,
+              fontSize: 11,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+          const SizedBox(height: 6),
+
+          // simple list (no reorder yet)
+          for (final s in strokes.reversed) // newest on top feels nicer
+            _StrokeTile(
+              key: ValueKey(s.id),
+              layerId: layerId,
+              groupIndex: gi,
+              stroke: s,
+              onAnyKnobInteraction: onAnyKnobInteraction,
+              onSelect: () => controller.selectStrokeRef(layerId, gi, s.id),
+              onDelete: () => controller.deleteStrokeRef(layerId, gi, s.id),
+              onSizeChanged: (v) =>
+                  controller.setStrokeSizeRef(layerId, gi, s.id, v),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+class _StrokeTile extends StatefulWidget {
+  const _StrokeTile({
+    super.key,
+    required this.layerId,
+    required this.groupIndex,
+    required this.stroke,
+    required this.onAnyKnobInteraction,
+    required this.onSelect,
+    required this.onDelete,
+    required this.onSizeChanged,
+  });
+
+  final String layerId;
+  final int groupIndex;
+  final Stroke stroke;
+
+  final ValueChanged<bool> onAnyKnobInteraction;
+  final VoidCallback onSelect;
+  final VoidCallback onDelete;
+  final ValueChanged<double> onSizeChanged;
+
+  @override
+  State<_StrokeTile> createState() => _StrokeTileState();
+}
+
+class _StrokeTileState extends State<_StrokeTile> {
+  bool _expanded = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final s = widget.stroke;
+
+    return Container(
+      margin: const EdgeInsets.symmetric(vertical: 3),
+      decoration: BoxDecoration(
+        color: const Color(0xFF151524),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: Colors.white10),
+      ),
+      child: Column(
+        children: [
+          InkWell(
+            borderRadius: BorderRadius.circular(10),
+            onTap: widget.onSelect,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+              child: Row(
+                children: [
+                  Container(
+                    width: 14,
+                    height: 14,
+                    decoration: BoxDecoration(
+                      color: Color(s.color),
+                      borderRadius: BorderRadius.circular(4),
+                      border: Border.all(color: Colors.white24),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      '${s.brushId} • ${s.id}',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style:
+                          const TextStyle(color: Colors.white70, fontSize: 11),
+                    ),
+                  ),
+                  const SizedBox(width: 6),
+                  Text(
+                    '${s.size.toStringAsFixed(1)}',
+                    style: const TextStyle(color: Colors.white38, fontSize: 10),
+                  ),
+                  IconButton(
+                    tooltip: 'Delete stroke',
+                    iconSize: 18,
+                    visualDensity: VisualDensity.compact,
+                    onPressed: widget.onDelete,
+                    icon: const Icon(Icons.delete, color: Colors.redAccent),
+                  ),
+                  IconButton(
+                    tooltip: _expanded ? 'Hide' : 'Edit',
+                    iconSize: 18,
+                    visualDensity: VisualDensity.compact,
+                    onPressed: () => setState(() => _expanded = !_expanded),
+                    icon: Icon(
+                      _expanded
+                          ? Icons.keyboard_arrow_down
+                          : Icons.keyboard_arrow_up,
+                      color: Colors.white70,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          if (_expanded)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(10, 0, 10, 10),
+              child: Wrap(
+                alignment: WrapAlignment.center,
+                spacing: 10,
+                runSpacing: 10,
+                children: [
+                  SynthKnob(
+                    label: 'Size',
+                    value: s.size.clamp(0.5, 200.0),
+                    min: 0.5,
+                    max: 200.0,
+                    defaultValue: 10.0,
+                    valueFormatter: (v) => v.toStringAsFixed(1),
+                    onInteractionChanged: widget.onAnyKnobInteraction,
+                    onChanged: widget.onSizeChanged,
+                  ),
+                  // Later: opacity, glow params, etc.
+                ],
+              ),
+            ),
+        ],
+      ),
+    );
   }
 }
