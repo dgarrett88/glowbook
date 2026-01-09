@@ -32,18 +32,6 @@ class _StrokeLocation {
   });
 }
 
-class _StrokeRef {
-  final String layerId;
-  final int groupIndex;
-  final String strokeId;
-
-  const _StrokeRef({
-    required this.layerId,
-    required this.groupIndex,
-    required this.strokeId,
-  });
-}
-
 /// Hit test result for selection (base stroke + which symmetry variant was hit).
 class _StrokeHit {
   final String strokeId;
@@ -107,17 +95,14 @@ class CanvasController extends ChangeNotifier {
 
     _ticker = Ticker(_onTick);
 
-    // -----------------------------------------------------------------------
-    // DEV VISUAL TOGGLE:
-    // If you want to SEE it immediately, set this true.
-    // It will auto-spin layer-main after app starts / newDocument.
-    // -----------------------------------------------------------------------
-    _maybeDevEnableSpin = true;
+    // DEV VISUAL TOGGLE
+    _maybeDevEnableSpin = false;
 
     if (_maybeDevEnableSpin) {
-      // Make sure the default layer is actually spinning immediately on launch
       _layerRotation['layer-main'] = const LayerRotationAnim(
-          constantEnabled: true, constantDegPerSec: 25.0);
+        constantEnabled: true,
+        constantDegPerSec: 25.0,
+      );
 
       _renderer.rebuildFromLayers(_state.layers);
       _ensureTickerState();
@@ -187,15 +172,12 @@ class CanvasController extends ChangeNotifier {
   double _timeSec = 0.0;
   bool _tickerRunning = false;
 
-  // DEV toggle (see constructor)
   late bool _maybeDevEnableSpin;
 
-  // Per-layer anim config
   final Map<String, LayerRotationAnim> _layerRotation = {};
 
   void _onTick(Duration elapsed) {
     _timeSec = elapsed.inMicroseconds / 1000000.0;
-    // repaint only; no notifyListeners needed for UI panels
     _tick();
   }
 
@@ -208,21 +190,16 @@ class CanvasController extends ChangeNotifier {
       _ticker.stop();
       _tickerRunning = false;
       _timeSec = 0.0;
-      _tick(); // final repaint to settle
+      _tick();
     }
   }
 
-  // This is what the renderer calls:
   double _layerExtraRotationRadians(String layerId) {
     final anim = _layerRotation[layerId];
     if (anim == null || !anim.isActive) return 0.0;
 
-    // constant deg/sec * time
     final deg = anim.constantDegPerSec * _timeSec;
-
-    // keep it bounded to avoid huge floats over long sessions
     final wrapped = deg % 360.0;
-
     return wrapped * math.pi / 180.0;
   }
 
@@ -296,7 +273,7 @@ class CanvasController extends ChangeNotifier {
   }
 
   // ---------------------------------------------------------------------------
-  // SELECTION MODE (UNCHANGED)
+  // SELECTION MODE
   // ---------------------------------------------------------------------------
 
   bool selectionMode = false;
@@ -321,6 +298,7 @@ class CanvasController extends ChangeNotifier {
   List<PointSample>? _gestureStartLocalPoints;
   Offset? _gestureStartPivotLocal;
 
+  // kept for potential future smoothing; not required right now
   double _gestureLastScale = 1.0;
   double _gestureLastRotation = 0.0;
 
@@ -362,20 +340,16 @@ class CanvasController extends ChangeNotifier {
   }
 
   /// Select a stroke from UI (Layer panel) without hit-testing.
-  /// This is the "Figma click the stroke row" behaviour.
   void selectStrokeRef(String layerId, int groupIndex, String strokeId) {
-    // Turn selection mode on automatically (feels better for panel tapping).
     if (!selectionMode) selectionMode = true;
 
     _selectedLayerId = layerId;
     _selectedGroupIndex = groupIndex;
     _selectedStrokeId = strokeId;
 
-    // Panel selection is always the "truth" (not a mirrored variant)
     _selectedMirrorX = false;
     _selectedMirrorY = false;
 
-    // No anchor from panel selection (anchor comes from hit-test normally)
     _selectionAnchorWorld = null;
 
     notifyListeners();
@@ -439,7 +413,6 @@ class CanvasController extends ChangeNotifier {
     layers[li] = layer.copyWith(groups: groups);
     _state = _state.copyWith(layers: layers);
 
-    // clean history/redo so undo/redo doesn’t resurrect deleted IDs weirdly
     _history.removeWhere((h) =>
         h.layerId == layerId &&
         h.groupIndex == groupIndex &&
@@ -590,7 +563,7 @@ class CanvasController extends ChangeNotifier {
   }
 
   // ---------------------------------------------------------------------------
-  // SELECTION: MIRROR/TRUTH CORRECTIONS (UNCHANGED)
+  // SELECTION: MIRROR/TRUTH CORRECTIONS
   // ---------------------------------------------------------------------------
 
   Offset _correctedWorldDelta(Offset d) {
@@ -605,7 +578,7 @@ class CanvasController extends ChangeNotifier {
   }
 
   // ---------------------------------------------------------------------------
-  // SELECTION: HIT TEST + MOVE (+ symmetry copies) (UNCHANGED)
+  // SELECTION: HIT TEST + MOVE (+ symmetry copies)
   // ---------------------------------------------------------------------------
 
   Offset _mirrorV(Offset p, double cx) => Offset(2 * cx - p.dx, p.dy);
@@ -785,6 +758,7 @@ class CanvasController extends ChangeNotifier {
     }
 
     final s0 = strokes[si];
+
     final movedPts = <PointSample>[
       for (final p in s0.points)
         PointSample(p.x + deltaLocal.dx, p.y + deltaLocal.dy, p.t),
@@ -998,7 +972,7 @@ class CanvasController extends ChangeNotifier {
   }
 
   // ---------------------------------------------------------------------------
-  // BRUSH / GLOW / BACKGROUND (unchanged)
+  // BRUSH / GLOW / BACKGROUND
   // ---------------------------------------------------------------------------
 
   void setBrushGlow(double value) {
@@ -1123,11 +1097,9 @@ class CanvasController extends ChangeNotifier {
   }
 
   // ---------------------------------------------------------------------------
-  // LAYER ROTATION API (new, safe)
+  // LAYER ROTATION API
   // ---------------------------------------------------------------------------
 
-  /// Enable/disable constant rotation for a specific layer.
-  /// Does not change active layer and does not affect selection logic.
   void setLayerConstantRotation(
     String layerId, {
     required bool enabled,
@@ -1139,14 +1111,12 @@ class CanvasController extends ChangeNotifier {
       constantDegPerSec: degPerSec,
     );
 
-    // If we changed an animation state, baked cache might need recalculation.
     _renderer.rebuildFromLayers(_state.layers);
 
     _ensureTickerState();
     _tick();
   }
 
-  /// Convenience: toggle constant rotation on the active layer.
   void toggleActiveLayerConstantRotation({double degPerSec = 25.0}) {
     final id = activeLayerId;
     final prev = _layerRotation[id] ?? const LayerRotationAnim();
@@ -1159,11 +1129,9 @@ class CanvasController extends ChangeNotifier {
   }
 
   // ---------------------------------------------------------------------------
-  // STROKE UPDATE API (for LayerPanel stroke rows, future groups, etc.)
+  // STROKE UPDATE API (only size + points edits in this build)
   // ---------------------------------------------------------------------------
 
-  /// Update a stroke anywhere in the document by id.
-  /// This is the one function the UI can call for stroke knobs (size/glow/etc).
   void updateStrokeById(
     String layerId,
     int groupIndex,
@@ -1199,29 +1167,6 @@ class CanvasController extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Convenience: find the stroke's group automatically (slower, but easy).
-  /// Use this if your UI only knows layerId + strokeId (no group index).
-  void updateStrokeByIdAuto(
-    String layerId,
-    String strokeId,
-    Stroke Function(Stroke s) update,
-  ) {
-    final layerIndex = _state.layers.indexWhere((l) => l.id == layerId);
-    if (layerIndex < 0) return;
-
-    final layer = _state.layers[layerIndex];
-    for (int gi = 0; gi < layer.groups.length; gi++) {
-      final group = layer.groups[gi];
-      final si = group.strokes.indexWhere((s) => s.id == strokeId);
-      if (si != -1) {
-        updateStrokeById(layerId, gi, strokeId, update);
-        return;
-      }
-    }
-  }
-
-  /// Helper for the UI: flatten strokes for a layer but still keep their group index.
-  /// This gives you a "Figma-like list" without changing your data model yet.
   List<StrokeRef> strokesForLayer(String layerId) {
     final layerIndex = _state.layers.indexWhere((l) => l.id == layerId);
     if (layerIndex < 0) return const [];
@@ -1238,7 +1183,7 @@ class CanvasController extends ChangeNotifier {
   }
 
   // ---------------------------------------------------------------------------
-  // LAYER MANAGEMENT (unchanged except renderer rebuild call)
+  // LAYER MANAGEMENT
   // ---------------------------------------------------------------------------
 
   void setActiveLayer(String id) {
@@ -1310,7 +1255,6 @@ class CanvasController extends ChangeNotifier {
     _history.removeWhere((loc) => loc.layerId == id);
     _redoLocations.removeWhere((loc) => loc.layerId == id);
 
-    // cleanup rotation state
     _layerRotation.remove(id);
     _ensureTickerState();
 
@@ -1707,10 +1651,11 @@ class CanvasController extends ChangeNotifier {
       _ensureLayerPivotPersisted(l.id);
     }
 
-    // DEV: optional auto spin so you can see it working
     if (_maybeDevEnableSpin) {
-      _layerRotation['layer-main'] =
-          const LayerRotationAnim(constantEnabled: true, constantDegPerSec: 25);
+      _layerRotation['layer-main'] = const LayerRotationAnim(
+        constantEnabled: true,
+        constantDegPerSec: 25,
+      );
     } else {
       _layerRotation.remove('layer-main');
     }
@@ -1727,7 +1672,7 @@ class CanvasController extends ChangeNotifier {
   }
 
   // ---------------------------------------------------------------------------
-  // UNDO / REDO (only renderer rebuild call changed)
+  // UNDO / REDO
   // ---------------------------------------------------------------------------
 
   void undo() {

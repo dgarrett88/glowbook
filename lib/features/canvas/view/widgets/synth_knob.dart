@@ -138,6 +138,11 @@ class _SynthKnobState extends State<SynthKnob> {
     widget.onChanged(d.clamp(widget.min, widget.max));
   }
 
+  void _endInteraction() {
+    _dragStart = null;
+    _setActive(false);
+  }
+
   @override
   void dispose() {
     if (_active) widget.onInteractionChanged?.call(false);
@@ -161,26 +166,25 @@ class _SynthKnobState extends State<SynthKnob> {
       ),
     );
 
-    final label = widget.label;
-    final modTag = widget.modTag;
-
     return Opacity(
       opacity: widget.enabled ? 1.0 : 0.45,
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
+          // ✅ Listener fires immediately on touch (not in gesture arena),
+          // so we can disable scrolling BEFORE the list steals the drag.
           Listener(
-            // ✅ this fires before scroll/reorder gets a chance to start
+            behavior: HitTestBehavior.opaque,
             onPointerDown: widget.enabled ? (_) => _setActive(true) : null,
-            onPointerUp: widget.enabled ? (_) => _setActive(false) : null,
-            onPointerCancel: widget.enabled ? (_) => _setActive(false) : null,
+            onPointerUp: widget.enabled ? (_) => _endInteraction() : null,
+            onPointerCancel: widget.enabled ? (_) => _endInteraction() : null,
             child: GestureDetector(
               behavior: HitTestBehavior.opaque,
               onDoubleTap: _reset,
               onLongPress: _promptExactValue,
               onPanStart: widget.enabled
                   ? (d) {
-                      _setActive(true);
+                      // _setActive(true); // handled by Listener
                       _startValue = _clamped;
                       _dragStart = d.localPosition;
                     }
@@ -199,25 +203,15 @@ class _SynthKnobState extends State<SynthKnob> {
                       widget.onChanged(newValue);
                     }
                   : null,
-              onPanEnd: widget.enabled
-                  ? (_) {
-                      _dragStart = null;
-                      _setActive(false);
-                    }
-                  : null,
-              onPanCancel: widget.enabled
-                  ? () {
-                      _dragStart = null;
-                      _setActive(false);
-                    }
-                  : null,
+              onPanEnd: widget.enabled ? (_) => _endInteraction() : null,
+              onPanCancel: widget.enabled ? () => _endInteraction() : null,
               child: knobPaint,
             ),
           ),
           const SizedBox(height: 6),
-          if (label != null)
+          if (widget.label != null)
             Text(
-              label,
+              widget.label!,
               style: const TextStyle(
                 fontSize: 11,
                 color: Colors.white70,
@@ -234,7 +228,7 @@ class _SynthKnobState extends State<SynthKnob> {
                 height: 1.0,
               ),
             ),
-          if (modTag != null) ...[
+          if (widget.modTag != null) ...[
             const SizedBox(height: 6),
             GestureDetector(
               onTap: widget.onTapModTag,
@@ -246,7 +240,7 @@ class _SynthKnobState extends State<SynthKnob> {
                   borderRadius: BorderRadius.circular(999),
                 ),
                 child: Text(
-                  modTag,
+                  widget.modTag!,
                   style: const TextStyle(
                     fontSize: 10,
                     color: Colors.white70,

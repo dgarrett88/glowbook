@@ -1,3 +1,4 @@
+import 'dart:math' as math;
 import 'dart:ui' show ImageFilter;
 
 import 'package:flutter/material.dart';
@@ -32,8 +33,40 @@ class _LayerPanelState extends ConsumerState<LayerPanel> {
   // ✅ locks list scroll + reorder while knobs are touched
   final ValueNotifier<bool> _knobIsActive = ValueNotifier<bool>(false);
 
+  // ✅ fade only after a knob value changes (not on touch / double-tap reset)
+  final ValueNotifier<bool> _fadeOut = ValueNotifier<bool>(false);
+
+  bool _turnedSinceTouch = false;
+
+  void _onKnobInteraction(bool active) {
+    _knobIsActive.value = active;
+
+    if (active) {
+      // New touch session: don't fade yet.
+      _turnedSinceTouch = false;
+      return;
+    }
+
+    // Touch ended: fade back in only if we ever faded out.
+    if (_turnedSinceTouch) {
+      _fadeOut.value = false;
+    }
+    _turnedSinceTouch = false;
+  }
+
+  void _onKnobValueChanged() {
+    // Only fade for real drags. Double-tap reset / typed values shouldn't fade.
+    if (!_knobIsActive.value) return;
+
+    // First actual value change during this touch session triggers fade-out.
+    if (_turnedSinceTouch) return;
+    _turnedSinceTouch = true;
+    _fadeOut.value = true;
+  }
+
   @override
   void dispose() {
+    _fadeOut.dispose();
     _knobIsActive.dispose();
     super.dispose();
   }
@@ -44,121 +77,139 @@ class _LayerPanelState extends ConsumerState<LayerPanel> {
     final layers = controller.layers;
     final activeId = controller.activeLayerId;
 
-    return ClipRRect(
-      borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),
-      child: BackdropFilter(
-        filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
-        child: Container(
-          decoration: BoxDecoration(
-            color: const Color(0xFF101018).withOpacity(0.4),
-            border: const Border(
-              top: BorderSide(color: Color(0xFF303040)),
-            ),
-          ),
-          child: ValueListenableBuilder<bool>(
-            valueListenable: _knobIsActive,
-            builder: (context, knobActive, _) {
-              return ReorderableListView.builder(
-                scrollController: widget.scrollController,
-                padding: const EdgeInsets.symmetric(vertical: 4),
-                buildDefaultDragHandles: false,
-                physics:
-                    knobActive ? const NeverScrollableScrollPhysics() : null,
-                itemCount: layers.length,
+    // Outer: controls scroll lock
+    return ValueListenableBuilder<bool>(
+      valueListenable: _knobIsActive,
+      builder: (context, knobActive, _) {
+        // Inner: controls fade visibility
+        return ValueListenableBuilder<bool>(
+          valueListenable: _fadeOut,
+          builder: (context, fadeOut, __) {
+            return AnimatedOpacity(
+              opacity: fadeOut ? 0.0 : 1.0,
+              duration: const Duration(milliseconds: 200), // ✅ slightly slower
+              curve: Curves.easeOut,
+              child: ClipRRect(
+                borderRadius:
+                    const BorderRadius.vertical(top: Radius.circular(16)),
+                child: BackdropFilter(
+                  filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
+                  child: Container(
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF101018).withOpacity(0.4),
+                      border: const Border(
+                        top: BorderSide(color: Color(0xFF303040)),
+                      ),
+                    ),
+                    child: ReorderableListView.builder(
+                      scrollController: widget.scrollController,
+                      padding: const EdgeInsets.symmetric(vertical: 4),
+                      buildDefaultDragHandles: false,
+                      physics: knobActive
+                          ? const NeverScrollableScrollPhysics()
+                          : null,
+                      itemCount: layers.length,
 
-                // ✅ KEY CHANGE:
-                // Putting grip + header INSIDE the list header means dragging them
-                // feels exactly like dragging the layers area (same scroll physics).
-                header: widget.showHeader
-                    ? Column(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Padding(
-                            padding: const EdgeInsets.only(top: 10, bottom: 8),
-                            child: Center(
-                              child: Container(
-                                width: 44,
-                                height: 5,
-                                decoration: BoxDecoration(
-                                  color: Colors.white.withOpacity(0.25),
-                                  borderRadius: BorderRadius.circular(999),
+                      // ✅ header lives inside scrollable
+                      header: widget.showHeader
+                          ? Column(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Padding(
+                                  padding:
+                                      const EdgeInsets.only(top: 10, bottom: 8),
+                                  child: Center(
+                                    child: Container(
+                                      width: 44,
+                                      height: 5,
+                                      decoration: BoxDecoration(
+                                        color: Colors.white.withOpacity(0.25),
+                                        borderRadius:
+                                            BorderRadius.circular(999),
+                                      ),
+                                    ),
+                                  ),
                                 ),
-                              ),
-                            ),
-                          ),
-                          _LayerPanelHeader(
-                            layerCount: layers.length,
-                            onAddLayer: controller.addLayer,
-                          ),
-                          const Divider(height: 1, color: Color(0xFF262636)),
-                        ],
-                      )
-                    : null,
+                                _LayerPanelHeader(
+                                  layerCount: layers.length,
+                                  onAddLayer: controller.addLayer,
+                                ),
+                                const Divider(
+                                    height: 1, color: Color(0xFF262636)),
+                              ],
+                            )
+                          : null,
 
-                onReorder: (oldIndex, newIndex) {
-                  // ✅ no reorder while interacting with knobs
-                  if (knobActive) return;
+                      onReorder: (oldIndex, newIndex) {
+                        if (knobActive) return;
+                        if (newIndex > oldIndex) newIndex -= 1;
 
-                  if (newIndex > oldIndex) newIndex -= 1;
+                        final newOrder = List<CanvasLayer>.from(layers);
+                        final moved = newOrder.removeAt(oldIndex);
+                        newOrder.insert(newIndex, moved);
 
-                  final newOrder = List<CanvasLayer>.from(layers);
-                  final moved = newOrder.removeAt(oldIndex);
-                  newOrder.insert(newIndex, moved);
+                        controller.reorderLayersByIds(
+                          newOrder.map((l) => l.id).toList(),
+                        );
+                      },
 
-                  controller.reorderLayersByIds(
-                    newOrder.map((l) => l.id).toList(),
-                  );
-                },
-                itemBuilder: (context, index) {
-                  final layer = layers[index];
-                  final bool isActive = layer.id == activeId;
-                  final bool isOnlyLayer = layers.length == 1;
-                  final bool isExpanded = _expanded.contains(layer.id);
+                      itemBuilder: (context, index) {
+                        final layer = layers[index];
+                        final bool isActive = layer.id == activeId;
+                        final bool isOnlyLayer = layers.length == 1;
+                        final bool isExpanded = _expanded.contains(layer.id);
 
-                  return _LayerTile(
-                    key: ValueKey(layer.id),
-                    layer: layer,
-                    isActive: isActive,
-                    isOnlyLayer: isOnlyLayer,
-                    isExpanded: isExpanded,
-                    index: index,
-                    reorderEnabled: !knobActive, // ✅
-                    onAnyKnobInteraction: (active) {
-                      _knobIsActive.value = active;
-                    },
-                    onSelect: () => controller.setActiveLayer(layer.id),
-                    onToggleVisible: () =>
-                        controller.setLayerVisibility(layer.id, !layer.visible),
-                    onToggleLocked: () =>
-                        controller.setLayerLocked(layer.id, !layer.locked),
-                    onDelete: isOnlyLayer
-                        ? null
-                        : () => controller.removeLayer(layer.id),
-                    onRename: () =>
-                        _promptRenameLayer(context, controller, layer),
-                    onToggleExpanded: () {
-                      setState(() {
-                        if (isExpanded) {
-                          _expanded.remove(layer.id);
-                        } else {
-                          _expanded.add(layer.id);
-                        }
-                      });
-                    },
-                    onTransformChanged: (tx) {
-                      controller.setLayerPosition(layer.id, tx.x, tx.y);
-                      controller.setLayerRotationDegrees(
-                          layer.id, tx.rotationDegrees);
-                      controller.setLayerScale(layer.id, tx.scale);
-                      controller.setLayerOpacity(layer.id, tx.opacity);
-                    },
-                  );
-                },
-              );
-            },
-          ),
-        ),
-      ),
+                        return _LayerTile(
+                          key: ValueKey(layer.id),
+                          layer: layer,
+                          isActive: isActive,
+                          isOnlyLayer: isOnlyLayer,
+                          isExpanded: isExpanded,
+                          index: index,
+                          reorderEnabled: !knobActive,
+
+                          // ✅ Touch lock (no fade)
+                          onAnyKnobInteraction: _onKnobInteraction,
+
+                          // ✅ Fade only after value change
+                          onAnyKnobValueChanged: _onKnobValueChanged,
+
+                          onSelect: () => controller.setActiveLayer(layer.id),
+                          onToggleVisible: () => controller.setLayerVisibility(
+                              layer.id, !layer.visible),
+                          onToggleLocked: () => controller.setLayerLocked(
+                              layer.id, !layer.locked),
+                          onDelete: isOnlyLayer
+                              ? null
+                              : () => controller.removeLayer(layer.id),
+                          onRename: () =>
+                              _promptRenameLayer(context, controller, layer),
+                          onToggleExpanded: () {
+                            setState(() {
+                              if (isExpanded) {
+                                _expanded.remove(layer.id);
+                              } else {
+                                _expanded.add(layer.id);
+                              }
+                            });
+                          },
+                          onTransformChanged: (tx) {
+                            controller.setLayerPosition(layer.id, tx.x, tx.y);
+                            controller.setLayerRotationDegrees(
+                                layer.id, tx.rotationDegrees);
+                            controller.setLayerScale(layer.id, tx.scale);
+                            controller.setLayerOpacity(layer.id, tx.opacity);
+                          },
+                        );
+                      },
+                    ),
+                  ),
+                ),
+              ),
+            );
+          },
+        );
+      },
     );
   }
 }
@@ -214,7 +265,7 @@ class _LayerPanelHeader extends StatelessWidget {
   }
 }
 
-// ------------------ rest of your file unchanged ------------------
+// ------------------ rest of your file (unchanged structure) ------------------
 
 class _LayerTransformValues {
   final double x;
@@ -258,6 +309,7 @@ class _LayerTile extends StatefulWidget {
     required this.index,
     required this.reorderEnabled,
     required this.onAnyKnobInteraction,
+    required this.onAnyKnobValueChanged,
     required this.onSelect,
     required this.onToggleVisible,
     required this.onToggleLocked,
@@ -274,7 +326,12 @@ class _LayerTile extends StatefulWidget {
   final int index;
 
   final bool reorderEnabled;
+
+  /// Touch start/end from knobs (used to lock scroll/reorder)
   final ValueChanged<bool> onAnyKnobInteraction;
+
+  /// Fired ONLY when a knob value actually changes (used to trigger fade-out)
+  final VoidCallback onAnyKnobValueChanged;
 
   final VoidCallback onSelect;
   final VoidCallback onToggleVisible;
@@ -481,12 +538,14 @@ class _LayerTileState extends State<_LayerTile> {
               values: _values,
               onChanged: _updateAndSend,
               onAnyKnobInteraction: widget.onAnyKnobInteraction,
+              onAnyKnobValueChanged: widget.onAnyKnobValueChanged,
             ),
             const SizedBox(height: 6),
             _StrokeList(
               layer: layer,
               layerId: layer.id,
               onAnyKnobInteraction: widget.onAnyKnobInteraction,
+              onAnyKnobValueChanged: widget.onAnyKnobValueChanged,
             ),
           ],
         ],
@@ -508,11 +567,13 @@ class _LayerTransformEditor extends StatelessWidget {
     required this.values,
     required this.onChanged,
     required this.onAnyKnobInteraction,
+    required this.onAnyKnobValueChanged,
   });
 
   final _LayerTransformValues values;
   final ValueChanged<_LayerTransformValues> onChanged;
   final ValueChanged<bool> onAnyKnobInteraction;
+  final VoidCallback onAnyKnobValueChanged;
 
   @override
   Widget build(BuildContext context) {
@@ -537,7 +598,10 @@ class _LayerTransformEditor extends StatelessWidget {
                 defaultValue: 0,
                 valueFormatter: (v) => v.toStringAsFixed(0),
                 onInteractionChanged: onAnyKnobInteraction,
-                onChanged: (v) => onChanged(values.copyWith(x: v)),
+                onChanged: (v) {
+                  onAnyKnobValueChanged();
+                  onChanged(values.copyWith(x: v));
+                },
               ),
               SynthKnob(
                 label: 'Y',
@@ -547,7 +611,10 @@ class _LayerTransformEditor extends StatelessWidget {
                 defaultValue: 0,
                 valueFormatter: (v) => v.toStringAsFixed(0),
                 onInteractionChanged: onAnyKnobInteraction,
-                onChanged: (v) => onChanged(values.copyWith(y: v)),
+                onChanged: (v) {
+                  onAnyKnobValueChanged();
+                  onChanged(values.copyWith(y: v));
+                },
               ),
               SynthKnob(
                 label: 'Scale',
@@ -557,7 +624,10 @@ class _LayerTransformEditor extends StatelessWidget {
                 defaultValue: 1.0,
                 valueFormatter: (v) => v.toStringAsFixed(2),
                 onInteractionChanged: onAnyKnobInteraction,
-                onChanged: (v) => onChanged(values.copyWith(scale: v)),
+                onChanged: (v) {
+                  onAnyKnobValueChanged();
+                  onChanged(values.copyWith(scale: v));
+                },
               ),
               SynthKnob(
                 label: 'Rot',
@@ -567,8 +637,10 @@ class _LayerTransformEditor extends StatelessWidget {
                 defaultValue: 0.0,
                 valueFormatter: (v) => '${v.toStringAsFixed(0)}°',
                 onInteractionChanged: onAnyKnobInteraction,
-                onChanged: (v) =>
-                    onChanged(values.copyWith(rotationDegrees: v)),
+                onChanged: (v) {
+                  onAnyKnobValueChanged();
+                  onChanged(values.copyWith(rotationDegrees: v));
+                },
               ),
               SynthKnob(
                 label: 'Opacity',
@@ -578,7 +650,10 @@ class _LayerTransformEditor extends StatelessWidget {
                 defaultValue: 1.0,
                 valueFormatter: (v) => '${(v * 100).round()}%',
                 onInteractionChanged: onAnyKnobInteraction,
-                onChanged: (v) => onChanged(values.copyWith(opacity: v)),
+                onChanged: (v) {
+                  onAnyKnobValueChanged();
+                  onChanged(values.copyWith(opacity: v));
+                },
               ),
             ],
           ),
@@ -641,11 +716,13 @@ class _StrokeList extends ConsumerWidget {
     required this.layer,
     required this.layerId,
     required this.onAnyKnobInteraction,
+    required this.onAnyKnobValueChanged,
   });
 
   final CanvasLayer layer;
   final String layerId;
   final ValueChanged<bool> onAnyKnobInteraction;
+  final VoidCallback onAnyKnobValueChanged;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -693,10 +770,12 @@ class _StrokeList extends ConsumerWidget {
           for (final s in strokes.reversed) // newest on top feels nicer
             _StrokeTile(
               key: ValueKey(s.id),
+              controller: controller,
               layerId: layerId,
               groupIndex: gi,
               stroke: s,
               onAnyKnobInteraction: onAnyKnobInteraction,
+              onAnyKnobValueChanged: onAnyKnobValueChanged,
               onSelect: () => controller.selectStrokeRef(layerId, gi, s.id),
               onDelete: () => controller.deleteStrokeRef(layerId, gi, s.id),
               onSizeChanged: (v) =>
@@ -711,20 +790,25 @@ class _StrokeList extends ConsumerWidget {
 class _StrokeTile extends StatefulWidget {
   const _StrokeTile({
     super.key,
+    required this.controller,
     required this.layerId,
     required this.groupIndex,
     required this.stroke,
     required this.onAnyKnobInteraction,
+    required this.onAnyKnobValueChanged,
     required this.onSelect,
     required this.onDelete,
     required this.onSizeChanged,
   });
 
+  final canvas_state.CanvasController controller;
   final String layerId;
   final int groupIndex;
   final Stroke stroke;
 
   final ValueChanged<bool> onAnyKnobInteraction;
+  final VoidCallback onAnyKnobValueChanged;
+
   final VoidCallback onSelect;
   final VoidCallback onDelete;
   final ValueChanged<double> onSizeChanged;
@@ -736,9 +820,114 @@ class _StrokeTile extends StatefulWidget {
 class _StrokeTileState extends State<_StrokeTile> {
   bool _expanded = false;
 
+  // ✅ transform knobs state (relative to baseline)
+  double _tx = 0.0;
+  double _ty = 0.0;
+  double _rotDeg = 0.0;
+
+  // ✅ baseline points (captured when opening editor)
+  List<PointSample>? _basePts;
+  Offset _pivot = Offset.zero;
+
+  void _captureBaseline() {
+    final pts = widget.stroke.points;
+    _basePts = List<PointSample>.from(pts);
+    _pivot = _boundsCenterOfPoints(pts);
+
+    // reset knobs for a fresh edit session
+    _tx = 0.0;
+    _ty = 0.0;
+    _rotDeg = 0.0;
+  }
+
+  Offset _boundsCenterOfPoints(List<PointSample> pts) {
+    if (pts.isEmpty) return Offset.zero;
+
+    double minX = pts.first.x, maxX = pts.first.x;
+    double minY = pts.first.y, maxY = pts.first.y;
+
+    for (final p in pts) {
+      if (p.x < minX) minX = p.x;
+      if (p.x > maxX) maxX = p.x;
+      if (p.y < minY) minY = p.y;
+      if (p.y > maxY) maxY = p.y;
+    }
+    return Offset((minX + maxX) * 0.5, (minY + maxY) * 0.5);
+  }
+
+  List<PointSample> _applyTxRot({
+    required List<PointSample> base,
+    required Offset pivot,
+    required double tx,
+    required double ty,
+    required double rotDeg,
+  }) {
+    final ang = rotDeg * math.pi / 180.0;
+    final cosA = math.cos(ang);
+    final sinA = math.sin(ang);
+
+    final out = <PointSample>[];
+    for (final p in base) {
+      final vx = p.x - pivot.dx;
+      final vy = p.y - pivot.dy;
+
+      final rx = vx * cosA - vy * sinA;
+      final ry = vx * sinA + vy * cosA;
+
+      final nx = pivot.dx + rx + tx;
+      final ny = pivot.dy + ry + ty;
+
+      out.add(PointSample(nx, ny, p.t));
+    }
+    return out;
+  }
+
+  void _commitTransform() {
+    final base = _basePts;
+    if (base == null) return;
+
+    final newPts = _applyTxRot(
+      base: base,
+      pivot: _pivot,
+      tx: _tx,
+      ty: _ty,
+      rotDeg: _rotDeg,
+    );
+
+    widget.controller.updateStrokeById(
+      widget.layerId,
+      widget.groupIndex,
+      widget.stroke.id,
+      (s) => s.copyWith(points: newPts),
+    );
+  }
+
+  @override
+  void didUpdateWidget(covariant _StrokeTile oldWidget) {
+    super.didUpdateWidget(oldWidget);
+
+    // If the stroke changed externally while we’re NOT editing, refresh baseline.
+    if (!_expanded && oldWidget.stroke.points != widget.stroke.points) {
+      _basePts = null;
+    }
+
+    // If the row is showing a different stroke id, reset baseline.
+    if (oldWidget.stroke.id != widget.stroke.id) {
+      _expanded = false;
+      _basePts = null;
+      _tx = _ty = _rotDeg = 0.0;
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final s = widget.stroke;
+
+    final coreUi = (s.coreOpacity.clamp(0.0, 1.0) * 100.0).clamp(0.0, 100.0);
+    final radiusUi = (s.glowRadius.clamp(0.0, 1.0) * 300.0).clamp(0.0, 300.0);
+    final glowOpUi = (s.glowOpacity.clamp(0.0, 1.0) * 100.0).clamp(0.0, 100.0);
+    final brightUi =
+        (s.glowBrightness.clamp(0.0, 1.0) * 100.0).clamp(0.0, 100.0);
 
     return Container(
       margin: const EdgeInsets.symmetric(vertical: 3),
@@ -791,7 +980,16 @@ class _StrokeTileState extends State<_StrokeTile> {
                     tooltip: _expanded ? 'Hide' : 'Edit',
                     iconSize: 18,
                     visualDensity: VisualDensity.compact,
-                    onPressed: () => setState(() => _expanded = !_expanded),
+                    onPressed: () {
+                      setState(() {
+                        _expanded = !_expanded;
+                        if (_expanded) {
+                          _captureBaseline();
+                        } else {
+                          _basePts = null;
+                        }
+                      });
+                    },
                     icon: Icon(
                       _expanded
                           ? Icons.keyboard_arrow_down
@@ -811,6 +1009,7 @@ class _StrokeTileState extends State<_StrokeTile> {
                 spacing: 10,
                 runSpacing: 10,
                 children: [
+                  // Size
                   SynthKnob(
                     label: 'Size',
                     value: s.size.clamp(0.5, 200.0),
@@ -819,9 +1018,135 @@ class _StrokeTileState extends State<_StrokeTile> {
                     defaultValue: 10.0,
                     valueFormatter: (v) => v.toStringAsFixed(1),
                     onInteractionChanged: widget.onAnyKnobInteraction,
-                    onChanged: widget.onSizeChanged,
+                    onChanged: (v) {
+                      widget.onAnyKnobValueChanged();
+                      widget.onSizeChanged(v);
+                    },
                   ),
-                  // Later: opacity, glow params, etc.
+
+                  // X / Y / Rot (rewrite points)
+                  SynthKnob(
+                    label: 'X',
+                    value: _tx.clamp(-500, 500),
+                    min: -500,
+                    max: 500,
+                    defaultValue: 0,
+                    valueFormatter: (v) => v.toStringAsFixed(0),
+                    onInteractionChanged: widget.onAnyKnobInteraction,
+                    onChanged: (v) {
+                      widget.onAnyKnobValueChanged();
+                      setState(() => _tx = v);
+                      _commitTransform();
+                    },
+                  ),
+                  SynthKnob(
+                    label: 'Y',
+                    value: _ty.clamp(-500, 500),
+                    min: -500,
+                    max: 500,
+                    defaultValue: 0,
+                    valueFormatter: (v) => v.toStringAsFixed(0),
+                    onInteractionChanged: widget.onAnyKnobInteraction,
+                    onChanged: (v) {
+                      widget.onAnyKnobValueChanged();
+                      setState(() => _ty = v);
+                      _commitTransform();
+                    },
+                  ),
+                  SynthKnob(
+                    label: 'Rot',
+                    value: _rotDeg.clamp(-360, 360),
+                    min: -360,
+                    max: 360,
+                    defaultValue: 0,
+                    valueFormatter: (v) => '${v.toStringAsFixed(0)}°',
+                    onInteractionChanged: widget.onAnyKnobInteraction,
+                    onChanged: (v) {
+                      widget.onAnyKnobValueChanged();
+                      setState(() => _rotDeg = v);
+                      _commitTransform();
+                    },
+                  ),
+
+                  // Core opacity
+                  SynthKnob(
+                    label: 'Core',
+                    value: coreUi,
+                    min: 0.0,
+                    max: 100.0,
+                    defaultValue: 86.0,
+                    valueFormatter: (v) => '${v.toStringAsFixed(0)}%',
+                    onInteractionChanged: widget.onAnyKnobInteraction,
+                    onChanged: (ui) {
+                      widget.onAnyKnobValueChanged();
+                      final nv = (ui / 100.0).clamp(0.0, 1.0);
+                      widget.controller.updateStrokeById(
+                        widget.layerId,
+                        widget.groupIndex,
+                        s.id,
+                        (st) => st.copyWith(coreOpacity: nv),
+                      );
+                    },
+                  ),
+
+                  // Glow params
+                  SynthKnob(
+                    label: 'Radius',
+                    value: radiusUi,
+                    min: 0.0,
+                    max: 300.0,
+                    defaultValue: 15.0,
+                    valueFormatter: (v) => v.toStringAsFixed(0),
+                    onInteractionChanged: widget.onAnyKnobInteraction,
+                    onChanged: (ui) {
+                      widget.onAnyKnobValueChanged();
+                      final nv = (ui / 300.0).clamp(0.0, 1.0);
+                      widget.controller.updateStrokeById(
+                        widget.layerId,
+                        widget.groupIndex,
+                        s.id,
+                        (st) => st.copyWith(glowRadius: nv),
+                      );
+                    },
+                  ),
+                  SynthKnob(
+                    label: 'G Op',
+                    value: glowOpUi,
+                    min: 0.0,
+                    max: 100.0,
+                    defaultValue: 100.0,
+                    valueFormatter: (v) => '${v.toStringAsFixed(0)}%',
+                    onInteractionChanged: widget.onAnyKnobInteraction,
+                    onChanged: (ui) {
+                      widget.onAnyKnobValueChanged();
+                      final nv = (ui / 100.0).clamp(0.0, 1.0);
+                      widget.controller.updateStrokeById(
+                        widget.layerId,
+                        widget.groupIndex,
+                        s.id,
+                        (st) => st.copyWith(glowOpacity: nv),
+                      );
+                    },
+                  ),
+                  SynthKnob(
+                    label: 'Bright',
+                    value: brightUi,
+                    min: 0.0,
+                    max: 100.0,
+                    defaultValue: 50.0,
+                    valueFormatter: (v) => v.toStringAsFixed(0),
+                    onInteractionChanged: widget.onAnyKnobInteraction,
+                    onChanged: (ui) {
+                      widget.onAnyKnobValueChanged();
+                      final nv = (ui / 100.0).clamp(0.0, 1.0);
+                      widget.controller.updateStrokeById(
+                        widget.layerId,
+                        widget.groupIndex,
+                        s.id,
+                        (st) => st.copyWith(glowBrightness: nv),
+                      );
+                    },
+                  ),
                 ],
               ),
             ),

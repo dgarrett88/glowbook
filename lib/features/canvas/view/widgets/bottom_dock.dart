@@ -393,6 +393,7 @@ class _BottomDockState extends State<BottomDock>
     showModalBottomSheet(
       context: context,
       backgroundColor: Colors.transparent,
+      barrierColor: Colors.transparent,
       isScrollControlled: true,
       builder: (ctx) {
         final screenH = MediaQuery.of(ctx).size.height;
@@ -450,25 +451,15 @@ class _BottomDockState extends State<BottomDock>
   }
 
   void _openLayersSheet(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
-
     // ✅ SHEET BEHAVIOUR
     const double kInitial = 0.42;
-    const double kMin = 0.15; // ✅ close point higher
+    const double kMin = 0.15;
     const double kMax = 0.90;
-
-    // ✅ SNAP STOPS (still used if you later re-enable snapping)
-    const List<double> kSnaps = <double>[
-      kMin,
-      0.30,
-      kInitial,
-      0.62,
-      kMax,
-    ];
 
     showModalBottomSheet(
       context: context,
       backgroundColor: Colors.transparent,
+      barrierColor: Colors.transparent, // ✅ remove dark overlay
       isScrollControlled: true,
       builder: (ctx) {
         return DraggableScrollableSheet(
@@ -482,24 +473,12 @@ class _BottomDockState extends State<BottomDock>
               borderRadius:
                   const BorderRadius.vertical(top: Radius.circular(16)),
               child: Container(
-                decoration: BoxDecoration(
-                  color: cs.surface,
-                  borderRadius:
-                      const BorderRadius.vertical(top: Radius.circular(16)),
-                ),
-                child: Column(
-                  children: [
-                    // ✅ KEY CHANGE:
-                    // We no longer drag from handle/header manually.
-                    // Handle + header are now inside LayerPanel's scrollable header,
-                    // so they feel EXACTLY like dragging the layers area.
-                    Expanded(
-                      child: LayerPanel(
-                        scrollController: scrollController,
-                        showHeader: true, // ✅ now LayerPanel owns header+handle
-                      ),
-                    ),
-                  ],
+                // ✅ IMPORTANT: don't paint a background here,
+                // LayerPanel already draws its own blurred container.
+                color: Colors.transparent,
+                child: LayerPanel(
+                  scrollController: scrollController,
+                  showHeader: true,
                 ),
               ),
             );
