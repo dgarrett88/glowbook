@@ -87,7 +87,7 @@ class _LayerPanelState extends ConsumerState<LayerPanel> {
           builder: (context, fadeOut, __) {
             return AnimatedOpacity(
               opacity: fadeOut ? 0.0 : 1.0,
-              duration: const Duration(milliseconds: 200), // ✅ slightly slower
+              duration: const Duration(milliseconds: 200),
               curve: Curves.easeOut,
               child: ClipRRect(
                 borderRadius:
@@ -109,8 +109,6 @@ class _LayerPanelState extends ConsumerState<LayerPanel> {
                           ? const NeverScrollableScrollPhysics()
                           : null,
                       itemCount: layers.length,
-
-                      // ✅ header lives inside scrollable
                       header: widget.showHeader
                           ? Column(
                               mainAxisSize: MainAxisSize.min,
@@ -139,7 +137,6 @@ class _LayerPanelState extends ConsumerState<LayerPanel> {
                               ],
                             )
                           : null,
-
                       onReorder: (oldIndex, newIndex) {
                         if (knobActive) return;
                         if (newIndex > oldIndex) newIndex -= 1;
@@ -152,7 +149,6 @@ class _LayerPanelState extends ConsumerState<LayerPanel> {
                           newOrder.map((l) => l.id).toList(),
                         );
                       },
-
                       itemBuilder: (context, index) {
                         final layer = layers[index];
                         final bool isActive = layer.id == activeId;
@@ -167,13 +163,8 @@ class _LayerPanelState extends ConsumerState<LayerPanel> {
                           isExpanded: isExpanded,
                           index: index,
                           reorderEnabled: !knobActive,
-
-                          // ✅ Touch lock (no fade)
                           onAnyKnobInteraction: _onKnobInteraction,
-
-                          // ✅ Fade only after value change
                           onAnyKnobValueChanged: _onKnobValueChanged,
-
                           onSelect: () => controller.setActiveLayer(layer.id),
                           onToggleVisible: () => controller.setLayerVisibility(
                               layer.id, !layer.visible),
@@ -265,8 +256,6 @@ class _LayerPanelHeader extends StatelessWidget {
   }
 }
 
-// ------------------ rest of your file (unchanged structure) ------------------
-
 class _LayerTransformValues {
   final double x;
   final double y;
@@ -326,11 +315,7 @@ class _LayerTile extends StatefulWidget {
   final int index;
 
   final bool reorderEnabled;
-
-  /// Touch start/end from knobs (used to lock scroll/reorder)
   final ValueChanged<bool> onAnyKnobInteraction;
-
-  /// Fired ONLY when a knob value actually changes (used to trigger fade-out)
   final VoidCallback onAnyKnobValueChanged;
 
   final VoidCallback onSelect;
@@ -355,7 +340,7 @@ class _LayerTileState extends State<_LayerTile> {
     _values = _LayerTransformValues(
       x: t.position.dx,
       y: t.position.dy,
-      rotationDegrees: t.rotation * 180.0 / 3.141592653589793,
+      rotationDegrees: t.rotation * 180.0 / math.pi,
       scale: t.scale,
       opacity: t.opacity,
     );
@@ -374,7 +359,7 @@ class _LayerTileState extends State<_LayerTile> {
       _values = _LayerTransformValues(
         x: t.position.dx,
         y: t.position.dy,
-        rotationDegrees: t.rotation * 180.0 / 3.141592653589793,
+        rotationDegrees: t.rotation * 180.0 / math.pi,
         scale: t.scale,
         opacity: t.opacity,
       );
@@ -386,10 +371,13 @@ class _LayerTileState extends State<_LayerTile> {
     final cs = Theme.of(context).colorScheme;
     final layer = widget.layer;
 
-    final Color bgColor =
-        widget.isActive ? const Color(0xFF1B2233) : Colors.transparent;
+    // ✅ Always-solid tile background
+    final Color baseBg = const Color(0xFF121220);
+
+    // ✅ Selected highlight is done via border + subtle glow overlay
     final Color borderColor =
-        widget.isActive ? cs.primary.withOpacity(0.4) : Colors.white10;
+        widget.isActive ? cs.primary.withOpacity(0.65) : Colors.white10;
+
     final Color textColor =
         layer.visible ? Colors.white : Colors.white.withOpacity(0.5);
 
@@ -422,7 +410,7 @@ class _LayerTileState extends State<_LayerTile> {
               overflow: TextOverflow.ellipsis,
               style: TextStyle(
                 color: textColor,
-                fontWeight: widget.isActive ? FontWeight.bold : FontWeight.w500,
+                fontWeight: widget.isActive ? FontWeight.bold : FontWeight.w600,
                 fontSize: 13,
               ),
             ),
@@ -430,7 +418,6 @@ class _LayerTileState extends State<_LayerTile> {
         ],
       );
 
-      // ✅ Disable drag handle entirely while knobs are active
       if (!widget.reorderEnabled) return row;
 
       return ReorderableDragStartListener(
@@ -442,96 +429,126 @@ class _LayerTileState extends State<_LayerTile> {
     return Container(
       margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
       decoration: BoxDecoration(
-        color: bgColor,
+        color: baseBg,
         borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: borderColor, width: 1),
+        border:
+            Border.all(color: borderColor, width: widget.isActive ? 1.3 : 1),
+        boxShadow: widget.isActive
+            ? [
+                BoxShadow(
+                  color: cs.primary.withOpacity(0.18),
+                  blurRadius: 10,
+                  spreadRadius: 1,
+                ),
+              ]
+            : null,
       ),
       child: Column(
         children: [
-          InkWell(
-            borderRadius: BorderRadius.circular(10),
-            onTap: widget.onSelect,
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
-              child: Row(
-                children: [
-                  dragNameRow(),
-                  const Spacer(),
-                  Container(
-                    padding:
-                        const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                    decoration: BoxDecoration(
-                      color: Colors.white12,
-                      borderRadius: BorderRadius.circular(999),
-                    ),
-                    child: Text(
-                      '$strokeCount',
-                      style:
-                          const TextStyle(color: Colors.white70, fontSize: 10),
-                    ),
+          // ✅ Header stays solid always; active gets a subtle overlay
+          Stack(
+            children: [
+              InkWell(
+                borderRadius: BorderRadius.circular(10),
+                onTap: widget.onSelect,
+                child: Padding(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                  child: Row(
+                    children: [
+                      dragNameRow(),
+                      const Spacer(),
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 6, vertical: 2),
+                        decoration: BoxDecoration(
+                          color: Colors.white12,
+                          borderRadius: BorderRadius.circular(999),
+                        ),
+                        child: Text(
+                          '$strokeCount',
+                          style: const TextStyle(
+                              color: Colors.white70, fontSize: 10),
+                        ),
+                      ),
+                      const SizedBox(width: 4),
+                      IconButton(
+                        tooltip: layer.visible ? 'Hide layer' : 'Show layer',
+                        iconSize: 18,
+                        visualDensity: VisualDensity.compact,
+                        onPressed: widget.onToggleVisible,
+                        icon: Icon(
+                          layer.visible
+                              ? Icons.visibility
+                              : Icons.visibility_off,
+                          color: Colors.white70,
+                        ),
+                      ),
+                      IconButton(
+                        tooltip: layer.locked ? 'Unlock layer' : 'Lock layer',
+                        iconSize: 18,
+                        visualDensity: VisualDensity.compact,
+                        onPressed: widget.onToggleLocked,
+                        icon: Icon(
+                          layer.locked ? Icons.lock : Icons.lock_open,
+                          color: layer.locked
+                              ? Colors.orangeAccent
+                              : Colors.white70,
+                        ),
+                      ),
+                      IconButton(
+                        tooltip: 'Rename layer',
+                        iconSize: 18,
+                        visualDensity: VisualDensity.compact,
+                        onPressed: widget.onRename,
+                        icon: const Icon(Icons.edit,
+                            color: Colors.white70, size: 18),
+                      ),
+                      IconButton(
+                        tooltip: widget.isOnlyLayer
+                            ? 'Cannot delete last layer'
+                            : 'Delete layer',
+                        iconSize: 18,
+                        visualDensity: VisualDensity.compact,
+                        onPressed: widget.onDelete,
+                        icon: Icon(
+                          Icons.delete,
+                          color: widget.isOnlyLayer
+                              ? Colors.white.withOpacity(0.25)
+                              : Colors.redAccent,
+                          size: 18,
+                        ),
+                      ),
+                      IconButton(
+                        tooltip: widget.isExpanded
+                            ? 'Hide transforms'
+                            : 'Show transforms',
+                        iconSize: 18,
+                        visualDensity: VisualDensity.compact,
+                        onPressed: widget.onToggleExpanded,
+                        icon: Icon(
+                          widget.isExpanded
+                              ? Icons.keyboard_arrow_down
+                              : Icons.keyboard_arrow_up,
+                          color: Colors.white70,
+                        ),
+                      ),
+                    ],
                   ),
-                  const SizedBox(width: 4),
-                  IconButton(
-                    tooltip: layer.visible ? 'Hide layer' : 'Show layer',
-                    iconSize: 18,
-                    visualDensity: VisualDensity.compact,
-                    onPressed: widget.onToggleVisible,
-                    icon: Icon(
-                      layer.visible ? Icons.visibility : Icons.visibility_off,
-                      color: Colors.white70,
-                    ),
-                  ),
-                  IconButton(
-                    tooltip: layer.locked ? 'Unlock layer' : 'Lock layer',
-                    iconSize: 18,
-                    visualDensity: VisualDensity.compact,
-                    onPressed: widget.onToggleLocked,
-                    icon: Icon(
-                      layer.locked ? Icons.lock : Icons.lock_open,
-                      color:
-                          layer.locked ? Colors.orangeAccent : Colors.white70,
-                    ),
-                  ),
-                  IconButton(
-                    tooltip: 'Rename layer',
-                    iconSize: 18,
-                    visualDensity: VisualDensity.compact,
-                    onPressed: widget.onRename,
-                    icon:
-                        const Icon(Icons.edit, color: Colors.white70, size: 18),
-                  ),
-                  IconButton(
-                    tooltip: widget.isOnlyLayer
-                        ? 'Cannot delete last layer'
-                        : 'Delete layer',
-                    iconSize: 18,
-                    visualDensity: VisualDensity.compact,
-                    onPressed: widget.onDelete,
-                    icon: Icon(
-                      Icons.delete,
-                      color: widget.isOnlyLayer
-                          ? Colors.white.withOpacity(0.25)
-                          : Colors.redAccent,
-                      size: 18,
-                    ),
-                  ),
-                  IconButton(
-                    tooltip: widget.isExpanded
-                        ? 'Hide transforms'
-                        : 'Show transforms',
-                    iconSize: 18,
-                    visualDensity: VisualDensity.compact,
-                    onPressed: widget.onToggleExpanded,
-                    icon: Icon(
-                      widget.isExpanded
-                          ? Icons.keyboard_arrow_down
-                          : Icons.keyboard_arrow_up,
-                      color: Colors.white70,
-                    ),
-                  ),
-                ],
+                ),
               ),
-            ),
+              if (widget.isActive)
+                Positioned.fill(
+                  child: IgnorePointer(
+                    child: Container(
+                      decoration: BoxDecoration(
+                        borderRadius: BorderRadius.circular(10),
+                        color: cs.primary.withOpacity(0.08),
+                      ),
+                    ),
+                  ),
+                ),
+            ],
           ),
           if (widget.isExpanded) ...[
             _LayerTransformEditor(
@@ -728,13 +745,13 @@ class _StrokeList extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final controller = ref.watch(canvas_state.canvasControllerProvider);
 
-    // For now: show only Group 0 (matches how you currently add strokes).
-    // Later we’ll show group headers + allow grouping.
     final int gi = 0;
     if (layer.groups.isEmpty) return const SizedBox.shrink();
     if (gi >= layer.groups.length) return const SizedBox.shrink();
 
-    final strokes = layer.groups[gi].strokes;
+    final group = layer.groups[gi];
+    final strokes = group.strokes;
+
     if (strokes.isEmpty) {
       return Padding(
         padding: const EdgeInsets.only(bottom: 10),
@@ -765,12 +782,12 @@ class _StrokeList extends ConsumerWidget {
             ),
           ),
           const SizedBox(height: 6),
-
-          // simple list (no reorder yet)
-          for (final s in strokes.reversed) // newest on top feels nicer
+          for (final s in strokes.reversed)
             _StrokeTile(
               key: ValueKey(s.id),
               controller: controller,
+              layerTransform: layer.transform,
+              groupTransform: group.transform,
               layerId: layerId,
               groupIndex: gi,
               stroke: s,
@@ -791,6 +808,8 @@ class _StrokeTile extends StatefulWidget {
   const _StrokeTile({
     super.key,
     required this.controller,
+    required this.layerTransform,
+    required this.groupTransform,
     required this.layerId,
     required this.groupIndex,
     required this.stroke,
@@ -802,6 +821,9 @@ class _StrokeTile extends StatefulWidget {
   });
 
   final canvas_state.CanvasController controller;
+  final LayerTransform layerTransform;
+  final GroupTransform groupTransform;
+
   final String layerId;
   final int groupIndex;
   final Stroke stroke;
@@ -820,12 +842,10 @@ class _StrokeTile extends StatefulWidget {
 class _StrokeTileState extends State<_StrokeTile> {
   bool _expanded = false;
 
-  // ✅ transform knobs state (relative to baseline)
   double _tx = 0.0;
   double _ty = 0.0;
   double _rotDeg = 0.0;
 
-  // ✅ baseline points (captured when opening editor)
   List<PointSample>? _basePts;
   Offset _pivot = Offset.zero;
 
@@ -834,7 +854,6 @@ class _StrokeTileState extends State<_StrokeTile> {
     _basePts = List<PointSample>.from(pts);
     _pivot = _boundsCenterOfPoints(pts);
 
-    // reset knobs for a fresh edit session
     _tx = 0.0;
     _ty = 0.0;
     _rotDeg = 0.0;
@@ -853,6 +872,25 @@ class _StrokeTileState extends State<_StrokeTile> {
       if (p.y > maxY) maxY = p.y;
     }
     return Offset((minX + maxX) * 0.5, (minY + maxY) * 0.5);
+  }
+
+  Offset _worldToLocalDelta(Offset worldDelta) {
+    final double rot =
+        widget.layerTransform.rotation + widget.groupTransform.rotation;
+    final double scale =
+        widget.layerTransform.scale * widget.groupTransform.scale;
+
+    final double c = math.cos(rot);
+    final double s = math.sin(rot);
+
+    double lx = c * worldDelta.dx + s * worldDelta.dy;
+    double ly = -s * worldDelta.dx + c * worldDelta.dy;
+
+    final double safeScale = (scale.abs() < 1e-9) ? 1e-9 : scale;
+    lx /= safeScale;
+    ly /= safeScale;
+
+    return Offset(lx, ly);
   }
 
   List<PointSample> _applyTxRot({
@@ -886,11 +924,13 @@ class _StrokeTileState extends State<_StrokeTile> {
     final base = _basePts;
     if (base == null) return;
 
+    final localDelta = _worldToLocalDelta(Offset(_tx, _ty));
+
     final newPts = _applyTxRot(
       base: base,
       pivot: _pivot,
-      tx: _tx,
-      ty: _ty,
+      tx: localDelta.dx,
+      ty: localDelta.dy,
       rotDeg: _rotDeg,
     );
 
@@ -906,16 +946,16 @@ class _StrokeTileState extends State<_StrokeTile> {
   void didUpdateWidget(covariant _StrokeTile oldWidget) {
     super.didUpdateWidget(oldWidget);
 
-    // If the stroke changed externally while we’re NOT editing, refresh baseline.
     if (!_expanded && oldWidget.stroke.points != widget.stroke.points) {
       _basePts = null;
     }
 
-    // If the row is showing a different stroke id, reset baseline.
     if (oldWidget.stroke.id != widget.stroke.id) {
       _expanded = false;
       _basePts = null;
-      _tx = _ty = _rotDeg = 0.0;
+      _tx = 0.0;
+      _ty = 0.0;
+      _rotDeg = 0.0;
     }
   }
 
@@ -966,7 +1006,7 @@ class _StrokeTileState extends State<_StrokeTile> {
                   ),
                   const SizedBox(width: 6),
                   Text(
-                    '${s.size.toStringAsFixed(1)}',
+                    s.size.toStringAsFixed(1),
                     style: const TextStyle(color: Colors.white38, fontSize: 10),
                   ),
                   IconButton(
@@ -1009,7 +1049,6 @@ class _StrokeTileState extends State<_StrokeTile> {
                 spacing: 10,
                 runSpacing: 10,
                 children: [
-                  // Size
                   SynthKnob(
                     label: 'Size',
                     value: s.size.clamp(0.5, 200.0),
@@ -1023,8 +1062,6 @@ class _StrokeTileState extends State<_StrokeTile> {
                       widget.onSizeChanged(v);
                     },
                   ),
-
-                  // X / Y / Rot (rewrite points)
                   SynthKnob(
                     label: 'X',
                     value: _tx.clamp(-500, 500),
@@ -1067,8 +1104,6 @@ class _StrokeTileState extends State<_StrokeTile> {
                       _commitTransform();
                     },
                   ),
-
-                  // Core opacity
                   SynthKnob(
                     label: 'Core',
                     value: coreUi,
@@ -1088,8 +1123,6 @@ class _StrokeTileState extends State<_StrokeTile> {
                       );
                     },
                   ),
-
-                  // Glow params
                   SynthKnob(
                     label: 'Radius',
                     value: radiusUi,
