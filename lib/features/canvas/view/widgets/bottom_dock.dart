@@ -6,6 +6,8 @@ import '../../state/canvas_controller.dart';
 import '../../state/glow_blend.dart' as gb;
 
 import '../layer_panel.dart'; // widgets -> view
+import '../lfo_panel.dart'; // ✅ ADD: your LFO panel (adjust path/name if different)
+
 import 'glow_blend_dropdown.dart';
 
 import 'brush_hud.dart';
@@ -195,7 +197,7 @@ class _BottomDockState extends State<BottomDock>
                           ],
                         ),
 
-                        // Page 2: layers + select
+                        // Page 2: layers + lfo + select
                         _DockRow(
                           children: [
                             _DockButton(
@@ -208,8 +210,16 @@ class _BottomDockState extends State<BottomDock>
                               ),
                               label: 'Layers',
                               onTap: () => _openLayersSheet(context),
-                              onLongPress: widget.onToggleLayers,
                             ),
+
+                            // ✅ NEW: LFO button
+                            _DockButton(
+                              customIcon: const Icon(Icons.waves,
+                                  size: 22, color: Colors.white),
+                              label: 'LFO',
+                              onTap: () => _openLfoSheet(context),
+                            ),
+
                             _DockButton(
                               customIcon: Icon(
                                 Icons.select_all,
@@ -477,6 +487,41 @@ class _BottomDockState extends State<BottomDock>
                 // LayerPanel already draws its own blurred container.
                 color: Colors.transparent,
                 child: LayerPanel(
+                  scrollController: scrollController,
+                  showHeader: true,
+                ),
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+
+  // ✅ NEW: LFO sheet (matches layers sheet style)
+  void _openLfoSheet(BuildContext context) {
+    const double kInitial = 0.42;
+    const double kMin = 0.15;
+    const double kMax = 0.90;
+
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      barrierColor: Colors.transparent,
+      isScrollControlled: true,
+      builder: (ctx) {
+        return DraggableScrollableSheet(
+          initialChildSize: kInitial,
+          minChildSize: kMin,
+          maxChildSize: kMax,
+          expand: false,
+          builder: (context, scrollController) {
+            return ClipRRect(
+              borderRadius:
+                  const BorderRadius.vertical(top: Radius.circular(16)),
+              child: Container(
+                color: Colors.transparent,
+                child: LfoPanel(
                   scrollController: scrollController,
                   showHeader: true,
                 ),

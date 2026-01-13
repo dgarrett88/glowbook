@@ -1,4 +1,3 @@
-// lib/features/canvas/state/canvas_controller.dart
 import 'dart:math' as math;
 import 'dart:ui' show Size;
 
@@ -11,6 +10,7 @@ import '../../../core/models/canvas_document_bundle.dart';
 import '../../../core/models/canvas_doc.dart' as doc_model;
 import '../../../core/models/canvas_layer.dart';
 import '../../../core/models/stroke.dart';
+import '../../../core/models/lfo.dart'; // ✅ NEW
 
 import '../render/renderer.dart';
 import 'canvas_state.dart';
@@ -177,13 +177,33 @@ class CanvasController extends ChangeNotifier {
 
   final Map<String, LayerRotationAnim> _layerRotation = {};
 
+  // ---------------------------------------------------------------------------
+  // LFO STATE (v1 routes -> layer extra rotation only)
+  // ---------------------------------------------------------------------------
+
+  final List<Lfo> _lfos = <Lfo>[];
+  final List<LfoRoute> _routes = <LfoRoute>[];
+
+  List<Lfo> get lfos => List.unmodifiable(_lfos);
+  List<LfoRoute> get lfoRoutes => List.unmodifiable(_routes);
+
+  List<LfoRoute> routesForLfo(String lfoId) =>
+      _routes.where((r) => r.lfoId == lfoId).toList();
+
   void _onTick(Duration elapsed) {
     _timeSec = elapsed.inMicroseconds / 1000000.0;
     _tick();
   }
 
   void _ensureTickerState() {
-    final anyActive = _layerRotation.values.any((a) => a.isActive);
+    final anyConstant = _layerRotation.values.any((a) => a.isActive);
+
+    final anyLfoActive = _lfos.any((l) => l.enabled) &&
+        _routes.any((r) => r.enabled) &&
+        _routes.any((r) => _lfos.any((l) => l.id == r.lfoId && l.enabled));
+
+    final anyActive = anyConstant || anyLfoActive;
+
     if (anyActive && !_tickerRunning) {
       _ticker.start();
       _tickerRunning = true;
@@ -196,12 +216,36 @@ class CanvasController extends ChangeNotifier {
   }
 
   double _layerExtraRotationRadians(String layerId) {
-    final anim = _layerRotation[layerId];
-    if (anim == null || !anim.isActive) return 0.0;
+    double out = 0.0;
 
-    final deg = anim.constantDegPerSec * _timeSec;
-    final wrapped = deg % 360.0;
-    return wrapped * math.pi / 180.0;
+    // constant rotation
+    final anim = _layerRotation[layerId];
+    if (anim != null && anim.isActive) {
+      final deg = anim.constantDegPerSec * _timeSec;
+      final wrapped = deg % 360.0;
+      out += wrapped * math.pi / 180.0;
+    }
+
+    // LFO routes (v1: layer rotation only)
+    if (_lfos.isNotEmpty && _routes.isNotEmpty) {
+      for (final r in _routes) {
+        if (!r.enabled) continue;
+        if (r.layerId != layerId) continue;
+
+        final lfo = _lfos.firstWhere(
+          (x) => x.id == r.lfoId,
+          orElse: () =>
+              const Lfo(id: 'missing', name: 'missing', enabled: false),
+        );
+        if (!lfo.enabled) continue;
+
+        final v = lfo.eval(_timeSec); // ~[-1..1]
+        final deg = r.amountDeg * v;
+        out += deg * math.pi / 180.0;
+      }
+    }
+
+    return out;
   }
 
   String? _selectedStrokeIdFn() => _selectedStrokeId;
@@ -1232,6 +1276,173 @@ class CanvasController extends ChangeNotifier {
   }
 
   // ---------------------------------------------------------------------------
+  // LFO API (v1: routes -> layer extra rotation)
+  // ---------------------------------------------------------------------------
+
+  String addLfo({String? name}) {
+    final id = 'lfo-${DateTime.now().millisecondsSinceEpoch}';
+    final index = _lfos.length + 1;
+    _lfos.add(Lfo(
+      id: id,
+      name: name ?? 'LFO $index',
+      enabled: true,
+      wave: LfoWave.sine,
+      rateHz: 0.25,
+      phase: 0.0,
+      offset: 0.0,
+    ));
+
+    _ensureTickerState();
+    _tick();
+    notifyListeners();
+    return id;
+  }
+
+  void removeLfo(String id) {
+    _lfos.removeWhere((l) => l.id == id);
+    _routes.removeWhere((r) => r.lfoId == id);
+
+    _ensureTickerState();
+    _tick();
+    notifyListeners();
+  }
+
+  void renameLfo(String id, String name) {
+    final i = _lfos.indexWhere((l) => l.id == id);
+    if (i < 0) return;
+    final trimmed = name.trim();
+    if (trimmed.isEmpty) return;
+
+    _lfos[i] = _lfos[i].copyWith(name: trimmed);
+    notifyListeners();
+  }
+
+  void reorderLfos(int oldIndex, int newIndex) {
+    if (oldIndex < 0 || oldIndex >= _lfos.length) return;
+    if (newIndex < 0 || newIndex >= _lfos.length) return;
+
+    final item = _lfos.removeAt(oldIndex);
+    _lfos.insert(newIndex, item);
+
+    _tick();
+    notifyListeners();
+  }
+
+  void setLfoEnabled(String id, bool enabled) {
+    final i = _lfos.indexWhere((l) => l.id == id);
+    if (i < 0) return;
+    _lfos[i] = _lfos[i].copyWith(enabled: enabled);
+
+    _ensureTickerState();
+    _tick();
+    notifyListeners();
+  }
+
+  void setLfoWave(String id, LfoWave wave) {
+    final i = _lfos.indexWhere((l) => l.id == id);
+    if (i < 0) return;
+    _lfos[i] = _lfos[i].copyWith(wave: wave);
+
+    _tick();
+    notifyListeners();
+  }
+
+  void setLfoRate(String id, double hz) {
+    final i = _lfos.indexWhere((l) => l.id == id);
+    if (i < 0) return;
+    final v = hz.clamp(0.01, 20.0).toDouble();
+    _lfos[i] = _lfos[i].copyWith(rateHz: v);
+
+    _ensureTickerState();
+    _tick();
+    notifyListeners();
+  }
+
+  void setLfoPhase(String id, double phase01) {
+    final i = _lfos.indexWhere((l) => l.id == id);
+    if (i < 0) return;
+    final v = phase01.clamp(0.0, 1.0).toDouble();
+    _lfos[i] = _lfos[i].copyWith(phase: v);
+
+    _tick();
+    notifyListeners();
+  }
+
+  void setLfoOffset(String id, double offset) {
+    final i = _lfos.indexWhere((l) => l.id == id);
+    if (i < 0) return;
+    final v = offset.clamp(-1.0, 1.0).toDouble();
+    _lfos[i] = _lfos[i].copyWith(offset: v);
+
+    _tick();
+    notifyListeners();
+  }
+
+  String addRouteToLayer(String lfoId, String layerId) {
+    // ensure lfo exists
+    final exists = _lfos.any((l) => l.id == lfoId);
+    if (!exists) return '';
+
+    // if no layers, bail
+    if (!_state.layers.any((l) => l.id == layerId)) return '';
+
+    final id = 'route-${DateTime.now().millisecondsSinceEpoch}';
+    _routes.add(LfoRoute(
+      id: id,
+      lfoId: lfoId,
+      layerId: layerId,
+      enabled: true,
+      amountDeg: 25.0,
+    ));
+
+    _ensureTickerState();
+    _tick();
+    notifyListeners();
+    return id;
+  }
+
+  void removeRoute(String routeId) {
+    _routes.removeWhere((r) => r.id == routeId);
+
+    _ensureTickerState();
+    _tick();
+    notifyListeners();
+  }
+
+  void setRouteEnabled(String routeId, bool enabled) {
+    final i = _routes.indexWhere((r) => r.id == routeId);
+    if (i < 0) return;
+
+    _routes[i] = _routes[i].copyWith(enabled: enabled);
+
+    _ensureTickerState();
+    _tick();
+    notifyListeners();
+  }
+
+  void setRouteLayer(String routeId, String layerId) {
+    final i = _routes.indexWhere((r) => r.id == routeId);
+    if (i < 0) return;
+    if (!_state.layers.any((l) => l.id == layerId)) return;
+
+    _routes[i] = _routes[i].copyWith(layerId: layerId);
+
+    _tick();
+    notifyListeners();
+  }
+
+  void setRouteAmountDeg(String routeId, double amountDeg) {
+    final i = _routes.indexWhere((r) => r.id == routeId);
+    if (i < 0) return;
+
+    final v = amountDeg.clamp(0.0, 360.0).toDouble();
+    _routes[i] = _routes[i].copyWith(amountDeg: v);
+
+    _tick();
+    notifyListeners();
+  }
+
+  // ---------------------------------------------------------------------------
   // STROKE UPDATE API (only size + points edits in this build)
   // ---------------------------------------------------------------------------
 
@@ -1359,6 +1570,10 @@ class CanvasController extends ChangeNotifier {
     _redoLocations.removeWhere((loc) => loc.layerId == id);
 
     _layerRotation.remove(id);
+
+    // ✅ remove any LFO routes pointing to this layer
+    _routes.removeWhere((r) => r.layerId == id);
+
     _ensureTickerState();
 
     if (_selectedLayerId == id) clearSelection();
@@ -1765,6 +1980,10 @@ class CanvasController extends ChangeNotifier {
     } else {
       _layerRotation.remove('layer-main');
     }
+
+    // ✅ v1: keep LFOs/routes session-only; reset them for new doc
+    _lfos.clear();
+    _routes.clear();
 
     _renderer.rebuildFromLayers(_state.layers);
     _ensureTickerState();

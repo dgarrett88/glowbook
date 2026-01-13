@@ -1,6 +1,5 @@
 import 'dart:ui';
-import 'dart:math'
-    as math; // ✅ fixes "Undefined name 'math'" if any math is used
+import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -15,6 +14,7 @@ import 'widgets/bottom_dock.dart';
 import '../../../core/models/canvas_document_bundle.dart';
 import '../state/glow_blend.dart' as gb;
 import 'layer_panel.dart';
+import 'lfo_panel.dart';
 
 class CanvasScreen extends ConsumerStatefulWidget {
   final CanvasDocumentBundle? initialDocument;
@@ -37,8 +37,9 @@ class _CanvasScreenState extends ConsumerState<CanvasScreen> {
   doc_model.CanvasDoc? _currentDoc;
 
   bool _showLayers = false;
+  bool _showLfos = false;
 
-  // ✅ Track finger-1 in selection mode so we can "resume grab" after pinch ends.
+  // Track finger-1 in selection mode so we can resume grab after pinch ends.
   int? _selectionPointerId;
   Offset? _selectionPointerPos;
 
@@ -72,9 +73,8 @@ class _CanvasScreenState extends ConsumerState<CanvasScreen> {
     );
   }
 
-  void _toggleLayers() {
-    setState(() => _showLayers = !_showLayers);
-  }
+  void _toggleLayers() => setState(() => _showLayers = !_showLayers);
+  void _toggleLfos() => setState(() => _showLfos = !_showLfos);
 
   Future<void> _saveCurrent(canvas_state.CanvasController controller) async {
     final now = DateTime.now().millisecondsSinceEpoch;
@@ -104,6 +104,7 @@ class _CanvasScreenState extends ConsumerState<CanvasScreen> {
       strokes: List.of(controller.strokes),
       layers: List.of(controller.layers),
       activeLayerId: controller.activeLayerId,
+      // LFO persistence not added yet (v1 session-only).
     );
 
     final savedId = await DocumentStorage.instance.saveBundle(
@@ -206,26 +207,20 @@ class _CanvasScreenState extends ConsumerState<CanvasScreen> {
               Listener(
                 behavior: HitTestBehavior.translucent,
                 onPointerDown: (e) {
-                  // ✅ Capture finger-1 when in selection mode
                   if (controller.selectionMode) {
                     _selectionPointerId ??= e.pointer;
                     if (_selectionPointerId == e.pointer) {
                       _selectionPointerPos = e.localPosition;
                     }
                   }
-
                   _routePointerDown(controller, e.pointer, e.localPosition);
                 },
                 onPointerMove: (e) {
-                  // ✅ Keep tracking finger-1 position even during pinch
                   if (controller.selectionMode &&
                       _selectionPointerId == e.pointer) {
                     _selectionPointerPos = e.localPosition;
                   }
-
-                  // While gesturing, don't forward moves into the controller.
                   if (controller.isSelectionGesturing) return;
-
                   _routePointerMove(controller, e.pointer, e.localPosition);
                 },
                 onPointerUp: (e) {
@@ -234,7 +229,6 @@ class _CanvasScreenState extends ConsumerState<CanvasScreen> {
                     _selectionPointerPos = e.localPosition;
                     _selectionPointerId = null;
                   }
-
                   _routePointerUp(controller, e.pointer);
                 },
                 onPointerCancel: (e) {
@@ -267,8 +261,17 @@ class _CanvasScreenState extends ConsumerState<CanvasScreen> {
                   ),
                 ),
 
-              // ✅ Always present in selection mode so it can "see" finger-1
-              // from the beginning (gesture arena reliability).
+              if (_showLfos)
+                Align(
+                  alignment: Alignment.bottomCenter,
+                  child: FractionallySizedBox(
+                    heightFactor: 0.30,
+                    widthFactor: 1.0,
+                    child: const LfoPanel(),
+                  ),
+                ),
+
+              // Always present in selection mode so gesture arena is reliable.
               if (controller.selectionMode)
                 Positioned.fill(
                   child: GestureDetector(
@@ -286,11 +289,9 @@ class _CanvasScreenState extends ConsumerState<CanvasScreen> {
                     onScaleUpdate: (d) {
                       if (!controller.hasSelection) return;
 
-                      // Don’t steal single-finger drag.
                       if (!controller.isSelectionGesturing &&
                           d.pointerCount < 2) return;
 
-                      // If 2nd finger arrives after drag started, kick in immediately.
                       if (!controller.isSelectionGesturing &&
                           d.pointerCount >= 2) {
                         controller.selectionGestureStart(
@@ -310,8 +311,6 @@ class _CanvasScreenState extends ConsumerState<CanvasScreen> {
                       if (controller.isSelectionGesturing) {
                         controller.selectionGestureEnd();
 
-                        // ✅ If finger-1 is still down, keep the stroke "grabbed"
-                        // even if it moved away from under the finger.
                         final p = _selectionPointerPos;
                         if (p != null) {
                           controller.selectionResumeDragAt(p);
