@@ -1,3 +1,4 @@
+// lib/core/models/stroke.dart
 class PointSample {
   final double x;
   final double y;
@@ -18,6 +19,13 @@ class PointSample {
 class Stroke {
   final String id;
   final String brushId;
+
+  /// User-facing label for this stroke (shown in Layer panel).
+  final String name;
+
+  /// If false, the stroke is hidden (not rendered).
+  final bool visible;
+
   final int color; // ARGB
   final double size;
 
@@ -49,6 +57,8 @@ class Stroke {
   const Stroke({
     required this.id,
     required this.brushId,
+    this.name = 'Stroke',
+    this.visible = true,
     required this.color,
     required this.size,
     required this.glow,
@@ -65,6 +75,8 @@ class Stroke {
   Stroke copyWith({
     String? id,
     String? brushId,
+    String? name,
+    bool? visible,
     int? color,
     double? size,
     double? glow,
@@ -80,6 +92,8 @@ class Stroke {
     return Stroke(
       id: id ?? this.id,
       brushId: brushId ?? this.brushId,
+      name: name ?? this.name,
+      visible: visible ?? this.visible,
       color: color ?? this.color,
       size: size ?? this.size,
       glow: glow ?? this.glow,
@@ -98,6 +112,8 @@ class Stroke {
   Map<String, dynamic> toJson() => <String, dynamic>{
         'id': id,
         'brushId': brushId,
+        'name': name,
+        'visible': visible,
         'color': color,
         'size': size,
         'glow': glow,
@@ -116,6 +132,8 @@ class Stroke {
     return Stroke(
       id: json['id'] as String,
       brushId: json['brushId'] as String,
+      name: (json['name'] as String?) ?? 'Stroke',
+      visible: (json['visible'] as bool?) ?? true,
       color: json['color'] as int,
       size: (json['size'] as num).toDouble(),
       glow: legacyGlow,

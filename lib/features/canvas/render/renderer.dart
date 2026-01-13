@@ -1,3 +1,4 @@
+// lib/features/canvas/render/renderer.dart
 import 'dart:math' as math;
 import 'dart:ui' as ui;
 import 'package:flutter/widgets.dart';
@@ -124,6 +125,7 @@ class Renderer extends CustomPainter {
 
       for (final group in layer.groups) {
         for (final s in group.strokes) {
+          if (!s.visible) continue; // ✅ skip hidden strokes
           _entries.add(_RenderEntry(
             strokeLocal: s,
             layerId: layer.id,
@@ -281,6 +283,8 @@ class Renderer extends CustomPainter {
 
     // Draw all committed strokes
     for (final e in _entries) {
+      if (!e.strokeLocal.visible) continue; // ✅ safety
+
       final baseWorld = _strokeToWorld(e.strokeLocal, e.layerTransform);
 
       // ✅ if selected, it "stops animating" so extra = 0
@@ -307,6 +311,8 @@ class Renderer extends CustomPainter {
     // Draw active in-progress stroke (live)
     final active = _activeEntry;
     if (active != null) {
+      if (!active.strokeLocal.visible) return;
+
       final baseWorld =
           _strokeToWorld(active.strokeLocal, active.layerTransform);
 

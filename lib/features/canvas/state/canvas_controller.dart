@@ -1,3 +1,4 @@
+// lib/features/canvas/state/canvas_controller.dart
 import 'dart:math' as math;
 import 'dart:ui' show Size;
 
@@ -287,8 +288,6 @@ class CanvasController extends ChangeNotifier {
 
   Offset? _selectionAnchorWorld;
 
-  bool get hasSelection => _selectedStrokeId != null;
-
   bool _isDraggingSelection = false;
   Offset? _selectionDragLastWorld;
 
@@ -298,9 +297,15 @@ class CanvasController extends ChangeNotifier {
   List<PointSample>? _gestureStartLocalPoints;
   Offset? _gestureStartPivotLocal;
 
-  // kept for potential future smoothing; not required right now
   double _gestureLastScale = 1.0;
   double _gestureLastRotation = 0.0;
+
+  bool get hasSelection => _selectedStrokeId != null;
+
+  // ✅ Expose selection info for UI highlighting (Layer panel)
+  String? get selectedStrokeId => _selectedStrokeId;
+  String? get selectedLayerId => _selectedLayerId;
+  int? get selectedGroupIndex => _selectedGroupIndex;
 
   void setSelectionMode(bool value) {
     if (selectionMode == value) return;
@@ -383,6 +388,103 @@ class CanvasController extends ChangeNotifier {
     groups[groupIndex] = group.copyWith(strokes: strokes);
     layers[li] = layer.copyWith(groups: groups);
     _state = _state.copyWith(layers: layers);
+
+    _renderer.rebuildFromLayers(_state.layers);
+    _hasUnsavedChanges = true;
+    _tick();
+    notifyListeners();
+  }
+
+  /// ✅ Rename stroke from UI.
+  void renameStrokeRef(
+    String layerId,
+    int groupIndex,
+    String strokeId,
+    String newName,
+  ) {
+    final trimmed = newName.trim();
+    if (trimmed.isEmpty) return;
+
+    updateStrokeById(
+        layerId, groupIndex, strokeId, (s) => s.copyWith(name: trimmed));
+  }
+
+  /// ✅ Toggle stroke visibility from UI.
+  void setStrokeVisibilityRef(
+    String layerId,
+    int groupIndex,
+    String strokeId,
+    bool visible,
+  ) {
+    final li = _state.layers.indexWhere((l) => l.id == layerId);
+    if (li < 0) return;
+
+    final layers = List<CanvasLayer>.from(_state.layers);
+    final layer = layers[li];
+
+    if (groupIndex < 0 || groupIndex >= layer.groups.length) return;
+
+    final groups = List<StrokeGroup>.from(layer.groups);
+    final group = groups[groupIndex];
+
+    final strokes = List<Stroke>.from(group.strokes);
+    final si = strokes.indexWhere((s) => s.id == strokeId);
+    if (si < 0) return;
+
+    if (strokes[si].visible == visible) return;
+
+    strokes[si] = strokes[si].copyWith(visible: visible);
+
+    groups[groupIndex] = group.copyWith(strokes: strokes);
+    layers[li] = layer.copyWith(groups: groups);
+    _state = _state.copyWith(layers: layers);
+
+    // If we hid the selected stroke, clear selection (avoids “ghost selection”).
+    if (!visible && _selectedStrokeId == strokeId) {
+      clearSelection();
+    }
+
+    _ensureLayerPivotPersisted(layerId);
+
+    _renderer.rebuildFromLayers(_state.layers);
+    _hasUnsavedChanges = true;
+    _tick();
+    notifyListeners();
+  }
+
+  /// ✅ Reorder strokes within a layer/group by ids (top-to-bottom list order).
+  void reorderStrokesRef(
+    String layerId,
+    int groupIndex,
+    List<String> orderedStrokeIds,
+  ) {
+    final li = _state.layers.indexWhere((l) => l.id == layerId);
+    if (li < 0) return;
+
+    final layers = List<CanvasLayer>.from(_state.layers);
+    final layer = layers[li];
+
+    if (groupIndex < 0 || groupIndex >= layer.groups.length) return;
+
+    final groups = List<StrokeGroup>.from(layer.groups);
+    final group = groups[groupIndex];
+
+    if (orderedStrokeIds.length != group.strokes.length) return;
+
+    final map = <String, Stroke>{for (final s in group.strokes) s.id: s};
+
+    final newStrokes = <Stroke>[];
+    for (final id in orderedStrokeIds) {
+      final s = map[id];
+      if (s == null) return; // invalid request
+      newStrokes.add(s);
+    }
+
+    groups[groupIndex] = group.copyWith(strokes: newStrokes);
+    layers[li] = layer.copyWith(groups: groups);
+    _state = _state.copyWith(layers: layers);
+
+    _ensureLayerPivotPersisted(layerId);
 
     _renderer.rebuildFromLayers(_state.layers);
     _hasUnsavedChanges = true;
@@ -654,6 +756,7 @@ class CanvasController extends ChangeNotifier {
 
         for (int si = group.strokes.length - 1; si >= 0; si--) {
           final sLocal = group.strokes[si];
+          if (!sLocal.visible) continue; // ✅ cannot select hidden
 
           final hitRadius = math.max(12.0, sLocal.size * 0.9);
           final hitR2 = hitRadius * hitRadius;
@@ -1455,6 +1558,9 @@ class CanvasController extends ChangeNotifier {
     _current = Stroke(
       id: 's${_state.allStrokes.length}_$_startMs',
       brushId: brushId,
+      // ✅ default stroke name (nice for UI)
+      name: 'Stroke ${_state.allStrokes.length + 1}',
+      visible: true,
       color: color,
       size: brushSize,
       glow: brushGlow,

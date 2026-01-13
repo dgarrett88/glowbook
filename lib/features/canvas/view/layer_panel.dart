@@ -1,3 +1,4 @@
+// lib/features/canvas/view/layer_panel.dart
 import 'dart:math' as math;
 import 'dart:ui' show ImageFilter;
 
@@ -728,6 +729,50 @@ Future<void> _promptRenameLayer(
   }
 }
 
+Future<void> _promptRenameStroke(
+  BuildContext context, {
+  required canvas_state.CanvasController controller,
+  required String layerId,
+  required int groupIndex,
+  required Stroke stroke,
+}) async {
+  final textController = TextEditingController(text: stroke.name);
+
+  final result = await showDialog<String>(
+    context: context,
+    builder: (ctx) {
+      return AlertDialog(
+        backgroundColor: const Color(0xFF1C1C24),
+        title:
+            const Text('Rename stroke', style: TextStyle(color: Colors.white)),
+        content: TextField(
+          controller: textController,
+          autofocus: true,
+          style: const TextStyle(color: Colors.white),
+          decoration: const InputDecoration(
+            hintText: 'Stroke name',
+            hintStyle: TextStyle(color: Colors.white54),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(null),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(textController.text.trim()),
+            child: const Text('OK'),
+          ),
+        ],
+      );
+    },
+  );
+
+  if (result != null && result.isNotEmpty) {
+    controller.renameStrokeRef(layerId, groupIndex, stroke.id, result);
+  }
+}
+
 class _StrokeList extends ConsumerWidget {
   const _StrokeList({
     required this.layer,
@@ -762,6 +807,9 @@ class _StrokeList extends ConsumerWidget {
       );
     }
 
+    // UI order: top-most first (latest stroke first)
+    final uiList = strokes.reversed.toList();
+
     return Container(
       margin: const EdgeInsets.fromLTRB(10, 0, 10, 10),
       padding: const EdgeInsets.fromLTRB(8, 8, 8, 8),
@@ -782,22 +830,65 @@ class _StrokeList extends ConsumerWidget {
             ),
           ),
           const SizedBox(height: 6),
-          for (final s in strokes.reversed)
-            _StrokeTile(
-              key: ValueKey(s.id),
-              controller: controller,
-              layerTransform: layer.transform,
-              groupTransform: group.transform,
-              layerId: layerId,
-              groupIndex: gi,
-              stroke: s,
-              onAnyKnobInteraction: onAnyKnobInteraction,
-              onAnyKnobValueChanged: onAnyKnobValueChanged,
-              onSelect: () => controller.selectStrokeRef(layerId, gi, s.id),
-              onDelete: () => controller.deleteStrokeRef(layerId, gi, s.id),
-              onSizeChanged: (v) =>
-                  controller.setStrokeSizeRef(layerId, gi, s.id, v),
-            ),
+
+          // ✅ Reorderable stroke list (no handles; long-press name area)
+          ReorderableListView.builder(
+            shrinkWrap: true,
+            physics: const NeverScrollableScrollPhysics(),
+            buildDefaultDragHandles: false,
+            itemCount: uiList.length,
+            onReorder: (oldIndex, newIndex) {
+              if (newIndex > oldIndex) newIndex -= 1;
+
+              final newUi = List<Stroke>.from(uiList);
+              final moved = newUi.removeAt(oldIndex);
+              newUi.insert(newIndex, moved);
+
+              // Convert UI order back to underlying order (oldest->newest)
+              final orderedIdsUnderlying =
+                  newUi.reversed.map((s) => s.id).toList();
+
+              controller.reorderStrokesRef(layerId, gi, orderedIdsUnderlying);
+            },
+            itemBuilder: (context, index) {
+              final s = uiList[index];
+
+              final isSelected = controller.selectedStrokeId == s.id &&
+                  controller.selectedLayerId == layerId &&
+                  controller.selectedGroupIndex == gi;
+
+              return _StrokeTile(
+                key: ValueKey(s.id),
+                index: index,
+                controller: controller,
+                layerTransform: layer.transform,
+                groupTransform: group.transform,
+                layerId: layerId,
+                groupIndex: gi,
+                stroke: s,
+                isSelected: isSelected,
+                onAnyKnobInteraction: onAnyKnobInteraction,
+                onAnyKnobValueChanged: onAnyKnobValueChanged,
+                onSelect: () => controller.selectStrokeRef(layerId, gi, s.id),
+                onRename: () => _promptRenameStroke(
+                  context,
+                  controller: controller,
+                  layerId: layerId,
+                  groupIndex: gi,
+                  stroke: s,
+                ),
+                onToggleVisible: () => controller.setStrokeVisibilityRef(
+                  layerId,
+                  gi,
+                  s.id,
+                  !s.visible,
+                ),
+                onDelete: () => controller.deleteStrokeRef(layerId, gi, s.id),
+                onSizeChanged: (v) =>
+                    controller.setStrokeSizeRef(layerId, gi, s.id, v),
+              );
+            },
+          ),
         ],
       ),
     );
@@ -807,18 +898,24 @@ class _StrokeList extends ConsumerWidget {
 class _StrokeTile extends StatefulWidget {
   const _StrokeTile({
     super.key,
+    required this.index,
     required this.controller,
     required this.layerTransform,
     required this.groupTransform,
     required this.layerId,
     required this.groupIndex,
     required this.stroke,
+    required this.isSelected,
     required this.onAnyKnobInteraction,
     required this.onAnyKnobValueChanged,
     required this.onSelect,
+    required this.onRename,
+    required this.onToggleVisible,
     required this.onDelete,
     required this.onSizeChanged,
   });
+
+  final int index;
 
   final canvas_state.CanvasController controller;
   final LayerTransform layerTransform;
@@ -828,10 +925,14 @@ class _StrokeTile extends StatefulWidget {
   final int groupIndex;
   final Stroke stroke;
 
+  final bool isSelected;
+
   final ValueChanged<bool> onAnyKnobInteraction;
   final VoidCallback onAnyKnobValueChanged;
 
   final VoidCallback onSelect;
+  final VoidCallback onRename;
+  final VoidCallback onToggleVisible;
   final VoidCallback onDelete;
   final ValueChanged<double> onSizeChanged;
 
@@ -961,6 +1062,7 @@ class _StrokeTileState extends State<_StrokeTile> {
 
   @override
   Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
     final s = widget.stroke;
 
     final coreUi = (s.coreOpacity.clamp(0.0, 1.0) * 100.0).clamp(0.0, 100.0);
@@ -969,77 +1071,146 @@ class _StrokeTileState extends State<_StrokeTile> {
     final brightUi =
         (s.glowBrightness.clamp(0.0, 1.0) * 100.0).clamp(0.0, 100.0);
 
+    final baseBg = const Color(0xFF151524);
+    final borderColor =
+        widget.isSelected ? cs.primary.withOpacity(0.70) : Colors.white10;
+
     return Container(
       margin: const EdgeInsets.symmetric(vertical: 3),
       decoration: BoxDecoration(
-        color: const Color(0xFF151524),
+        color: baseBg,
         borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: Colors.white10),
+        border:
+            Border.all(color: borderColor, width: widget.isSelected ? 1.25 : 1),
+        boxShadow: widget.isSelected
+            ? [
+                BoxShadow(
+                  color: cs.primary.withOpacity(0.18),
+                  blurRadius: 10,
+                  spreadRadius: 1,
+                )
+              ]
+            : null,
       ),
       child: Column(
         children: [
-          InkWell(
-            borderRadius: BorderRadius.circular(10),
-            onTap: widget.onSelect,
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
-              child: Row(
-                children: [
-                  Container(
-                    width: 14,
-                    height: 14,
-                    decoration: BoxDecoration(
-                      color: Color(s.color),
-                      borderRadius: BorderRadius.circular(4),
-                      border: Border.all(color: Colors.white24),
-                    ),
+          Stack(
+            children: [
+              InkWell(
+                borderRadius: BorderRadius.circular(10),
+                onTap: widget.onSelect, // ✅ just select/highlight (no fade)
+                child: Padding(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+                  child: Row(
+                    children: [
+                      // ✅ Big reorder grab area: long-press chip+name
+                      Expanded(
+                        child: ReorderableDragStartListener(
+                          index: widget.index,
+                          child: Row(
+                            children: [
+                              Container(
+                                width: 16,
+                                height: 16,
+                                decoration: BoxDecoration(
+                                  color: Color(s.color),
+                                  borderRadius: BorderRadius.circular(4),
+                                  border: Border.all(color: Colors.white24),
+                                ),
+                              ),
+                              const SizedBox(width: 8),
+                              Expanded(
+                                child: Text(
+                                  s.name,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: TextStyle(
+                                    color: s.visible
+                                        ? Colors.white70
+                                        : Colors.white.withOpacity(0.45),
+                                    fontSize: 12,
+                                    fontWeight: widget.isSelected
+                                        ? FontWeight.w700
+                                        : FontWeight.w600,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+
+                      // ✅ Visibility toggle
+                      IconButton(
+                        tooltip: s.visible ? 'Hide stroke' : 'Show stroke',
+                        iconSize: 18,
+                        visualDensity: VisualDensity.compact,
+                        onPressed: widget.onToggleVisible,
+                        icon: Icon(
+                          s.visible ? Icons.visibility : Icons.visibility_off,
+                          color: Colors.white70,
+                        ),
+                      ),
+
+                      // ✅ Rename
+                      IconButton(
+                        tooltip: 'Rename stroke',
+                        iconSize: 18,
+                        visualDensity: VisualDensity.compact,
+                        onPressed: widget.onRename,
+                        icon: const Icon(Icons.edit, color: Colors.white70),
+                      ),
+
+                      // Delete
+                      IconButton(
+                        tooltip: 'Delete stroke',
+                        iconSize: 18,
+                        visualDensity: VisualDensity.compact,
+                        onPressed: widget.onDelete,
+                        icon: const Icon(Icons.delete, color: Colors.redAccent),
+                      ),
+
+                      // Expand/collapse
+                      IconButton(
+                        tooltip: _expanded ? 'Hide' : 'Edit',
+                        iconSize: 18,
+                        visualDensity: VisualDensity.compact,
+                        onPressed: () {
+                          setState(() {
+                            _expanded = !_expanded;
+                            if (_expanded) {
+                              _captureBaseline();
+                            } else {
+                              _basePts = null;
+                            }
+                          });
+                        },
+                        icon: Icon(
+                          _expanded
+                              ? Icons.keyboard_arrow_down
+                              : Icons.keyboard_arrow_up,
+                          color: Colors.white70,
+                        ),
+                      ),
+                    ],
                   ),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: Text(
-                      '${s.brushId} • ${s.id}',
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style:
-                          const TextStyle(color: Colors.white70, fontSize: 11),
-                    ),
-                  ),
-                  const SizedBox(width: 6),
-                  Text(
-                    s.size.toStringAsFixed(1),
-                    style: const TextStyle(color: Colors.white38, fontSize: 10),
-                  ),
-                  IconButton(
-                    tooltip: 'Delete stroke',
-                    iconSize: 18,
-                    visualDensity: VisualDensity.compact,
-                    onPressed: widget.onDelete,
-                    icon: const Icon(Icons.delete, color: Colors.redAccent),
-                  ),
-                  IconButton(
-                    tooltip: _expanded ? 'Hide' : 'Edit',
-                    iconSize: 18,
-                    visualDensity: VisualDensity.compact,
-                    onPressed: () {
-                      setState(() {
-                        _expanded = !_expanded;
-                        if (_expanded) {
-                          _captureBaseline();
-                        } else {
-                          _basePts = null;
-                        }
-                      });
-                    },
-                    icon: Icon(
-                      _expanded
-                          ? Icons.keyboard_arrow_down
-                          : Icons.keyboard_arrow_up,
-                      color: Colors.white70,
-                    ),
-                  ),
-                ],
+                ),
               ),
-            ),
+
+              // subtle overlay when selected (keeps tile solid but “lit”)
+              if (widget.isSelected)
+                Positioned.fill(
+                  child: IgnorePointer(
+                    child: Container(
+                      decoration: BoxDecoration(
+                        borderRadius: BorderRadius.circular(10),
+                        color: cs.primary.withOpacity(0.08),
+                      ),
+                    ),
+                  ),
+                ),
+            ],
           ),
           if (_expanded)
             Padding(
