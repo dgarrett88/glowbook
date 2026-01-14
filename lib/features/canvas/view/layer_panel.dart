@@ -8,6 +8,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../state/canvas_controller.dart' as canvas_state;
 import '../../../core/models/canvas_layer.dart';
 import '../../../core/models/stroke.dart';
+import '../../../core/models/lfo.dart';
 
 import 'widgets/synth_knob.dart';
 
@@ -553,6 +554,7 @@ class _LayerTileState extends State<_LayerTile> {
           ),
           if (widget.isExpanded) ...[
             _LayerTransformEditor(
+              layerId: layer.id,
               values: _values,
               onChanged: _updateAndSend,
               onAnyKnobInteraction: widget.onAnyKnobInteraction,
@@ -580,21 +582,23 @@ class _LayerTileState extends State<_LayerTile> {
   }
 }
 
-class _LayerTransformEditor extends StatelessWidget {
+class _LayerTransformEditor extends ConsumerWidget {
   const _LayerTransformEditor({
+    required this.layerId,
     required this.values,
     required this.onChanged,
     required this.onAnyKnobInteraction,
     required this.onAnyKnobValueChanged,
   });
 
+  final String layerId;
   final _LayerTransformValues values;
   final ValueChanged<_LayerTransformValues> onChanged;
   final ValueChanged<bool> onAnyKnobInteraction;
   final VoidCallback onAnyKnobValueChanged;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     return Container(
       padding: const EdgeInsets.fromLTRB(10, 10, 10, 10),
       decoration: const BoxDecoration(
@@ -608,70 +612,116 @@ class _LayerTransformEditor extends StatelessWidget {
             spacing: 10,
             runSpacing: 10,
             children: [
-              SynthKnob(
-                label: 'X',
-                value: values.x.clamp(-500, 500),
-                min: -500,
-                max: 500,
-                defaultValue: 0,
-                valueFormatter: (v) => v.toStringAsFixed(0),
-                onInteractionChanged: onAnyKnobInteraction,
-                onChanged: (v) {
-                  onAnyKnobValueChanged();
-                  onChanged(values.copyWith(x: v));
-                },
+              // X
+              Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  _LayerModLight(layerId: layerId, param: LfoParam.layerX),
+                  const SizedBox(height: 6),
+                  SynthKnob(
+                    label: 'X',
+                    value: values.x.clamp(-500, 500),
+                    min: -500,
+                    max: 500,
+                    defaultValue: 0,
+                    valueFormatter: (v) => v.toStringAsFixed(0),
+                    onInteractionChanged: onAnyKnobInteraction,
+                    onChanged: (v) {
+                      onAnyKnobValueChanged();
+                      onChanged(values.copyWith(x: v));
+                    },
+                  ),
+                ],
               ),
-              SynthKnob(
-                label: 'Y',
-                value: values.y.clamp(-500, 500),
-                min: -500,
-                max: 500,
-                defaultValue: 0,
-                valueFormatter: (v) => v.toStringAsFixed(0),
-                onInteractionChanged: onAnyKnobInteraction,
-                onChanged: (v) {
-                  onAnyKnobValueChanged();
-                  onChanged(values.copyWith(y: v));
-                },
+
+              // Y
+              Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  _LayerModLight(layerId: layerId, param: LfoParam.layerY),
+                  const SizedBox(height: 6),
+                  SynthKnob(
+                    label: 'Y',
+                    value: values.y.clamp(-500, 500),
+                    min: -500,
+                    max: 500,
+                    defaultValue: 0,
+                    valueFormatter: (v) => v.toStringAsFixed(0),
+                    onInteractionChanged: onAnyKnobInteraction,
+                    onChanged: (v) {
+                      onAnyKnobValueChanged();
+                      onChanged(values.copyWith(y: v));
+                    },
+                  ),
+                ],
               ),
-              SynthKnob(
-                label: 'Scale',
-                value: values.scale.clamp(0.1, 5.0),
-                min: 0.1,
-                max: 5.0,
-                defaultValue: 1.0,
-                valueFormatter: (v) => v.toStringAsFixed(2),
-                onInteractionChanged: onAnyKnobInteraction,
-                onChanged: (v) {
-                  onAnyKnobValueChanged();
-                  onChanged(values.copyWith(scale: v));
-                },
+
+              // Scale
+              Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  _LayerModLight(layerId: layerId, param: LfoParam.layerScale),
+                  const SizedBox(height: 6),
+                  SynthKnob(
+                    label: 'Scale',
+                    value: values.scale.clamp(0.1, 5.0),
+                    min: 0.1,
+                    max: 5.0,
+                    defaultValue: 1.0,
+                    valueFormatter: (v) => v.toStringAsFixed(2),
+                    onInteractionChanged: onAnyKnobInteraction,
+                    onChanged: (v) {
+                      onAnyKnobValueChanged();
+                      onChanged(values.copyWith(scale: v));
+                    },
+                  ),
+                ],
               ),
-              SynthKnob(
-                label: 'Rot',
-                value: values.rotationDegrees.clamp(-360, 360),
-                min: -360,
-                max: 360,
-                defaultValue: 0.0,
-                valueFormatter: (v) => '${v.toStringAsFixed(0)}°',
-                onInteractionChanged: onAnyKnobInteraction,
-                onChanged: (v) {
-                  onAnyKnobValueChanged();
-                  onChanged(values.copyWith(rotationDegrees: v));
-                },
+
+              // Rot
+              Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  _LayerModLight(
+                      layerId: layerId, param: LfoParam.layerRotationDeg),
+                  const SizedBox(height: 6),
+                  SynthKnob(
+                    label: 'Rot',
+                    value: values.rotationDegrees.clamp(-360, 360),
+                    min: -360,
+                    max: 360,
+                    defaultValue: 0.0,
+                    valueFormatter: (v) => '${v.toStringAsFixed(0)}°',
+                    onInteractionChanged: onAnyKnobInteraction,
+                    onChanged: (v) {
+                      onAnyKnobValueChanged();
+                      onChanged(values.copyWith(rotationDegrees: v));
+                    },
+                  ),
+                ],
               ),
-              SynthKnob(
-                label: 'Opacity',
-                value: values.opacity.clamp(0.0, 1.0),
-                min: 0.0,
-                max: 1.0,
-                defaultValue: 1.0,
-                valueFormatter: (v) => '${(v * 100).round()}%',
-                onInteractionChanged: onAnyKnobInteraction,
-                onChanged: (v) {
-                  onAnyKnobValueChanged();
-                  onChanged(values.copyWith(opacity: v));
-                },
+
+              // Opacity
+              Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  _LayerModLight(
+                      layerId: layerId, param: LfoParam.layerOpacity),
+                  const SizedBox(height: 6),
+                  SynthKnob(
+                    label: 'Opacity',
+                    value: values.opacity.clamp(0.0, 1.0),
+                    min: 0.0,
+                    max: 1.0,
+                    defaultValue: 1.0,
+                    valueFormatter: (v) => '${(v * 100).round()}%',
+                    onInteractionChanged: onAnyKnobInteraction,
+                    onChanged: (v) {
+                      onAnyKnobValueChanged();
+                      onChanged(values.copyWith(opacity: v));
+                    },
+                  ),
+                ],
               ),
             ],
           ),
@@ -687,6 +737,207 @@ class _LayerTransformEditor extends StatelessWidget {
   }
 }
 
+/// ----------------------------------------------------------------------------------
+/// MOD LIGHTS
+/// ----------------------------------------------------------------------------------
+
+/// Shared light renderer (just visuals). Big hit area, tiny dot.
+class _ModLightDot extends StatelessWidget {
+  const _ModLightDot({required this.isOn});
+
+  final bool isOn;
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: 28,
+      height: 28,
+      child: Center(
+        child: Container(
+          width: 10,
+          height: 10,
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            color: isOn ? Colors.greenAccent : Colors.white24,
+            boxShadow: isOn
+                ? [
+                    BoxShadow(
+                      color: Colors.greenAccent.withOpacity(0.35),
+                      blurRadius: 8,
+                      spreadRadius: 1,
+                    )
+                  ]
+                : null,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Layer mod light (same behaviour as your layer rotation one)
+class _LayerModLight extends ConsumerWidget {
+  const _LayerModLight({
+    required this.layerId,
+    required this.param,
+  });
+
+  final String layerId;
+  final LfoParam param;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final controller = ref.watch(canvas_state.canvasControllerProvider);
+
+    // ✅ These must exist in your controller:
+    //   - findRouteForLayerParam(layerId, param)
+    //   - clearRouteForLayerParam(layerId, param)
+    //   - upsertRouteForLayerParam(layerId:..., param:..., lfoId:...)
+    final route = controller.findRouteForLayerParam(layerId, param);
+    final isOn = route != null;
+
+    return GestureDetector(
+      behavior: HitTestBehavior.translucent,
+      onTap: () async {
+        final lfos = controller.lfos;
+
+        final String? chosen = await showDialog<String?>(
+          context: context,
+          builder: (ctx) {
+            return AlertDialog(
+              backgroundColor: const Color(0xFF1C1C24),
+              title: const Text('Assign LFO',
+                  style: TextStyle(color: Colors.white)),
+              content: SizedBox(
+                width: double.maxFinite,
+                child: ListView(
+                  shrinkWrap: true,
+                  children: [
+                    ListTile(
+                      title: const Text('None',
+                          style: TextStyle(color: Colors.white70)),
+                      onTap: () => Navigator.of(ctx).pop(null),
+                    ),
+                    const Divider(color: Colors.white12),
+                    for (final l in lfos)
+                      ListTile(
+                        title: Text(l.name,
+                            style: const TextStyle(color: Colors.white)),
+                        subtitle: Text(
+                          '${l.wave.label} • ${l.rateHz.toStringAsFixed(2)} Hz',
+                          style: const TextStyle(
+                              color: Colors.white54, fontSize: 12),
+                        ),
+                        onTap: () => Navigator.of(ctx).pop(l.id),
+                      ),
+                  ],
+                ),
+              ),
+            );
+          },
+        );
+
+        if (chosen == null) {
+          controller.clearRouteForLayerParam(layerId, param);
+        } else {
+          controller.upsertRouteForLayerParam(
+            layerId: layerId,
+            param: param,
+            lfoId: chosen,
+          );
+        }
+      },
+      child: _ModLightDot(isOn: isOn),
+    );
+  }
+}
+
+/// Stroke mod light (same UX, same LFO list, but targets a stroke param).
+///
+/// ✅ Expects these controller functions to exist:
+///   - findRouteForStrokeParam(layerId, groupIndex, strokeId, param)
+///   - clearRouteForStrokeParam(layerId, groupIndex, strokeId, param)
+///   - upsertRouteForStrokeParam(layerId:..., groupIndex:..., strokeId:..., param:..., lfoId:...)
+class _StrokeModLight extends ConsumerWidget {
+  const _StrokeModLight({
+    required this.layerId,
+    required this.groupIndex,
+    required this.strokeId,
+    required this.param,
+  });
+
+  final String layerId;
+  final int groupIndex;
+  final String strokeId;
+  final LfoParam param;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final controller = ref.watch(canvas_state.canvasControllerProvider);
+
+    final route = controller.findRouteForStrokeParam(
+        layerId, groupIndex, strokeId, param);
+    final isOn = route != null;
+
+    return GestureDetector(
+      behavior: HitTestBehavior.translucent,
+      onTap: () async {
+        final lfos = controller.lfos;
+
+        final String? chosen = await showDialog<String?>(
+          context: context,
+          builder: (ctx) {
+            return AlertDialog(
+              backgroundColor: const Color(0xFF1C1C24),
+              title: const Text('Assign LFO',
+                  style: TextStyle(color: Colors.white)),
+              content: SizedBox(
+                width: double.maxFinite,
+                child: ListView(
+                  shrinkWrap: true,
+                  children: [
+                    ListTile(
+                      title: const Text('None',
+                          style: TextStyle(color: Colors.white70)),
+                      onTap: () => Navigator.of(ctx).pop(null),
+                    ),
+                    const Divider(color: Colors.white12),
+                    for (final l in lfos)
+                      ListTile(
+                        title: Text(l.name,
+                            style: const TextStyle(color: Colors.white)),
+                        subtitle: Text(
+                          '${l.wave.label} • ${l.rateHz.toStringAsFixed(2)} Hz',
+                          style: const TextStyle(
+                              color: Colors.white54, fontSize: 12),
+                        ),
+                        onTap: () => Navigator.of(ctx).pop(l.id),
+                      ),
+                  ],
+                ),
+              ),
+            );
+          },
+        );
+
+        if (chosen == null) {
+          controller.clearRouteForStrokeParam(
+              layerId, groupIndex, strokeId, param);
+        } else {
+          controller.upsertRouteForStrokeParam(
+            layerId: layerId,
+            strokeId: strokeId,
+            groupIndex: groupIndex,
+            param: param,
+            lfoId: chosen,
+          );
+        }
+      },
+      child: _ModLightDot(isOn: isOn),
+    );
+  }
+}
+
 Future<void> _promptRenameLayer(
   BuildContext context,
   canvas_state.CanvasController controller,
@@ -694,7 +945,7 @@ Future<void> _promptRenameLayer(
 ) async {
   final textController = TextEditingController(text: layer.name);
 
-  final result = await showDialog<String>(
+  final String? result = await showDialog<String?>(
     context: context,
     builder: (ctx) {
       return AlertDialog(
@@ -724,8 +975,8 @@ Future<void> _promptRenameLayer(
     },
   );
 
-  if (result != null && result.isNotEmpty) {
-    controller.renameLayer(layer.id, result);
+  if (result?.isNotEmpty == true) {
+    controller.renameLayer(layer.id, result!);
   }
 }
 
@@ -738,7 +989,7 @@ Future<void> _promptRenameStroke(
 }) async {
   final textController = TextEditingController(text: stroke.name);
 
-  final result = await showDialog<String>(
+  final String? result = await showDialog<String?>(
     context: context,
     builder: (ctx) {
       return AlertDialog(
@@ -768,8 +1019,8 @@ Future<void> _promptRenameStroke(
     },
   );
 
-  if (result != null && result.isNotEmpty) {
-    controller.renameStrokeRef(layerId, groupIndex, stroke.id, result);
+  if (result?.isNotEmpty == true) {
+    controller.renameStrokeRef(layerId, groupIndex, stroke.id, result!);
   }
 }
 
@@ -830,8 +1081,6 @@ class _StrokeList extends ConsumerWidget {
             ),
           ),
           const SizedBox(height: 6),
-
-          // ✅ Reorderable stroke list (no handles; long-press name area)
           ReorderableListView.builder(
             shrinkWrap: true,
             physics: const NeverScrollableScrollPhysics(),
@@ -1098,13 +1347,12 @@ class _StrokeTileState extends State<_StrokeTile> {
             children: [
               InkWell(
                 borderRadius: BorderRadius.circular(10),
-                onTap: widget.onSelect, // ✅ just select/highlight (no fade)
+                onTap: widget.onSelect,
                 child: Padding(
                   padding:
                       const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
                   child: Row(
                     children: [
-                      // ✅ Big reorder grab area: long-press chip+name
                       Expanded(
                         child: ReorderableDragStartListener(
                           index: widget.index,
@@ -1140,8 +1388,6 @@ class _StrokeTileState extends State<_StrokeTile> {
                           ),
                         ),
                       ),
-
-                      // ✅ Visibility toggle
                       IconButton(
                         tooltip: s.visible ? 'Hide stroke' : 'Show stroke',
                         iconSize: 18,
@@ -1152,8 +1398,6 @@ class _StrokeTileState extends State<_StrokeTile> {
                           color: Colors.white70,
                         ),
                       ),
-
-                      // ✅ Rename
                       IconButton(
                         tooltip: 'Rename stroke',
                         iconSize: 18,
@@ -1161,8 +1405,6 @@ class _StrokeTileState extends State<_StrokeTile> {
                         onPressed: widget.onRename,
                         icon: const Icon(Icons.edit, color: Colors.white70),
                       ),
-
-                      // Delete
                       IconButton(
                         tooltip: 'Delete stroke',
                         iconSize: 18,
@@ -1170,8 +1412,6 @@ class _StrokeTileState extends State<_StrokeTile> {
                         onPressed: widget.onDelete,
                         icon: const Icon(Icons.delete, color: Colors.redAccent),
                       ),
-
-                      // Expand/collapse
                       IconButton(
                         tooltip: _expanded ? 'Hide' : 'Edit',
                         iconSize: 18,
@@ -1197,8 +1437,6 @@ class _StrokeTileState extends State<_StrokeTile> {
                   ),
                 ),
               ),
-
-              // subtle overlay when selected (keeps tile solid but “lit”)
               if (widget.isSelected)
                 Positioned.fill(
                   child: IgnorePointer(
@@ -1220,136 +1458,246 @@ class _StrokeTileState extends State<_StrokeTile> {
                 spacing: 10,
                 runSpacing: 10,
                 children: [
-                  SynthKnob(
-                    label: 'Size',
-                    value: s.size.clamp(0.5, 200.0),
-                    min: 0.5,
-                    max: 200.0,
-                    defaultValue: 10.0,
-                    valueFormatter: (v) => v.toStringAsFixed(1),
-                    onInteractionChanged: widget.onAnyKnobInteraction,
-                    onChanged: (v) {
-                      widget.onAnyKnobValueChanged();
-                      widget.onSizeChanged(v);
-                    },
-                  ),
-                  SynthKnob(
-                    label: 'X',
-                    value: _tx.clamp(-500, 500),
-                    min: -500,
-                    max: 500,
-                    defaultValue: 0,
-                    valueFormatter: (v) => v.toStringAsFixed(0),
-                    onInteractionChanged: widget.onAnyKnobInteraction,
-                    onChanged: (v) {
-                      widget.onAnyKnobValueChanged();
-                      setState(() => _tx = v);
-                      _commitTransform();
-                    },
-                  ),
-                  SynthKnob(
-                    label: 'Y',
-                    value: _ty.clamp(-500, 500),
-                    min: -500,
-                    max: 500,
-                    defaultValue: 0,
-                    valueFormatter: (v) => v.toStringAsFixed(0),
-                    onInteractionChanged: widget.onAnyKnobInteraction,
-                    onChanged: (v) {
-                      widget.onAnyKnobValueChanged();
-                      setState(() => _ty = v);
-                      _commitTransform();
-                    },
-                  ),
-                  SynthKnob(
-                    label: 'Rot',
-                    value: _rotDeg.clamp(-360, 360),
-                    min: -360,
-                    max: 360,
-                    defaultValue: 0,
-                    valueFormatter: (v) => '${v.toStringAsFixed(0)}°',
-                    onInteractionChanged: widget.onAnyKnobInteraction,
-                    onChanged: (v) {
-                      widget.onAnyKnobValueChanged();
-                      setState(() => _rotDeg = v);
-                      _commitTransform();
-                    },
-                  ),
-                  SynthKnob(
-                    label: 'Core',
-                    value: coreUi,
-                    min: 0.0,
-                    max: 100.0,
-                    defaultValue: 86.0,
-                    valueFormatter: (v) => '${v.toStringAsFixed(0)}%',
-                    onInteractionChanged: widget.onAnyKnobInteraction,
-                    onChanged: (ui) {
-                      widget.onAnyKnobValueChanged();
-                      final nv = (ui / 100.0).clamp(0.0, 1.0);
-                      widget.controller.updateStrokeById(
-                        widget.layerId,
-                        widget.groupIndex,
-                        s.id,
-                        (st) => st.copyWith(coreOpacity: nv),
-                      );
-                    },
-                  ),
-                  SynthKnob(
-                    label: 'Radius',
-                    value: radiusUi,
-                    min: 0.0,
-                    max: 300.0,
-                    defaultValue: 15.0,
-                    valueFormatter: (v) => v.toStringAsFixed(0),
-                    onInteractionChanged: widget.onAnyKnobInteraction,
-                    onChanged: (ui) {
-                      widget.onAnyKnobValueChanged();
-                      final nv = (ui / 300.0).clamp(0.0, 1.0);
-                      widget.controller.updateStrokeById(
-                        widget.layerId,
-                        widget.groupIndex,
-                        s.id,
-                        (st) => st.copyWith(glowRadius: nv),
-                      );
-                    },
-                  ),
-                  SynthKnob(
-                    label: 'G Op',
-                    value: glowOpUi,
-                    min: 0.0,
-                    max: 100.0,
-                    defaultValue: 100.0,
-                    valueFormatter: (v) => '${v.toStringAsFixed(0)}%',
-                    onInteractionChanged: widget.onAnyKnobInteraction,
-                    onChanged: (ui) {
-                      widget.onAnyKnobValueChanged();
-                      final nv = (ui / 100.0).clamp(0.0, 1.0);
-                      widget.controller.updateStrokeById(
-                        widget.layerId,
-                        widget.groupIndex,
-                        s.id,
-                        (st) => st.copyWith(glowOpacity: nv),
-                      );
-                    },
-                  ),
-                  SynthKnob(
-                    label: 'Bright',
-                    value: brightUi,
-                    min: 0.0,
-                    max: 100.0,
-                    defaultValue: 50.0,
-                    valueFormatter: (v) => v.toStringAsFixed(0),
-                    onInteractionChanged: widget.onAnyKnobInteraction,
-                    onChanged: (ui) {
-                      widget.onAnyKnobValueChanged();
-                      final nv = (ui / 100.0).clamp(0.0, 1.0);
-                      widget.controller.updateStrokeById(
-                        widget.layerId,
-                        widget.groupIndex,
-                        s.id,
-                        (st) => st.copyWith(glowBrightness: nv),
-                      );
-                    },
+                  Wrap(
+                    alignment: WrapAlignment.center,
+                    spacing: 14,
+                    runSpacing: 14,
+                    children: [
+                      // Size
+                      Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          _StrokeModLight(
+                            layerId: widget.layerId,
+                            groupIndex: widget.groupIndex,
+                            strokeId: s.id,
+                            param: LfoParam.strokeSize,
+                          ),
+                          SynthKnob(
+                            label: 'Size',
+                            value: s.size.clamp(0.5, 200.0),
+                            min: 0.5,
+                            max: 200.0,
+                            defaultValue: 10.0,
+                            valueFormatter: (v) => v.toStringAsFixed(1),
+                            onInteractionChanged: widget.onAnyKnobInteraction,
+                            onChanged: (v) {
+                              widget.onAnyKnobValueChanged();
+                              widget.onSizeChanged(v);
+                            },
+                          ),
+                        ],
+                      ),
+
+                      // X
+                      Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          _StrokeModLight(
+                            layerId: widget.layerId,
+                            groupIndex: widget.groupIndex,
+                            strokeId: s.id,
+                            param: LfoParam.strokeX,
+                          ),
+                          SynthKnob(
+                            label: 'X',
+                            value: _tx.clamp(-500, 500),
+                            min: -500,
+                            max: 500,
+                            defaultValue: 0,
+                            valueFormatter: (v) => v.toStringAsFixed(0),
+                            onInteractionChanged: widget.onAnyKnobInteraction,
+                            onChanged: (v) {
+                              widget.onAnyKnobValueChanged();
+                              setState(() => _tx = v);
+                              _commitTransform();
+                            },
+                          ),
+                        ],
+                      ),
+
+                      // Y
+                      Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          _StrokeModLight(
+                            layerId: widget.layerId,
+                            groupIndex: widget.groupIndex,
+                            strokeId: s.id,
+                            param: LfoParam.strokeY,
+                          ),
+                          SynthKnob(
+                            label: 'Y',
+                            value: _ty.clamp(-500, 500),
+                            min: -500,
+                            max: 500,
+                            defaultValue: 0,
+                            valueFormatter: (v) => v.toStringAsFixed(0),
+                            onInteractionChanged: widget.onAnyKnobInteraction,
+                            onChanged: (v) {
+                              widget.onAnyKnobValueChanged();
+                              setState(() => _ty = v);
+                              _commitTransform();
+                            },
+                          ),
+                        ],
+                      ),
+
+                      // Rotation
+                      Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          _StrokeModLight(
+                            layerId: widget.layerId,
+                            groupIndex: widget.groupIndex,
+                            strokeId: s.id,
+                            param: LfoParam.strokeRotationDeg,
+                          ),
+                          SynthKnob(
+                            label: 'Rot',
+                            value: _rotDeg.clamp(-360, 360),
+                            min: -360,
+                            max: 360,
+                            defaultValue: 0,
+                            valueFormatter: (v) => '${v.toStringAsFixed(0)}°',
+                            onInteractionChanged: widget.onAnyKnobInteraction,
+                            onChanged: (v) {
+                              widget.onAnyKnobValueChanged();
+                              setState(() => _rotDeg = v);
+                              _commitTransform();
+                            },
+                          ),
+                        ],
+                      ),
+
+                      // Core
+                      Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          _StrokeModLight(
+                            layerId: widget.layerId,
+                            groupIndex: widget.groupIndex,
+                            strokeId: s.id,
+                            param: LfoParam.strokeCoreOpacity,
+                          ),
+                          SynthKnob(
+                            label: 'Core',
+                            value: coreUi,
+                            min: 0.0,
+                            max: 100.0,
+                            defaultValue: 86.0,
+                            valueFormatter: (v) => '${v.toStringAsFixed(0)}%',
+                            onInteractionChanged: widget.onAnyKnobInteraction,
+                            onChanged: (ui) {
+                              widget.onAnyKnobValueChanged();
+                              final nv = (ui / 100.0).clamp(0.0, 1.0);
+                              widget.controller.updateStrokeById(
+                                widget.layerId,
+                                widget.groupIndex,
+                                s.id,
+                                (st) => st.copyWith(coreOpacity: nv),
+                              );
+                            },
+                          ),
+                        ],
+                      ),
+
+                      // Radius
+                      Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          _StrokeModLight(
+                            layerId: widget.layerId,
+                            groupIndex: widget.groupIndex,
+                            strokeId: s.id,
+                            param: LfoParam.strokeGlowRadius,
+                          ),
+                          SynthKnob(
+                            label: 'Radius',
+                            value: radiusUi,
+                            min: 0.0,
+                            max: 300.0,
+                            defaultValue: 15.0,
+                            valueFormatter: (v) => v.toStringAsFixed(0),
+                            onInteractionChanged: widget.onAnyKnobInteraction,
+                            onChanged: (ui) {
+                              widget.onAnyKnobValueChanged();
+                              final nv = (ui / 300.0).clamp(0.0, 1.0);
+                              widget.controller.updateStrokeById(
+                                widget.layerId,
+                                widget.groupIndex,
+                                s.id,
+                                (st) => st.copyWith(glowRadius: nv),
+                              );
+                            },
+                          ),
+                        ],
+                      ),
+
+                      // Glow Opacity
+                      Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          _StrokeModLight(
+                            layerId: widget.layerId,
+                            groupIndex: widget.groupIndex,
+                            strokeId: s.id,
+                            param: LfoParam.strokeGlowOpacity,
+                          ),
+                          SynthKnob(
+                            label: 'G Op',
+                            value: glowOpUi,
+                            min: 0.0,
+                            max: 100.0,
+                            defaultValue: 100.0,
+                            valueFormatter: (v) => '${v.toStringAsFixed(0)}%',
+                            onInteractionChanged: widget.onAnyKnobInteraction,
+                            onChanged: (ui) {
+                              widget.onAnyKnobValueChanged();
+                              final nv = (ui / 100.0).clamp(0.0, 1.0);
+                              widget.controller.updateStrokeById(
+                                widget.layerId,
+                                widget.groupIndex,
+                                s.id,
+                                (st) => st.copyWith(glowOpacity: nv),
+                              );
+                            },
+                          ),
+                        ],
+                      ),
+
+                      // Brightness
+                      Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          _StrokeModLight(
+                            layerId: widget.layerId,
+                            groupIndex: widget.groupIndex,
+                            strokeId: s.id,
+                            param: LfoParam.strokeGlowBrightness,
+                          ),
+                          SynthKnob(
+                            label: 'Bright',
+                            value: brightUi,
+                            min: 0.0,
+                            max: 100.0,
+                            defaultValue: 50.0,
+                            valueFormatter: (v) => v.toStringAsFixed(0),
+                            onInteractionChanged: widget.onAnyKnobInteraction,
+                            onChanged: (ui) {
+                              widget.onAnyKnobValueChanged();
+                              final nv = (ui / 100.0).clamp(0.0, 1.0);
+                              widget.controller.updateStrokeById(
+                                widget.layerId,
+                                widget.groupIndex,
+                                s.id,
+                                (st) => st.copyWith(glowBrightness: nv),
+                              );
+                            },
+                          ),
+                        ],
+                      ),
+                    ],
                   ),
                 ],
               ),
@@ -1357,5 +1705,543 @@ class _StrokeTileState extends State<_StrokeTile> {
         ],
       ),
     );
+  }
+}
+
+// ----------------------------------------------------------------------------------
+// LFO panel + route UI (unchanged structurally, but param labels expanded)
+// ----------------------------------------------------------------------------------
+
+class _LfoPanel extends StatefulWidget {
+  const _LfoPanel({
+    required this.controller,
+    required this.layers,
+    required this.onAnyKnobInteraction,
+    required this.onAnyKnobValueChanged,
+  });
+
+  final canvas_state.CanvasController controller;
+  final List<CanvasLayer> layers;
+  final ValueChanged<bool> onAnyKnobInteraction;
+  final VoidCallback onAnyKnobValueChanged;
+
+  @override
+  State<_LfoPanel> createState() => _LfoPanelState();
+}
+
+class _LfoPanelState extends State<_LfoPanel> {
+  final Set<String> _expandedLfos = <String>{};
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final lfos = widget.controller.lfos;
+    final routes = widget.controller.lfoRoutes;
+
+    return Container(
+      padding: const EdgeInsets.fromLTRB(10, 10, 10, 8),
+      decoration: const BoxDecoration(color: Color(0xFF11111C)),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            children: [
+              const Text(
+                'LFOs',
+                style: TextStyle(
+                  color: Colors.white,
+                  fontWeight: FontWeight.bold,
+                  letterSpacing: 0.5,
+                ),
+              ),
+              const SizedBox(width: 8),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                decoration: BoxDecoration(
+                  color: Colors.white12,
+                  borderRadius: BorderRadius.circular(999),
+                ),
+                child: Text(
+                  '${lfos.length}',
+                  style: const TextStyle(color: Colors.white70, fontSize: 11),
+                ),
+              ),
+              const Spacer(),
+              IconButton(
+                tooltip: 'Add LFO',
+                iconSize: 20,
+                visualDensity: VisualDensity.compact,
+                icon: Icon(Icons.add, color: cs.primary),
+                onPressed: () => widget.controller.addLfo(),
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          if (lfos.isEmpty)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 8),
+              child: Text(
+                'No LFOs yet',
+                style: TextStyle(
+                    color: Colors.white.withOpacity(0.35), fontSize: 11),
+              ),
+            )
+          else
+            Column(
+              children: [
+                for (final lfo in lfos)
+                  _LfoCard(
+                    key: ValueKey(lfo.id),
+                    lfoId: lfo.id,
+                    isExpanded: _expandedLfos.contains(lfo.id),
+                    lfoName: lfo.name,
+                    enabled: lfo.enabled,
+                    wave: lfo.wave,
+                    rateHz: lfo.rateHz,
+                    phase: lfo.phase,
+                    offset: lfo.offset,
+                    routes: routes.where((r) => r.lfoId == lfo.id).toList(),
+                    layers: widget.layers,
+                    activeLayerId: widget.controller.activeLayerId,
+                    onToggleExpanded: () {
+                      setState(() {
+                        if (_expandedLfos.contains(lfo.id)) {
+                          _expandedLfos.remove(lfo.id);
+                        } else {
+                          _expandedLfos.add(lfo.id);
+                        }
+                      });
+                    },
+                    controller: widget.controller,
+                    onAnyKnobInteraction: widget.onAnyKnobInteraction,
+                    onAnyKnobValueChanged: widget.onAnyKnobValueChanged,
+                  ),
+              ],
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+class _LfoCard extends StatelessWidget {
+  const _LfoCard({
+    super.key,
+    required this.lfoId,
+    required this.isExpanded,
+    required this.lfoName,
+    required this.enabled,
+    required this.wave,
+    required this.rateHz,
+    required this.phase,
+    required this.offset,
+    required this.routes,
+    required this.layers,
+    required this.activeLayerId,
+    required this.controller,
+    required this.onToggleExpanded,
+    required this.onAnyKnobInteraction,
+    required this.onAnyKnobValueChanged,
+  });
+
+  final String lfoId;
+  final bool isExpanded;
+
+  final String lfoName;
+  final bool enabled;
+  final LfoWave wave;
+  final double rateHz;
+  final double phase;
+  final double offset;
+
+  final List<LfoRoute> routes;
+  final List<CanvasLayer> layers;
+  final String activeLayerId;
+
+  final canvas_state.CanvasController controller;
+
+  final VoidCallback onToggleExpanded;
+  final ValueChanged<bool> onAnyKnobInteraction;
+  final VoidCallback onAnyKnobValueChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 8),
+      padding: const EdgeInsets.fromLTRB(10, 10, 10, 10),
+      decoration: BoxDecoration(
+        color: const Color(0xFF151524),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Colors.white10),
+      ),
+      child: Column(
+        children: [
+          Row(
+            children: [
+              Switch(
+                value: enabled,
+                onChanged: (v) => controller.setLfoEnabled(lfoId, v),
+              ),
+              const SizedBox(width: 6),
+              Expanded(
+                child: Text(
+                  lfoName,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: enabled ? Colors.white : Colors.white54,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 6),
+              DropdownButton<LfoWave>(
+                value: wave,
+                dropdownColor: const Color(0xFF1C1C24),
+                underline: const SizedBox.shrink(),
+                style: const TextStyle(color: Colors.white),
+                items: LfoWave.values
+                    .map((w) => DropdownMenuItem(
+                          value: w,
+                          child: Text(w.label),
+                        ))
+                    .toList(),
+                onChanged: (w) {
+                  if (w == null) return;
+                  controller.setLfoWave(lfoId, w);
+                },
+              ),
+              IconButton(
+                tooltip: 'Rename LFO',
+                iconSize: 18,
+                visualDensity: VisualDensity.compact,
+                icon: const Icon(Icons.edit, color: Colors.white70),
+                onPressed: () =>
+                    _promptRenameLfo(context, controller, lfoId, lfoName),
+              ),
+              IconButton(
+                tooltip: 'Delete LFO',
+                iconSize: 18,
+                visualDensity: VisualDensity.compact,
+                icon: const Icon(Icons.delete, color: Colors.redAccent),
+                onPressed: () => controller.removeLfo(lfoId),
+              ),
+              IconButton(
+                tooltip: isExpanded ? 'Hide' : 'Edit',
+                iconSize: 18,
+                visualDensity: VisualDensity.compact,
+                icon: Icon(
+                  isExpanded
+                      ? Icons.keyboard_arrow_down
+                      : Icons.keyboard_arrow_up,
+                  color: Colors.white70,
+                ),
+                onPressed: onToggleExpanded,
+              ),
+            ],
+          ),
+          if (isExpanded) ...[
+            const SizedBox(height: 10),
+            Wrap(
+              alignment: WrapAlignment.center,
+              spacing: 10,
+              runSpacing: 10,
+              children: [
+                SynthKnob(
+                  label: 'Rate',
+                  value: rateHz.clamp(0.01, 20.0),
+                  min: 0.01,
+                  max: 20.0,
+                  defaultValue: 0.25,
+                  valueFormatter: (v) => '${v.toStringAsFixed(2)} Hz',
+                  onInteractionChanged: onAnyKnobInteraction,
+                  onChanged: (v) {
+                    onAnyKnobValueChanged();
+                    controller.setLfoRate(lfoId, v);
+                  },
+                ),
+                SynthKnob(
+                  label: 'Phase',
+                  value: (phase.clamp(0.0, 1.0) * 100.0),
+                  min: 0.0,
+                  max: 100.0,
+                  defaultValue: 0.0,
+                  valueFormatter: (v) => '${v.toStringAsFixed(0)}%',
+                  onInteractionChanged: onAnyKnobInteraction,
+                  onChanged: (ui) {
+                    onAnyKnobValueChanged();
+                    controller.setLfoPhase(lfoId, (ui / 100.0).clamp(0.0, 1.0));
+                  },
+                ),
+                SynthKnob(
+                  label: 'Offset',
+                  value: offset.clamp(-1.0, 1.0),
+                  min: -1.0,
+                  max: 1.0,
+                  defaultValue: 0.0,
+                  valueFormatter: (v) => v.toStringAsFixed(2),
+                  onInteractionChanged: onAnyKnobInteraction,
+                  onChanged: (v) {
+                    onAnyKnobValueChanged();
+                    controller.setLfoOffset(lfoId, v);
+                  },
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            Row(
+              children: [
+                const Text(
+                  'Routes',
+                  style: TextStyle(
+                    color: Colors.white70,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                const Spacer(),
+                TextButton.icon(
+                  style: TextButton.styleFrom(
+                    foregroundColor: cs.primary,
+                    visualDensity: VisualDensity.compact,
+                  ),
+                  onPressed: layers.isEmpty
+                      ? null
+                      : () => controller.addRouteToLayer(lfoId, activeLayerId),
+                  icon: const Icon(Icons.add, size: 16),
+                  label: const Text('To active layer'),
+                ),
+              ],
+            ),
+            const SizedBox(height: 6),
+            if (routes.isEmpty)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 6),
+                child: Text(
+                  'No routes yet',
+                  style: TextStyle(
+                      color: Colors.white.withOpacity(0.35), fontSize: 11),
+                ),
+              )
+            else
+              Column(
+                children: [
+                  for (final r in routes)
+                    _RouteTile(
+                      key: ValueKey(r.id),
+                      route: r,
+                      layers: layers,
+                      controller: controller,
+                      onAnyKnobInteraction: onAnyKnobInteraction,
+                      onAnyKnobValueChanged: onAnyKnobValueChanged,
+                    )
+                ],
+              ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _RouteTile extends StatelessWidget {
+  const _RouteTile({
+    super.key,
+    required this.route,
+    required this.layers,
+    required this.controller,
+    required this.onAnyKnobInteraction,
+    required this.onAnyKnobValueChanged,
+  });
+
+  final LfoRoute route;
+  final List<CanvasLayer> layers;
+  final canvas_state.CanvasController controller;
+  final ValueChanged<bool> onAnyKnobInteraction;
+  final VoidCallback onAnyKnobValueChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 8),
+      padding: const EdgeInsets.fromLTRB(10, 8, 10, 10),
+      decoration: BoxDecoration(
+        color: const Color(0xFF0F0F18),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: Colors.white10),
+      ),
+      child: Column(
+        children: [
+          Row(
+            children: [
+              Switch(
+                value: route.enabled,
+                onChanged: (v) => controller.setRouteEnabled(route.id, v),
+              ),
+              const SizedBox(width: 6),
+              Expanded(
+                child: DropdownButton<String>(
+                  value: layers.any((l) => l.id == route.layerId)
+                      ? route.layerId
+                      : layers.first.id,
+                  dropdownColor: const Color(0xFF1C1C24),
+                  underline: const SizedBox.shrink(),
+                  style: const TextStyle(color: Colors.white),
+                  items: layers
+                      .map((l) => DropdownMenuItem(
+                            value: l.id,
+                            child:
+                                Text(l.name, overflow: TextOverflow.ellipsis),
+                          ))
+                      .toList(),
+                  onChanged: (id) {
+                    if (id == null) return;
+                    controller.setRouteLayer(route.id, id);
+                  },
+                ),
+              ),
+              const SizedBox(width: 8),
+              DropdownButton<LfoParam>(
+                value: route.param,
+                dropdownColor: const Color(0xFF1C1C24),
+                underline: const SizedBox.shrink(),
+                style: const TextStyle(color: Colors.white),
+                items: LfoParam.values
+                    .map((p) => DropdownMenuItem(
+                          value: p,
+                          child: Text(_paramLabel(p)),
+                        ))
+                    .toList(),
+                onChanged: (p) {
+                  if (p == null) return;
+                  controller.setRouteParam(route.id, p);
+                },
+              ),
+              const SizedBox(width: 8),
+              Tooltip(
+                message: route.bipolar ? 'Bipolar (-1..1)' : 'Unipolar (0..1)',
+                child: IconButton(
+                  iconSize: 18,
+                  visualDensity: VisualDensity.compact,
+                  onPressed: () =>
+                      controller.setRouteBipolar(route.id, !route.bipolar),
+                  icon: Icon(
+                    route.bipolar ? Icons.swap_horiz : Icons.trending_up,
+                    color: route.bipolar ? cs.primary : Colors.white70,
+                  ),
+                ),
+              ),
+              IconButton(
+                tooltip: 'Delete route',
+                iconSize: 18,
+                visualDensity: VisualDensity.compact,
+                onPressed: () => controller.removeRoute(route.id),
+                icon: const Icon(Icons.close, color: Colors.white70),
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          Align(
+            alignment: Alignment.center,
+            child: SynthKnob(
+              label: 'Amt',
+              value: route.amountDeg.clamp(0.0, 360.0),
+              min: 0.0,
+              max: 360.0,
+              defaultValue: 25.0,
+              valueFormatter: (v) => '${v.toStringAsFixed(0)}°',
+              onInteractionChanged: onAnyKnobInteraction,
+              onChanged: (v) {
+                onAnyKnobValueChanged();
+                controller.setRouteAmountDeg(route.id, v);
+              },
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  static String _paramLabel(LfoParam p) {
+    switch (p) {
+      // Layer
+      case LfoParam.layerX:
+        return 'Layer X';
+      case LfoParam.layerY:
+        return 'Layer Y';
+      case LfoParam.layerScale:
+        return 'Layer Scale';
+      case LfoParam.layerRotationDeg:
+        return 'Layer Rot';
+      case LfoParam.layerOpacity:
+        return 'Layer Opacity';
+
+      // Stroke
+      case LfoParam.strokeSize:
+        return 'Stroke Size';
+      case LfoParam.strokeX:
+        return 'Stroke X';
+      case LfoParam.strokeY:
+        return 'Stroke Y';
+      case LfoParam.strokeRotationDeg:
+        return 'Stroke Rot';
+      case LfoParam.strokeCoreOpacity:
+        return 'Stroke Core';
+      case LfoParam.strokeGlowRadius:
+        return 'Stroke Radius';
+      case LfoParam.strokeGlowOpacity:
+        return 'Stroke Glow Op';
+      case LfoParam.strokeGlowBrightness:
+        return 'Stroke Bright';
+
+      default:
+        return p.name; // safe fallback
+    }
+  }
+}
+
+Future<void> _promptRenameLfo(
+  BuildContext context,
+  canvas_state.CanvasController controller,
+  String lfoId,
+  String currentName,
+) async {
+  final textController = TextEditingController(text: currentName);
+
+  final String? result = await showDialog<String?>(
+    context: context,
+    builder: (ctx) {
+      return AlertDialog(
+        backgroundColor: const Color(0xFF1C1C24),
+        title: const Text('Rename LFO', style: TextStyle(color: Colors.white)),
+        content: TextField(
+          controller: textController,
+          autofocus: true,
+          style: const TextStyle(color: Colors.white),
+          decoration: const InputDecoration(
+            hintText: 'LFO name',
+            hintStyle: TextStyle(color: Colors.white54),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(null),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(textController.text.trim()),
+            child: const Text('OK'),
+          ),
+        ],
+      );
+    },
+  );
+
+  if (result?.isNotEmpty == true) {
+    controller.renameLfo(lfoId, result!);
   }
 }

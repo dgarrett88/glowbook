@@ -32,20 +32,91 @@ class Renderer extends CustomPainter {
   Renderer(
     this.repaint,
     this.symmetryFn, {
+    // LAYER extras
     required double Function(String layerId) layerExtraRotationRadians,
+    double Function(String layerId)? layerExtraX,
+    double Function(String layerId)? layerExtraY,
+    double Function(String layerId)? layerExtraScale,
+    double Function(String layerId)? layerExtraOpacity,
+
+    // STROKE extras
+    double Function(String layerId, String strokeId)? strokeExtraX,
+    double Function(String layerId, String strokeId)? strokeExtraY,
+    double Function(String layerId, String strokeId)? strokeExtraRotationRad,
+    double Function(String layerId, String strokeId)? strokeExtraSize,
+    double Function(String layerId, String strokeId)? strokeExtraCoreOpacity,
+    double Function(String layerId, String strokeId)? strokeExtraGlowRadius,
+    double Function(String layerId, String strokeId)? strokeExtraGlowOpacity,
+    double Function(String layerId, String strokeId)? strokeExtraGlowBrightness,
     required String? Function() selectedStrokeIdFn,
   })  : _layerExtraRotationRadians = layerExtraRotationRadians,
+        _layerExtraX = layerExtraX,
+        _layerExtraY = layerExtraY,
+        _layerExtraScale = layerExtraScale,
+        _layerExtraOpacity = layerExtraOpacity,
+        _strokeExtraX = strokeExtraX,
+        _strokeExtraY = strokeExtraY,
+        _strokeExtraRotationRad = strokeExtraRotationRad,
+        _strokeExtraSize = strokeExtraSize,
+        _strokeExtraCoreOpacity = strokeExtraCoreOpacity,
+        _strokeExtraGlowRadius = strokeExtraGlowRadius,
+        _strokeExtraGlowOpacity = strokeExtraGlowOpacity,
+        _strokeExtraGlowBrightness = strokeExtraGlowBrightness,
         _selectedStrokeIdFn = selectedStrokeIdFn,
         super(repaint: repaint);
 
   final Listenable repaint;
   final SymmetryMode Function() symmetryFn;
 
+  // ---------------------------------------------------------------------------
+  // CALLBACKS (from controller)
+  // ---------------------------------------------------------------------------
+
   /// Returns the current extra rotation (radians) for a layer due to animation.
   final double Function(String layerId) _layerExtraRotationRadians;
 
+  /// Returns extra translation in world pixels for a layer due to animation.
+  final double Function(String layerId)? _layerExtraX;
+  final double Function(String layerId)? _layerExtraY;
+
+  /// Returns extra scale delta for a layer (interpreted as multiplier delta).
+  /// Effective scale = baseScale * (1 + extraScale)
+  final double Function(String layerId)? _layerExtraScale;
+
+  /// Returns extra opacity delta for a layer (additive).
+  /// Effective opacity = clamp(baseOpacity + extraOpacity, 0..1)
+  final double Function(String layerId)? _layerExtraOpacity;
+
+  /// Stroke extras (all additive, except rotation already radians)
+  final double Function(String layerId, String strokeId)? _strokeExtraX;
+  final double Function(String layerId, String strokeId)? _strokeExtraY;
+  final double Function(String layerId, String strokeId)?
+      _strokeExtraRotationRad;
+
+  final double Function(String layerId, String strokeId)? _strokeExtraSize;
+  final double Function(String layerId, String strokeId)?
+      _strokeExtraCoreOpacity;
+  final double Function(String layerId, String strokeId)?
+      _strokeExtraGlowRadius;
+  final double Function(String layerId, String strokeId)?
+      _strokeExtraGlowOpacity;
+  final double Function(String layerId, String strokeId)?
+      _strokeExtraGlowBrightness;
+
   /// Returns currently selected stroke id (or null).
   final String? Function() _selectedStrokeIdFn;
+
+  bool get _strokeExtrasEnabled =>
+      _strokeExtraX != null ||
+      _strokeExtraY != null ||
+      _strokeExtraRotationRad != null ||
+      _strokeExtraSize != null ||
+      _strokeExtraCoreOpacity != null ||
+      _strokeExtraGlowRadius != null ||
+      _strokeExtraGlowOpacity != null ||
+      _strokeExtraGlowBrightness != null;
+
+  // ---------------------------------------------------------------------------
 
   final LiquidNeonBrush _neon = LiquidNeonBrush();
   final SoftGlowBrush _soft = SoftGlowBrush();
@@ -135,23 +206,47 @@ class Renderer extends CustomPainter {
       }
     }
 
-    // pre-bake only strokes on layers that currently have 0 extra rotation
-    // (static), AND not selected.
+    // ✅ IMPORTANT:
+    // If stroke-extras exist at all, baking becomes dangerous because a stroke can
+    // become animated after baking (assign LFO route) and still draw the stale picture.
+    // So: while stroke-extras are enabled, we DO NOT bake anything.
+    if (_strokeExtrasEnabled) return;
+
+    // pre-bake only strokes with 0 extra motion (layer only), AND not selected.
     final selectedId = _selectedStrokeIdFn();
     final sz = _lastSize ?? const Size(0, 0);
 
     for (final e in _entries) {
-      final extra = _layerExtraRotationRadians(e.layerId);
-      if (extra.abs() > 0.000001) continue; // animated layer: no bake
-      if (selectedId != null && e.strokeLocal.id == selectedId) continue;
+      final sid = e.strokeLocal.id;
+
+      final extraRot = _layerExtraRotationRadians(e.layerId);
+      final extraX = _layerExtraX?.call(e.layerId) ?? 0.0;
+      final extraY = _layerExtraY?.call(e.layerId) ?? 0.0;
+      final extraScale = _layerExtraScale?.call(e.layerId) ?? 0.0;
+      final extraOpacity = _layerExtraOpacity?.call(e.layerId) ?? 0.0;
+
+      final isLayerAnimated = extraRot.abs() > 0.000001 ||
+          extraX.abs() > 0.000001 ||
+          extraY.abs() > 0.000001 ||
+          extraScale.abs() > 0.000001 ||
+          extraOpacity.abs() > 0.000001;
+
+      if (isLayerAnimated) continue; // animated: no bake
+      if (selectedId != null && sid == selectedId) continue;
 
       final rec = ui.PictureRecorder();
       final can = Canvas(rec);
 
-      final baseWorld = _strokeToWorld(e.strokeLocal, e.layerTransform);
-      _drawByBrush(can, baseWorld, sz, _modeForStroke(baseWorld));
+      final world = _strokeToWorldWithLayerExtras(
+        e.strokeLocal,
+        e.layerTransform,
+        e.layerId,
+        freezeExtras: false,
+      );
 
-      _bakedByStrokeId[e.strokeLocal.id] = rec.endRecording();
+      _drawByBrush(can, world, sz, _modeForStroke(world));
+
+      _bakedByStrokeId[sid] = rec.endRecording();
     }
   }
 
@@ -208,7 +303,43 @@ class Renderer extends CustomPainter {
     return scaled + pivotLocal + t.position;
   }
 
-  Stroke _strokeToWorld(Stroke sLocal, LayerTransform t) {
+  LayerTransform _effectiveLayerTransform(
+    LayerTransform base,
+    String layerId, {
+    required bool freezeExtras,
+  }) {
+    if (freezeExtras) return base;
+
+    final dx = _layerExtraX?.call(layerId) ?? 0.0;
+    final dy = _layerExtraY?.call(layerId) ?? 0.0;
+    final extraRot = _layerExtraRotationRadians(layerId);
+    final extraScale = _layerExtraScale?.call(layerId) ?? 0.0;
+    final extraOpacity = _layerExtraOpacity?.call(layerId) ?? 0.0;
+
+    final scaleMul = (1.0 + extraScale).clamp(0.01, 100.0).toDouble();
+    final effScale = (base.scale * scaleMul).clamp(0.01, 100.0).toDouble();
+    final effOpacity = (base.opacity + extraOpacity).clamp(0.0, 1.0).toDouble();
+
+    return base.copyWith(
+      position: base.position + Offset(dx, dy),
+      rotation: base.rotation + extraRot,
+      scale: effScale,
+      opacity: effOpacity,
+    );
+  }
+
+  Stroke _strokeToWorldWithLayerExtras(
+    Stroke sLocal,
+    LayerTransform baseLayerTr,
+    String layerId, {
+    required bool freezeExtras,
+  }) {
+    final t = _effectiveLayerTransform(
+      baseLayerTr,
+      layerId,
+      freezeExtras: freezeExtras,
+    );
+
     if (_isIdentity(t)) return sLocal;
 
     final pivotLocal = t.pivot ?? Offset.zero;
@@ -228,24 +359,79 @@ class Renderer extends CustomPainter {
     );
   }
 
-  Stroke _applyExtraRotationWorld(
-      Stroke sWorld, double extraRad, Offset pivotWorld) {
-    if (extraRad.abs() < 0.000001) return sWorld;
-
-    final cosA = math.cos(extraRad);
-    final sinA = math.sin(extraRad);
-
-    final out = <PointSample>[];
-    for (final p in sWorld.points) {
-      final v = Offset(p.x, p.y) - pivotWorld;
-      final r = Offset(
-        v.dx * cosA - v.dy * sinA,
-        v.dx * sinA + v.dy * cosA,
-      );
-      final w = pivotWorld + r;
-      out.add(PointSample(w.dx, w.dy, p.t));
+  Offset _strokeWorldCentroid(Stroke sWorld) {
+    final pts = sWorld.points;
+    if (pts.isEmpty) return Offset.zero;
+    double sx = 0.0, sy = 0.0;
+    for (final p in pts) {
+      sx += p.x;
+      sy += p.y;
     }
-    return sWorld.copyWith(points: out);
+    return Offset(sx / pts.length, sy / pts.length);
+  }
+
+  Stroke _applyStrokeExtrasWorld(
+    Stroke sWorld,
+    String layerId,
+    String strokeId, {
+    required bool freezeExtras,
+  }) {
+    if (freezeExtras) return sWorld;
+
+    final dx = _strokeExtraX?.call(layerId, strokeId) ?? 0.0;
+    final dy = _strokeExtraY?.call(layerId, strokeId) ?? 0.0;
+    final rot = _strokeExtraRotationRad?.call(layerId, strokeId) ?? 0.0;
+
+    final dSize = _strokeExtraSize?.call(layerId, strokeId) ?? 0.0;
+    final dCoreOp = _strokeExtraCoreOpacity?.call(layerId, strokeId) ?? 0.0;
+    final dGlowRadius = _strokeExtraGlowRadius?.call(layerId, strokeId) ?? 0.0;
+    final dGlowOp = _strokeExtraGlowOpacity?.call(layerId, strokeId) ?? 0.0;
+    final dGlowBright =
+        _strokeExtraGlowBrightness?.call(layerId, strokeId) ?? 0.0;
+
+    final hasGeo =
+        dx.abs() > 0.000001 || dy.abs() > 0.000001 || rot.abs() > 0.000001;
+
+    Stroke outStroke = sWorld;
+
+    // Geometry (translate + rotate around centroid in WORLD)
+    if (hasGeo) {
+      final pivot = _strokeWorldCentroid(outStroke);
+      final cosA = math.cos(rot);
+      final sinA = math.sin(rot);
+      final outPts = <PointSample>[];
+
+      for (final p in outStroke.points) {
+        final base = Offset(p.x + dx, p.y + dy);
+        final v = base - pivot;
+        final r = Offset(
+          v.dx * cosA - v.dy * sinA,
+          v.dx * sinA + v.dy * cosA,
+        );
+        final w = pivot + r;
+        outPts.add(PointSample(w.dx, w.dy, p.t));
+      }
+      outStroke = outStroke.copyWith(points: outPts);
+    }
+
+    // Visual params (clamped)
+    final newSize = (outStroke.size + dSize).clamp(0.5, 500.0).toDouble();
+    final newCoreOpacity =
+        (outStroke.coreOpacity + dCoreOp).clamp(0.0, 1.0).toDouble();
+    final newGlowRadius =
+        (outStroke.glowRadius + dGlowRadius).clamp(0.0, 1.0).toDouble();
+    final newGlowOpacity =
+        (outStroke.glowOpacity + dGlowOp).clamp(0.0, 1.0).toDouble();
+    final newGlowBrightness =
+        (outStroke.glowBrightness + dGlowBright).clamp(0.0, 1.0).toDouble();
+
+    return outStroke.copyWith(
+      size: newSize,
+      coreOpacity: newCoreOpacity,
+      glowRadius: newGlowRadius,
+      glowOpacity: newGlowOpacity,
+      glowBrightness: newGlowBrightness,
+    );
   }
 
   void _drawByBrush(Canvas canvas, Stroke s, Size sz, SymmetryMode mode) {
@@ -285,27 +471,37 @@ class Renderer extends CustomPainter {
     for (final e in _entries) {
       if (!e.strokeLocal.visible) continue; // ✅ safety
 
-      final baseWorld = _strokeToWorld(e.strokeLocal, e.layerTransform);
+      final isSelected = (selectedId != null && e.strokeLocal.id == selectedId);
 
-      // ✅ if selected, it "stops animating" so extra = 0
-      final extra = (selectedId != null && e.strokeLocal.id == selectedId)
-          ? 0.0
-          : _layerExtraRotationRadians(e.layerId);
+      // ✅ If selected, it "stops animating": freeze ALL extras (layer + stroke)
+      final freezeExtras = isSelected;
 
-      // If we have a baked picture and this stroke is static, draw it
-      final baked = _bakedByStrokeId[e.strokeLocal.id];
-      if (baked != null && extra.abs() < 0.000001) {
-        canvas.drawPicture(baked);
-        continue;
+      // ✅ With stroke-extras enabled, NEVER use baked pictures (they can go stale).
+      if (!_strokeExtrasEnabled) {
+        final baked = _bakedByStrokeId[e.strokeLocal.id];
+        if (!freezeExtras && baked != null) {
+          canvas.drawPicture(baked);
+          continue;
+        }
       }
 
-      // Otherwise draw live (needed for animation and selection edits)
-      final pivotWorld =
-          e.layerTransform.pivot ?? _computeBoundsPivotForEntry(e);
-      final animatedWorld =
-          _applyExtraRotationWorld(baseWorld, extra, pivotWorld);
+      // Layer-local -> world with LAYER extras (pos/rot/scale/opacity)
+      final world = _strokeToWorldWithLayerExtras(
+        e.strokeLocal,
+        e.layerTransform,
+        e.layerId,
+        freezeExtras: freezeExtras,
+      );
 
-      _drawByBrush(canvas, animatedWorld, size, _modeForStroke(animatedWorld));
+      // Apply STROKE extras in world (x/y/rot + visual params)
+      final finalStroke = _applyStrokeExtrasWorld(
+        world,
+        e.layerId,
+        e.strokeLocal.id,
+        freezeExtras: freezeExtras,
+      );
+
+      _drawByBrush(canvas, finalStroke, size, _modeForStroke(finalStroke));
     }
 
     // Draw active in-progress stroke (live)
@@ -313,19 +509,25 @@ class Renderer extends CustomPainter {
     if (active != null) {
       if (!active.strokeLocal.visible) return;
 
-      final baseWorld =
-          _strokeToWorld(active.strokeLocal, active.layerTransform);
+      final isSelected =
+          (selectedId != null && active.strokeLocal.id == selectedId);
+      final freezeExtras = isSelected;
 
-      final extra = (selectedId != null && active.strokeLocal.id == selectedId)
-          ? 0.0
-          : _layerExtraRotationRadians(active.layerId);
+      final world = _strokeToWorldWithLayerExtras(
+        active.strokeLocal,
+        active.layerTransform,
+        active.layerId,
+        freezeExtras: freezeExtras,
+      );
 
-      final pivotWorld =
-          active.layerTransform.pivot ?? _computeBoundsPivotForEntry(active);
-      final animatedWorld =
-          _applyExtraRotationWorld(baseWorld, extra, pivotWorld);
+      final finalStroke = _applyStrokeExtrasWorld(
+        world,
+        active.layerId,
+        active.strokeLocal.id,
+        freezeExtras: freezeExtras,
+      );
 
-      _drawByBrush(canvas, animatedWorld, size, _modeForStroke(animatedWorld));
+      _drawByBrush(canvas, finalStroke, size, _modeForStroke(finalStroke));
     }
   }
 

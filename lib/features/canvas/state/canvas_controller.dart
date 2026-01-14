@@ -198,9 +198,18 @@ class CanvasController extends ChangeNotifier {
   void _ensureTickerState() {
     final anyConstant = _layerRotation.values.any((a) => a.isActive);
 
-    final anyLfoActive = _lfos.any((l) => l.enabled) &&
-        _routes.any((r) => r.enabled) &&
-        _routes.any((r) => _lfos.any((l) => l.id == r.lfoId && l.enabled));
+    // True if there is at least one enabled route whose LFO exists and is enabled.
+    bool anyLfoActive = false;
+    if (_routes.isNotEmpty && _lfos.isNotEmpty) {
+      for (final r in _routes) {
+        if (!r.enabled) continue;
+        final li = _lfos.indexWhere((l) => l.id == r.lfoId);
+        if (li < 0) continue;
+        if (!_lfos[li].enabled) continue;
+        anyLfoActive = true;
+        break;
+      }
+    }
 
     final anyActive = anyConstant || anyLfoActive;
 
@@ -210,43 +219,135 @@ class CanvasController extends ChangeNotifier {
     } else if (!anyActive && _tickerRunning) {
       _ticker.stop();
       _tickerRunning = false;
+
+      // optional: keep as-is if you like “restarts from 0” when animation re-enabled
       _timeSec = 0.0;
+
       _tick();
     }
   }
 
-  double _layerExtraRotationRadians(String layerId) {
-    double out = 0.0;
+  double _evalRouteShaped(LfoRoute r) {
+    final i = _lfos.indexWhere((x) => x.id == r.lfoId);
+    if (i < 0) return 0.0;
+    final lfo = _lfos[i];
+    if (!lfo.enabled) return 0.0;
 
-    // constant rotation
+    final raw = lfo.eval(_timeSec); // [-1..1]
+    final shaped = r.bipolar ? raw : ((raw + 1.0) * 0.5); // [-1..1] or [0..1]
+    return shaped;
+  }
+
+  double _sumRoutes({
+    required String layerId,
+    String? strokeId,
+    required LfoParam param,
+  }) {
+    if (_lfos.isEmpty || _routes.isEmpty) return 0.0;
+
+    double total = 0.0;
+    for (final r in _routes) {
+      if (!r.enabled) continue;
+      if (r.layerId != layerId) continue;
+      if (r.param != param) continue;
+
+      // stroke match rules:
+      if (strokeId == null) {
+        // layer param: ignore stroke routes
+        if (r.strokeId != null) continue;
+      } else {
+        // stroke param: must match
+        if (r.strokeId != strokeId) continue;
+      }
+
+      final shaped = _evalRouteShaped(r);
+      total += (r.amountDeg * shaped);
+    }
+    return total;
+  }
+
+  double _layerExtraRotationRadians(String layerId) {
+    double degTotal = 0.0;
+
+    // A) constant rotation (deg)
     final anim = _layerRotation[layerId];
     if (anim != null && anim.isActive) {
-      final deg = anim.constantDegPerSec * _timeSec;
-      final wrapped = deg % 360.0;
-      out += wrapped * math.pi / 180.0;
+      degTotal += (anim.constantDegPerSec * _timeSec) % 360.0;
     }
 
-    // LFO routes (v1: layer rotation only)
+    // B) LFO routes (deg)
     if (_lfos.isNotEmpty && _routes.isNotEmpty) {
       for (final r in _routes) {
         if (!r.enabled) continue;
         if (r.layerId != layerId) continue;
+        if (r.param != LfoParam.layerRotationDeg) continue;
 
-        final lfo = _lfos.firstWhere(
-          (x) => x.id == r.lfoId,
-          orElse: () =>
-              const Lfo(id: 'missing', name: 'missing', enabled: false),
-        );
+        final i = _lfos.indexWhere((x) => x.id == r.lfoId);
+        if (i < 0) continue;
+
+        final lfo = _lfos[i];
         if (!lfo.enabled) continue;
 
-        final v = lfo.eval(_timeSec); // ~[-1..1]
-        final deg = r.amountDeg * v;
-        out += deg * math.pi / 180.0;
+        final raw = lfo.eval(_timeSec); // [-1..1]
+        final shaped =
+            r.bipolar ? raw : ((raw + 1.0) * 0.5); // [-1..1] or [0..1]
+
+        degTotal += (r.amountDeg * shaped);
       }
     }
 
-    return out;
+    return degTotal * math.pi / 180.0;
   }
+
+  double _layerExtraX(String layerId) {
+    return _sumRoutes(layerId: layerId, param: LfoParam.layerX);
+  }
+
+  double _layerExtraY(String layerId) {
+    return _sumRoutes(layerId: layerId, param: LfoParam.layerY);
+  }
+
+  double _layerExtraScale(String layerId) {
+    return _sumRoutes(layerId: layerId, param: LfoParam.layerScale);
+  }
+
+// NOTE: this returns an ADDITIVE delta; renderer will clamp final opacity.
+  double _layerExtraOpacity(String layerId) {
+    return _sumRoutes(layerId: layerId, param: LfoParam.layerOpacity);
+  }
+
+  double _strokeExtraX(String layerId, String strokeId) =>
+      _sumRoutes(layerId: layerId, strokeId: strokeId, param: LfoParam.strokeX);
+
+  double _strokeExtraY(String layerId, String strokeId) =>
+      _sumRoutes(layerId: layerId, strokeId: strokeId, param: LfoParam.strokeY);
+
+  double _strokeExtraRotationRad(String layerId, String strokeId) {
+    final deg = _sumRoutes(
+      layerId: layerId,
+      strokeId: strokeId,
+      param: LfoParam.strokeRotationDeg,
+    );
+    return deg * math.pi / 180.0;
+  }
+
+  double _strokeExtraSize(String layerId, String strokeId) => _sumRoutes(
+      layerId: layerId, strokeId: strokeId, param: LfoParam.strokeSize);
+
+  double _strokeExtraCoreOpacity(String layerId, String strokeId) => _sumRoutes(
+      layerId: layerId, strokeId: strokeId, param: LfoParam.strokeCoreOpacity);
+
+  double _strokeExtraGlowRadius(String layerId, String strokeId) => _sumRoutes(
+      layerId: layerId, strokeId: strokeId, param: LfoParam.strokeGlowRadius);
+
+  double _strokeExtraGlowOpacity(String layerId, String strokeId) => _sumRoutes(
+      layerId: layerId, strokeId: strokeId, param: LfoParam.strokeGlowOpacity);
+
+  double _strokeExtraGlowBrightness(String layerId, String strokeId) =>
+      _sumRoutes(
+          layerId: layerId,
+          strokeId: strokeId,
+          param: LfoParam.strokeGlowBrightness);
 
   String? _selectedStrokeIdFn() => _selectedStrokeId;
 
@@ -254,6 +355,18 @@ class CanvasController extends ChangeNotifier {
     repaint,
     () => symmetry,
     layerExtraRotationRadians: _layerExtraRotationRadians,
+    layerExtraX: _layerExtraX,
+    layerExtraY: _layerExtraY,
+    layerExtraScale: _layerExtraScale,
+    layerExtraOpacity: _layerExtraOpacity,
+    strokeExtraX: _strokeExtraX,
+    strokeExtraY: _strokeExtraY,
+    strokeExtraRotationRad: _strokeExtraRotationRad,
+    strokeExtraSize: _strokeExtraSize,
+    strokeExtraCoreOpacity: _strokeExtraCoreOpacity,
+    strokeExtraGlowRadius: _strokeExtraGlowRadius,
+    strokeExtraGlowOpacity: _strokeExtraGlowOpacity,
+    strokeExtraGlowBrightness: _strokeExtraGlowBrightness,
     selectedStrokeIdFn: _selectedStrokeIdFn,
   );
 
@@ -1378,12 +1491,14 @@ class CanvasController extends ChangeNotifier {
     notifyListeners();
   }
 
-  String addRouteToLayer(String lfoId, String layerId) {
-    // ensure lfo exists
+  String addRouteToLayer(
+    String lfoId,
+    String layerId, {
+    LfoParam param = LfoParam.layerRotationDeg,
+    double amount = 25.0,
+  }) {
     final exists = _lfos.any((l) => l.id == lfoId);
     if (!exists) return '';
-
-    // if no layers, bail
     if (!_state.layers.any((l) => l.id == layerId)) return '';
 
     final id = 'route-${DateTime.now().millisecondsSinceEpoch}';
@@ -1392,7 +1507,9 @@ class CanvasController extends ChangeNotifier {
       lfoId: lfoId,
       layerId: layerId,
       enabled: true,
-      amountDeg: 25.0,
+      param: param, // ✅ now configurable
+      bipolar: true,
+      amountDeg: amount, // ✅ still stored in amountDeg (pixels for X/Y)
     ));
 
     _ensureTickerState();
@@ -1435,11 +1552,181 @@ class CanvasController extends ChangeNotifier {
     final i = _routes.indexWhere((r) => r.id == routeId);
     if (i < 0) return;
 
-    final v = amountDeg.clamp(0.0, 360.0).toDouble();
-    _routes[i] = _routes[i].copyWith(amountDeg: v);
+    final r = _routes[i];
+
+    // Rotation is degrees; X/Y are pixels (v1 using amountDeg as generic amount).
+    final double v;
+    switch (r.param) {
+      case LfoParam.layerRotationDeg:
+        v = amountDeg.clamp(0.0, 360.0).toDouble();
+        break;
+
+      case LfoParam.layerX:
+      case LfoParam.layerY:
+        v = amountDeg.clamp(0.0, 4000.0).toDouble();
+        break;
+
+      default:
+        v = amountDeg.toDouble();
+        break;
+    }
+
+    _routes[i] = r.copyWith(amountDeg: v);
 
     _tick();
     notifyListeners();
+  }
+
+  void setRouteParam(String routeId, LfoParam param) {
+    final i = _routes.indexWhere((r) => r.id == routeId);
+    if (i < 0) return;
+
+    _routes[i] = _routes[i].copyWith(param: param);
+
+    _tick();
+    notifyListeners();
+  }
+
+  void setRouteBipolar(String routeId, bool bipolar) {
+    final i = _routes.indexWhere((r) => r.id == routeId);
+    if (i < 0) return;
+
+    _routes[i] = _routes[i].copyWith(bipolar: bipolar);
+
+    _tick();
+    notifyListeners();
+  }
+
+  LfoRoute? findRouteForLayerParam(String layerId, LfoParam param) {
+    for (final r in _routes) {
+      if (r.layerId == layerId && r.param == param) return r;
+    }
+    return null;
+  }
+
+  String upsertRouteForLayerParam({
+    required String layerId,
+    required LfoParam param,
+    required String lfoId,
+  }) {
+    // enforce 1 route per (layer,param)
+    _routes.removeWhere((r) => r.layerId == layerId && r.param == param);
+
+    final id = 'route-${DateTime.now().millisecondsSinceEpoch}';
+    _routes.add(LfoRoute(
+      id: id,
+      lfoId: lfoId,
+      layerId: layerId,
+      param: param,
+      enabled: true,
+      bipolar: true,
+      amountDeg: 25.0,
+    ));
+
+    _ensureTickerState();
+    _tick();
+    notifyListeners();
+    return id;
+  }
+
+  void clearRouteForLayerParam(String layerId, LfoParam param) {
+    _routes.removeWhere((r) => r.layerId == layerId && r.param == param);
+
+    _ensureTickerState();
+    _tick();
+    notifyListeners();
+  }
+
+  /// Map the string keys used by the UI to LfoParam.
+  /// IMPORTANT: update these keys to exactly match what layer_panel.dart uses.
+  LfoParam? _strokeParamFromKey(String key) {
+    switch (key) {
+      // ---- STROKE PARAMS ----
+      case 'strokeSize':
+        return LfoParam.strokeSize;
+      case 'strokeX':
+        return LfoParam.strokeX;
+      case 'strokeY':
+        return LfoParam.strokeY;
+      case 'strokeRotationDeg':
+        return LfoParam.strokeRotationDeg;
+
+      case 'strokeCoreOpacity':
+        return LfoParam.strokeCoreOpacity;
+      case 'strokeGlowRadius':
+        return LfoParam.strokeGlowRadius;
+      case 'strokeGlowOpacity':
+        return LfoParam.strokeGlowOpacity;
+      case 'strokeGlowBrightness':
+        return LfoParam.strokeGlowBrightness;
+
+      default:
+        return null;
+    }
+  }
+
+// ---------------------------------------------------------------------------
+// STROKE ROUTE HELPERS (LfoParam-based, matches layer_panel.dart)
+// ---------------------------------------------------------------------------
+
+  LfoRoute? findRouteForStrokeParam(
+    String layerId,
+    int groupIndex,
+    String strokeId,
+    LfoParam param,
+  ) {
+    for (final r in _routes) {
+      if (r.layerId != layerId) continue;
+      if (r.strokeId != strokeId) continue;
+      if (r.param != param) continue;
+      return r;
+    }
+    return null;
+  }
+
+  void clearRouteForStrokeParam(
+    String layerId,
+    int groupIndex,
+    String strokeId,
+    LfoParam param,
+  ) {
+    _routes.removeWhere(
+      (r) => r.layerId == layerId && r.strokeId == strokeId && r.param == param,
+    );
+
+    _ensureTickerState();
+    _tick();
+    notifyListeners();
+  }
+
+  String upsertRouteForStrokeParam({
+    required String layerId,
+    required String strokeId,
+    required LfoParam param,
+    required String lfoId,
+    required int groupIndex,
+  }) {
+    // one route per (stroke,param)
+    _routes.removeWhere(
+      (r) => r.layerId == layerId && r.strokeId == strokeId && r.param == param,
+    );
+
+    final id = 'route-${DateTime.now().millisecondsSinceEpoch}';
+    _routes.add(LfoRoute(
+      id: id,
+      lfoId: lfoId,
+      layerId: layerId, // ✅ REAL layerId
+      strokeId: strokeId, // ✅ REAL strokeId (THIS WAS MISSING)
+      param: param,
+      enabled: true,
+      bipolar: true,
+      amountDeg: 25.0,
+    ));
+
+    _ensureTickerState();
+    _tick();
+    notifyListeners();
+    return id;
   }
 
   // ---------------------------------------------------------------------------
