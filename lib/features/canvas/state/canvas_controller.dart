@@ -227,6 +227,258 @@ class CanvasController extends ChangeNotifier {
     }
   }
 
+  // ---------------------------------------------------------------------------
+  // PIVOT / TRANSFORM POLICY (REFACTOR CORE)
+  // ---------------------------------------------------------------------------
+
+  bool _isIdentityTransform(LayerTransform t) {
+    return t.position == Offset.zero &&
+        t.scale == 1.0 &&
+        t.rotation == 0.0 &&
+        t.opacity == 1.0;
+  }
+
+  bool _layerIsAnimatedNow(String layerId) {
+    final anim = _layerRotation[layerId];
+    final constantRotates = anim != null && anim.isActive;
+
+    final lfoRotates = _routes.any((r) =>
+        r.enabled &&
+        r.layerId == layerId &&
+        r.strokeId == null &&
+        r.param == LfoParam.layerRotationDeg);
+
+    final lfoMoves = _routes.any((r) =>
+        r.enabled &&
+        r.layerId == layerId &&
+        r.strokeId == null &&
+        (r.param == LfoParam.layerX ||
+            r.param == LfoParam.layerY ||
+            r.param == LfoParam.layerScale ||
+            r.param == LfoParam.layerOpacity));
+
+    return constantRotates || lfoRotates || lfoMoves;
+  }
+
+  bool _layerHasActiveLfoRotation(String layerId) {
+    return _routes.any((r) =>
+        r.enabled &&
+        r.layerId == layerId &&
+        !r.isStrokeTarget &&
+        r.param == LfoParam.layerRotationDeg &&
+        _lfos.any((l) => l.id == r.lfoId && l.enabled));
+  }
+
+  bool _layerHasActiveConstantRotation(String layerId) {
+    final a = _layerRotation[layerId];
+    return a != null && a.isActive;
+  }
+
+  /// "Needs pivot" means: even if base transform is identity, the *effective*
+  /// transform isn't, because LFO/constant rotation applies in the renderer.
+  bool _layerNeedsPivotNow(CanvasLayer layer) {
+    final tr = layer.transform;
+
+    final baseRot = tr.rotation.abs() > 0.000001;
+    final baseScale = (tr.scale - 1.0).abs() > 0.000001;
+
+    final constantRot = _layerHasActiveConstantRotation(layer.id);
+    final lfoRot = _layerHasActiveLfoRotation(layer.id);
+
+    return baseRot || baseScale || constantRot || lfoRot;
+  }
+
+  Offset _computeBoundsPivotForLayer(CanvasLayer layer) {
+    double? minX, maxX, minY, maxY;
+    for (final group in layer.groups) {
+      for (final stroke in group.strokes) {
+        for (final p in stroke.points) {
+          final x = p.x;
+          final y = p.y;
+          if (minX == null || x < minX) minX = x;
+          if (maxX == null || x > maxX) maxX = x;
+          if (minY == null || y < minY) minY = y;
+          if (maxY == null || y > maxY) maxY = y;
+        }
+      }
+    }
+    if (minX == null || minY == null || maxX == null || maxY == null) {
+      return Offset.zero;
+    }
+    return Offset((minX + maxX) / 2.0, (minY + maxY) / 2.0);
+  }
+
+  void _ensureLayerPivotForRotation(String layerId) {
+    final idx = _state.layers.indexWhere((l) => l.id == layerId);
+    if (idx < 0) return;
+
+    final layer = _state.layers[idx];
+    final tr = layer.transform;
+
+    final bool baseRotates = tr.rotation.abs() > 0.000001;
+
+    final anim = _layerRotation[layerId];
+    final bool constantRotates = anim != null && anim.isActive;
+
+    final bool lfoRotates = _routes.any((r) =>
+        r.enabled &&
+        r.layerId == layerId &&
+        r.strokeId == null &&
+        r.param == LfoParam.layerRotationDeg);
+
+    if (!baseRotates && !constantRotates && !lfoRotates) return;
+
+    // ✅ Only set pivot if missing. DO NOT auto-refresh (prevents pivot jumping).
+    if (tr.pivot != null) return;
+
+    // ✅ Guard: if there's literally no geometry yet, don't set 0,0 and accidentally lock it forever
+    final desired = _computeBoundsPivotForLayer(layer);
+    if (desired == Offset.zero) {
+      // If there are no points, bail. We'll set pivot once strokes exist.
+      // (This prevents "pivot locked to 0,0" for empty layers.)
+      return;
+    }
+
+    final layers = List<CanvasLayer>.from(_state.layers);
+    layers[idx] = layer.copyWith(transform: tr.copyWith(pivot: desired));
+    _state = _state.copyWith(layers: layers);
+  }
+
+  bool _ensureAllRotatingLayerPivotsAndRebuildIfChanged() {
+    bool changed = false;
+
+    for (final l in _state.layers) {
+      final idx = _state.layers.indexWhere((x) => x.id == l.id);
+      if (idx < 0) continue;
+
+      final before = _state.layers[idx].transform.pivot;
+
+      _ensureLayerPivotForRotation(l.id);
+
+      final after = _state.layers[idx].transform.pivot;
+
+      if (before != after) changed = true;
+    }
+
+    if (changed) {
+      _renderer.rebuildFromLayers(_state.layers);
+    }
+
+    return changed;
+  }
+
+  /// Single source of truth:
+  /// - If the layer will rotate/scale (base OR constant OR LFO), ensure pivot exists.
+  /// - Keep it centered on the combined stroke bounds (refresh if strokes changed).
+  void _ensureLayerPivot(String layerId) {
+    final idx = _state.layers.indexWhere((l) => l.id == layerId);
+    if (idx < 0) return;
+
+    final layer = _state.layers[idx];
+    if (!_layerNeedsPivotNow(layer)) return;
+
+    final tr = layer.transform;
+    if (tr.pivot != null) return; // ✅ never auto-refresh
+
+    final desired = _computeBoundsPivotForLayer(layer);
+    if (desired == Offset.zero) return; // no geometry yet
+
+    final layers = List<CanvasLayer>.from(_state.layers);
+    layers[idx] = layer.copyWith(transform: tr.copyWith(pivot: desired));
+    _state = _state.copyWith(layers: layers);
+  }
+
+  /// When we need to convert points between world/local, we must use a pivot that matches
+  /// the *effective* transform (even if base transform is identity but LFO rotates).
+  Offset _layerPivotForMath(CanvasLayer layer) {
+    if (!_layerNeedsPivotNow(layer)) return Offset.zero;
+
+    // Ensure pivot exists (but don't keep refreshing mid-gesture)
+    _ensureLayerPivot(layer.id);
+
+    final updated =
+        _state.layers.firstWhere((l) => l.id == layer.id, orElse: () => layer);
+
+    return updated.transform.pivot ?? _computeBoundsPivotForLayer(updated);
+  }
+
+  Offset _forwardTransformPoint(Offset p, LayerTransform t, Offset pivot) {
+    final angle = t.rotation;
+    final cosA = math.cos(angle);
+    final sinA = math.sin(angle);
+
+    final local = p - pivot;
+
+    final rotated = Offset(
+      local.dx * cosA - local.dy * sinA,
+      local.dx * sinA + local.dy * cosA,
+    );
+
+    final scaled = rotated * t.scale;
+
+    return scaled + pivot + t.position;
+  }
+
+  Offset _inverseTransformPoint(Offset pWorld, LayerTransform t, Offset pivot) {
+    final p = pWorld - t.position;
+    final local = p - pivot;
+
+    final s = (t.scale == 0.0) ? 1.0 : t.scale;
+    final unscaled = Offset(local.dx / s, local.dy / s);
+
+    final angle = -t.rotation;
+    final cosA = math.cos(angle);
+    final sinA = math.sin(angle);
+
+    final unrotated = Offset(
+      unscaled.dx * cosA - unscaled.dy * sinA,
+      unscaled.dx * sinA + unscaled.dy * cosA,
+    );
+
+    return unrotated + pivot;
+  }
+
+  void _recordStrokeCreation(Stroke s) {
+    for (final layer in _state.layers) {
+      for (int gi = 0; gi < layer.groups.length; gi++) {
+        final group = layer.groups[gi];
+        final idx = group.strokes.indexWhere((st) => st.id == s.id);
+        if (idx != -1) {
+          _history.add(_StrokeLocation(
+            strokeId: s.id,
+            layerId: layer.id,
+            groupIndex: gi,
+          ));
+          _redoLocations.clear();
+          _state = _state.copyWith(redoStack: []);
+          return;
+        }
+      }
+    }
+  }
+
+  void _rebuildHistoryFromState() {
+    _history.clear();
+    _redoLocations.clear();
+
+    for (final layer in _state.layers) {
+      for (int gi = 0; gi < layer.groups.length; gi++) {
+        final group = layer.groups[gi];
+        for (final s in group.strokes) {
+          _history.add(_StrokeLocation(
+            strokeId: s.id,
+            layerId: layer.id,
+            groupIndex: gi,
+          ));
+        }
+      }
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // LFO ROUTE EVAL HELPERS
+  // ---------------------------------------------------------------------------
+
   double _evalRouteShaped(LfoRoute r) {
     final i = _lfos.indexWhere((x) => x.id == r.lfoId);
     if (i < 0) return 0.0;
@@ -276,25 +528,7 @@ class CanvasController extends ChangeNotifier {
     }
 
     // B) LFO routes (deg)
-    if (_lfos.isNotEmpty && _routes.isNotEmpty) {
-      for (final r in _routes) {
-        if (!r.enabled) continue;
-        if (r.layerId != layerId) continue;
-        if (r.param != LfoParam.layerRotationDeg) continue;
-
-        final i = _lfos.indexWhere((x) => x.id == r.lfoId);
-        if (i < 0) continue;
-
-        final lfo = _lfos[i];
-        if (!lfo.enabled) continue;
-
-        final raw = lfo.eval(_timeSec); // [-1..1]
-        final shaped =
-            r.bipolar ? raw : ((raw + 1.0) * 0.5); // [-1..1] or [0..1]
-
-        degTotal += (r.amountDeg * shaped);
-      }
-    }
+    degTotal += _sumRoutes(layerId: layerId, param: LfoParam.layerRotationDeg);
 
     return degTotal * math.pi / 180.0;
   }
@@ -311,7 +545,26 @@ class CanvasController extends ChangeNotifier {
     return _sumRoutes(layerId: layerId, param: LfoParam.layerScale);
   }
 
-// NOTE: this returns an ADDITIVE delta; renderer will clamp final opacity.
+  LayerTransform _effectiveLayerTransformForInput(
+    String layerId,
+    LayerTransform base,
+  ) {
+    final dx = _layerExtraX(layerId);
+    final dy = _layerExtraY(layerId);
+    final extraRot = _layerExtraRotationRadians(layerId);
+    final extraScale = _layerExtraScale(layerId);
+
+    final scaleMul = (1.0 + extraScale).clamp(0.01, 100.0).toDouble();
+    final effScale = (base.scale * scaleMul).clamp(0.01, 100.0).toDouble();
+
+    return base.copyWith(
+      position: base.position + Offset(dx, dy),
+      rotation: base.rotation + extraRot,
+      scale: effScale,
+    );
+  }
+
+  // NOTE: this returns an ADDITIVE delta; renderer will clamp final opacity.
   double _layerExtraOpacity(String layerId) {
     return _sumRoutes(layerId: layerId, param: LfoParam.layerOpacity);
   }
@@ -345,15 +598,24 @@ class CanvasController extends ChangeNotifier {
 
   double _strokeExtraGlowBrightness(String layerId, String strokeId) =>
       _sumRoutes(
-          layerId: layerId,
-          strokeId: strokeId,
-          param: LfoParam.strokeGlowBrightness);
+        layerId: layerId,
+        strokeId: strokeId,
+        param: LfoParam.strokeGlowBrightness,
+      );
 
   String? _selectedStrokeIdFn() => _selectedStrokeId;
 
   late final Renderer _renderer = Renderer(
     repaint,
     () => symmetry,
+
+    // ✅ NEW: always use latest layer transform (fixes stale pivot issue)
+    layerTransformFn: (layerId) {
+      final i = _state.layers.indexWhere((l) => l.id == layerId);
+      if (i < 0) return const LayerTransform();
+      return _state.layers[i].transform;
+    },
+
     layerExtraRotationRadians: _layerExtraRotationRadians,
     layerExtraX: _layerExtraX,
     layerExtraY: _layerExtraY,
@@ -408,6 +670,10 @@ class CanvasController extends ChangeNotifier {
   Stroke? _current;
   int _startMs = 0;
   int? _activePointerId;
+
+  bool _drawingInWorld = false;
+  String? _drawingLayerId;
+  LayerTransform? _drawingBaseLayerTr;
 
   bool _hasUnsavedChanges = false;
   bool get hasUnsavedChanges => _hasUnsavedChanges;
@@ -601,7 +867,8 @@ class CanvasController extends ChangeNotifier {
       clearSelection();
     }
 
-    _ensureLayerPivotPersisted(layerId);
+    // ✅ keep pivot centered if this layer is being rotated by LFO/constant/manual
+    _ensureLayerPivot(layerId);
 
     _renderer.rebuildFromLayers(_state.layers);
     _hasUnsavedChanges = true;
@@ -641,7 +908,7 @@ class CanvasController extends ChangeNotifier {
     layers[li] = layer.copyWith(groups: groups);
     _state = _state.copyWith(layers: layers);
 
-    _ensureLayerPivotPersisted(layerId);
+    _ensureLayerPivot(layerId);
 
     _renderer.rebuildFromLayers(_state.layers);
     _hasUnsavedChanges = true;
@@ -685,6 +952,8 @@ class CanvasController extends ChangeNotifier {
       clearSelection();
     }
 
+    _ensureLayerPivot(layerId);
+
     _renderer.rebuildFromLayers(_state.layers);
     _hasUnsavedChanges = true;
     _tick();
@@ -705,120 +974,14 @@ class CanvasController extends ChangeNotifier {
     repaint.value++;
   }
 
-  bool _isIdentityTransform(LayerTransform t) {
-    return t.position == Offset.zero &&
-        t.scale == 1.0 &&
-        t.rotation == 0.0 &&
-        t.opacity == 1.0;
-  }
-
-  Offset _computeBoundsPivotForLayer(CanvasLayer layer) {
-    double? minX, maxX, minY, maxY;
-    for (final group in layer.groups) {
-      for (final stroke in group.strokes) {
-        for (final p in stroke.points) {
-          final x = p.x;
-          final y = p.y;
-          if (minX == null || x < minX) minX = x;
-          if (maxX == null || x > maxX) maxX = x;
-          if (minY == null || y < minY) minY = y;
-          if (maxY == null || y > maxY) maxY = y;
-        }
-      }
+  void _rebuildRendererSafe() {
+    // 1) Ensure any rotating layer has a persisted pivot (prevents 0,0 fallback)
+    for (final l in _state.layers) {
+      _ensureLayerPivotForRotation(l.id);
     }
-    if (minX == null || minY == null || maxX == null || maxY == null) {
-      return Offset.zero;
-    }
-    return Offset((minX + maxX) / 2.0, (minY + maxY) / 2.0);
-  }
 
-  void _ensureLayerPivotPersisted(String layerId) {
-    final idx = _state.layers.indexWhere((l) => l.id == layerId);
-    if (idx < 0) return;
-
-    final layer = _state.layers[idx];
-    final tr = layer.transform;
-
-    if (_isIdentityTransform(tr)) return;
-    if (tr.pivot != null) return;
-
-    final pivot = _computeBoundsPivotForLayer(layer);
-
-    final layers = List<CanvasLayer>.from(_state.layers);
-    layers[idx] = layer.copyWith(transform: tr.copyWith(pivot: pivot));
-    _state = _state.copyWith(layers: layers);
-  }
-
-  Offset _forwardTransformPoint(Offset p, LayerTransform t, Offset pivot) {
-    final angle = t.rotation;
-    final cosA = math.cos(angle);
-    final sinA = math.sin(angle);
-
-    final local = p - pivot;
-
-    final rotated = Offset(
-      local.dx * cosA - local.dy * sinA,
-      local.dx * sinA + local.dy * cosA,
-    );
-
-    final scaled = rotated * t.scale;
-
-    return scaled + pivot + t.position;
-  }
-
-  Offset _inverseTransformPoint(Offset pWorld, LayerTransform t, Offset pivot) {
-    final p = pWorld - t.position;
-    final local = p - pivot;
-
-    final s = (t.scale == 0.0) ? 1.0 : t.scale;
-    final unscaled = Offset(local.dx / s, local.dy / s);
-
-    final angle = -t.rotation;
-    final cosA = math.cos(angle);
-    final sinA = math.sin(angle);
-
-    final unrotated = Offset(
-      unscaled.dx * cosA - unscaled.dy * sinA,
-      unscaled.dx * sinA + unscaled.dy * cosA,
-    );
-
-    return unrotated + pivot;
-  }
-
-  void _recordStrokeCreation(Stroke s) {
-    for (final layer in _state.layers) {
-      for (int gi = 0; gi < layer.groups.length; gi++) {
-        final group = layer.groups[gi];
-        final idx = group.strokes.indexWhere((st) => st.id == s.id);
-        if (idx != -1) {
-          _history.add(_StrokeLocation(
-            strokeId: s.id,
-            layerId: layer.id,
-            groupIndex: gi,
-          ));
-          _redoLocations.clear();
-          _state = _state.copyWith(redoStack: []);
-          return;
-        }
-      }
-    }
-  }
-
-  void _rebuildHistoryFromState() {
-    _history.clear();
-    _redoLocations.clear();
-    for (final layer in _state.layers) {
-      for (int gi = 0; gi < layer.groups.length; gi++) {
-        final group = layer.groups[gi];
-        for (final s in group.strokes) {
-          _history.add(_StrokeLocation(
-            strokeId: s.id,
-            layerId: layer.id,
-            groupIndex: gi,
-          ));
-        }
-      }
-    }
+    // 2) Now rebuild renderer using the updated state
+    _renderer.rebuildFromLayers(_state.layers);
   }
 
   // ---------------------------------------------------------------------------
@@ -903,10 +1066,10 @@ class CanvasController extends ChangeNotifier {
       if (!layer.visible) continue;
 
       final tr = layer.transform;
-      final isIdentity = _isIdentityTransform(tr);
-      final pivot = isIdentity
-          ? Offset.zero
-          : (tr.pivot ?? _computeBoundsPivotForLayer(layer));
+
+      // ✅ IMPORTANT: treat LFO/constant rotation as "non-identity" for pivot math
+      final needsPivot = _layerNeedsPivotNow(layer);
+      final pivot = needsPivot ? _layerPivotForMath(layer) : Offset.zero;
 
       for (int gi = layer.groups.length - 1; gi >= 0; gi--) {
         final group = layer.groups[gi];
@@ -922,7 +1085,7 @@ class CanvasController extends ChangeNotifier {
           for (final p in sLocal.points) {
             final local = Offset(p.x, p.y);
             final world =
-                isIdentity ? local : _forwardTransformPoint(local, tr, pivot);
+                needsPivot ? _forwardTransformPoint(local, tr, pivot) : local;
             baseWorldPts.add(world);
           }
 
@@ -998,10 +1161,12 @@ class CanvasController extends ChangeNotifier {
     if (si < 0) return;
 
     final tr = layer.transform;
-    final isIdentity = _isIdentityTransform(tr);
+
+    // ✅ IMPORTANT: treat LFO/constant rotation as "non-identity" for delta conversion
+    final needsPivot = _layerNeedsPivotNow(layer);
 
     Offset deltaLocal;
-    if (isIdentity) {
+    if (!needsPivot) {
       deltaLocal = correctedWorldDelta;
     } else {
       final s = (tr.scale == 0.0) ? 1.0 : tr.scale;
@@ -1029,7 +1194,7 @@ class CanvasController extends ChangeNotifier {
     layers[layerIndex] = layer.copyWith(groups: groups);
     _state = _state.copyWith(layers: layers);
 
-    _ensureLayerPivotPersisted(layerId);
+    _ensureLayerPivot(layerId);
 
     _renderer.rebuildFromLayers(_state.layers);
     _hasUnsavedChanges = true;
@@ -1117,14 +1282,14 @@ class CanvasController extends ChangeNotifier {
     }
 
     final tr = layer.transform;
-    final isIdentity = _isIdentityTransform(tr);
-    final pivotLayer = isIdentity
-        ? Offset.zero
-        : (tr.pivot ?? _computeBoundsPivotForLayer(layer));
 
-    final pivotLocal = isIdentity
-        ? pivotWorld
-        : _inverseTransformPoint(pivotWorld, tr, pivotLayer);
+    // ✅ IMPORTANT: treat LFO/constant rotation as "non-identity" for pivot conversion
+    final needsPivot = _layerNeedsPivotNow(layer);
+    final pivotLayer = needsPivot ? _layerPivotForMath(layer) : Offset.zero;
+
+    final pivotLocal = needsPivot
+        ? _inverseTransformPoint(pivotWorld, tr, pivotLayer)
+        : pivotWorld;
 
     _gestureStartPivotLocal = pivotLocal;
 
@@ -1197,7 +1362,7 @@ class CanvasController extends ChangeNotifier {
     layers[layerIndex] = layer.copyWith(groups: groups);
     _state = _state.copyWith(layers: layers);
 
-    _ensureLayerPivotPersisted(layerId);
+    _ensureLayerPivot(layerId);
 
     _renderer.rebuildFromLayers(_state.layers);
     _hasUnsavedChanges = true;
@@ -1371,6 +1536,9 @@ class CanvasController extends ChangeNotifier {
       constantDegPerSec: degPerSec,
     );
 
+    // ✅ ensure pivot exists for constant rotation too
+    _ensureLayerPivot(layerId);
+
     _renderer.rebuildFromLayers(_state.layers);
 
     _ensureTickerState();
@@ -1391,6 +1559,10 @@ class CanvasController extends ChangeNotifier {
   // ---------------------------------------------------------------------------
   // LFO API (v1: routes -> layer extra rotation)
   // ---------------------------------------------------------------------------
+
+  // ---------------------------------------------------------------------------
+// LFO API (v1: routes -> layer extra rotation)
+// ---------------------------------------------------------------------------
 
   String addLfo({String? name}) {
     final id = 'lfo-${DateTime.now().millisecondsSinceEpoch}';
@@ -1445,6 +1617,11 @@ class CanvasController extends ChangeNotifier {
     final i = _lfos.indexWhere((l) => l.id == id);
     if (i < 0) return;
     _lfos[i] = _lfos[i].copyWith(enabled: enabled);
+
+    // If this affects whether any layer "needs pivot", refresh pivots
+    for (final l in _state.layers) {
+      _ensureLayerPivot(l.id);
+    }
 
     _ensureTickerState();
     _tick();
@@ -1507,10 +1684,15 @@ class CanvasController extends ChangeNotifier {
       lfoId: lfoId,
       layerId: layerId,
       enabled: true,
-      param: param, // ✅ now configurable
+      param: param,
       bipolar: true,
-      amountDeg: amount, // ✅ still stored in amountDeg (pixels for X/Y)
+      amountDeg: amount, // v1: also used as generic amount for X/Y
     ));
+
+    // ✅ if the route is rotation and enabled, ensure pivot exists now
+    if (param == LfoParam.layerRotationDeg) {
+      _ensureLayerPivot(layerId);
+    }
 
     _ensureTickerState();
     _tick();
@@ -1521,6 +1703,11 @@ class CanvasController extends ChangeNotifier {
   void removeRoute(String routeId) {
     _routes.removeWhere((r) => r.id == routeId);
 
+    // routes removal can change pivot necessity; refresh all
+    for (final l in _state.layers) {
+      _ensureLayerPivot(l.id);
+    }
+
     _ensureTickerState();
     _tick();
     notifyListeners();
@@ -1530,7 +1717,22 @@ class CanvasController extends ChangeNotifier {
     final i = _routes.indexWhere((r) => r.id == routeId);
     if (i < 0) return;
 
-    _routes[i] = _routes[i].copyWith(enabled: enabled);
+    final prev = _routes[i];
+    _routes[i] = prev.copyWith(enabled: enabled);
+
+    final now = _routes[i];
+
+    // ✅ If enabling a layer-rotation route, ensure pivot exists/refreshes
+    if (now.enabled &&
+        now.param == LfoParam.layerRotationDeg &&
+        !now.isStrokeTarget) {
+      _ensureLayerPivot(now.layerId);
+    }
+
+    // If disabling could remove "needs pivot", refresh pivots anyway
+    for (final l in _state.layers) {
+      _ensureLayerPivot(l.id);
+    }
 
     _ensureTickerState();
     _tick();
@@ -1544,6 +1746,17 @@ class CanvasController extends ChangeNotifier {
 
     _routes[i] = _routes[i].copyWith(layerId: layerId);
 
+    final now = _routes[i];
+    if (now.enabled &&
+        now.param == LfoParam.layerRotationDeg &&
+        !now.isStrokeTarget) {
+      _ensureLayerPivot(layerId);
+    }
+
+    for (final l in _state.layers) {
+      _ensureLayerPivot(l.id);
+    }
+
     _tick();
     notifyListeners();
   }
@@ -1554,16 +1767,32 @@ class CanvasController extends ChangeNotifier {
 
     final r = _routes[i];
 
-    // Rotation is degrees; X/Y are pixels (v1 using amountDeg as generic amount).
+    // Rotation is degrees; X/Y are pixels (v1 uses amountDeg as generic amount).
     final double v;
     switch (r.param) {
       case LfoParam.layerRotationDeg:
+      case LfoParam.strokeRotationDeg:
         v = amountDeg.clamp(0.0, 360.0).toDouble();
         break;
 
       case LfoParam.layerX:
       case LfoParam.layerY:
+      case LfoParam.strokeX:
+      case LfoParam.strokeY:
         v = amountDeg.clamp(0.0, 4000.0).toDouble();
+        break;
+
+      case LfoParam.layerOpacity:
+      case LfoParam.strokeCoreOpacity:
+      case LfoParam.strokeGlowOpacity:
+      case LfoParam.strokeGlowBrightness:
+        v = amountDeg.clamp(-1.0, 1.0).toDouble();
+        break;
+
+      case LfoParam.layerScale:
+      case LfoParam.strokeSize:
+      case LfoParam.strokeGlowRadius:
+        v = amountDeg.clamp(-5.0, 5.0).toDouble();
         break;
 
       default:
@@ -1581,7 +1810,20 @@ class CanvasController extends ChangeNotifier {
     final i = _routes.indexWhere((r) => r.id == routeId);
     if (i < 0) return;
 
-    _routes[i] = _routes[i].copyWith(param: param);
+    final prev = _routes[i];
+    _routes[i] = prev.copyWith(param: param);
+
+    final now = _routes[i];
+
+    if (now.enabled &&
+        now.param == LfoParam.layerRotationDeg &&
+        !now.isStrokeTarget) {
+      _ensureLayerPivot(now.layerId);
+    }
+
+    for (final l in _state.layers) {
+      _ensureLayerPivot(l.id);
+    }
 
     _tick();
     notifyListeners();
@@ -1599,7 +1841,9 @@ class CanvasController extends ChangeNotifier {
 
   LfoRoute? findRouteForLayerParam(String layerId, LfoParam param) {
     for (final r in _routes) {
-      if (r.layerId == layerId && r.param == param) return r;
+      if (r.layerId == layerId && r.param == param && r.strokeId == null) {
+        return r;
+      }
     }
     return null;
   }
@@ -1609,19 +1853,29 @@ class CanvasController extends ChangeNotifier {
     required LfoParam param,
     required String lfoId,
   }) {
-    // enforce 1 route per (layer,param)
-    _routes.removeWhere((r) => r.layerId == layerId && r.param == param);
+    // enforce 1 route per (layer,param) for layer-level routes
+    _routes.removeWhere(
+        (r) => r.layerId == layerId && r.param == param && r.strokeId == null);
 
     final id = 'route-${DateTime.now().millisecondsSinceEpoch}';
     _routes.add(LfoRoute(
       id: id,
       lfoId: lfoId,
       layerId: layerId,
+      strokeId: null,
       param: param,
       enabled: true,
       bipolar: true,
       amountDeg: 25.0,
     ));
+
+    if (param == LfoParam.layerRotationDeg) {
+      _ensureLayerPivot(layerId);
+    }
+
+    for (final l in _state.layers) {
+      _ensureLayerPivot(l.id);
+    }
 
     _ensureTickerState();
     _tick();
@@ -1630,7 +1884,12 @@ class CanvasController extends ChangeNotifier {
   }
 
   void clearRouteForLayerParam(String layerId, LfoParam param) {
-    _routes.removeWhere((r) => r.layerId == layerId && r.param == param);
+    _routes.removeWhere(
+        (r) => r.layerId == layerId && r.param == param && r.strokeId == null);
+
+    for (final l in _state.layers) {
+      _ensureLayerPivot(l.id);
+    }
 
     _ensureTickerState();
     _tick();
@@ -1715,8 +1974,8 @@ class CanvasController extends ChangeNotifier {
     _routes.add(LfoRoute(
       id: id,
       lfoId: lfoId,
-      layerId: layerId, // ✅ REAL layerId
-      strokeId: strokeId, // ✅ REAL strokeId (THIS WAS MISSING)
+      layerId: layerId,
+      strokeId: strokeId,
       param: param,
       enabled: true,
       bipolar: true,
@@ -1760,7 +2019,7 @@ class CanvasController extends ChangeNotifier {
     layers[layerIndex] = layer.copyWith(groups: groups);
     _state = _state.copyWith(layers: layers);
 
-    _ensureLayerPivotPersisted(layerId);
+    _ensureLayerPivot(layerId);
 
     _renderer.rebuildFromLayers(_state.layers);
     _hasUnsavedChanges = true;
@@ -1826,6 +2085,7 @@ class CanvasController extends ChangeNotifier {
     _state = _state.copyWith(
       layers: newLayers,
       activeLayerId: id,
+      redoStack: const [],
     );
 
     _renderer.rebuildFromLayers(_state.layers);
@@ -1882,7 +2142,7 @@ class CanvasController extends ChangeNotifier {
     layers[idx] = layer.copyWith(visible: visible);
     _state = _state.copyWith(layers: layers);
 
-    _ensureLayerPivotPersisted(id);
+    _ensureLayerPivot(id);
 
     _renderer.rebuildFromLayers(_state.layers);
     _hasUnsavedChanges = true;
@@ -1928,7 +2188,7 @@ class CanvasController extends ChangeNotifier {
     );
     _state = _state.copyWith(layers: layers);
 
-    _ensureLayerPivotPersisted(id);
+    _ensureLayerPivot(id);
 
     _renderer.rebuildFromLayers(_state.layers);
     _hasUnsavedChanges = true;
@@ -1952,7 +2212,7 @@ class CanvasController extends ChangeNotifier {
     _state = _state.copyWith(layers: layers);
     _hasUnsavedChanges = true;
 
-    _ensureLayerPivotPersisted(id);
+    _ensureLayerPivot(id);
 
     _renderer.rebuildFromLayers(_state.layers);
     _tick();
@@ -1968,12 +2228,13 @@ class CanvasController extends ChangeNotifier {
 
     final double radians = degrees * math.pi / 180.0;
 
-    layers[idx] = layer.copyWith(
-      transform: layer.transform.copyWith(rotation: radians),
-    );
+    // 1) apply rotation
+    final newTransform = layer.transform.copyWith(rotation: radians);
+    layers[idx] = layer.copyWith(transform: newTransform);
     _state = _state.copyWith(layers: layers);
 
-    _ensureLayerPivotPersisted(id);
+    // 2) ensure pivot exists for rotation (combined strokes center)
+    _ensureLayerPivot(id);
 
     _renderer.rebuildFromLayers(_state.layers);
     _hasUnsavedChanges = true;
@@ -1995,7 +2256,7 @@ class CanvasController extends ChangeNotifier {
     );
     _state = _state.copyWith(layers: layers);
 
-    _ensureLayerPivotPersisted(id);
+    _ensureLayerPivot(id);
 
     _renderer.rebuildFromLayers(_state.layers);
     _hasUnsavedChanges = true;
@@ -2035,32 +2296,20 @@ class CanvasController extends ChangeNotifier {
     _activePointerId = pointer;
 
     final layer = activeLayer;
-    final tr = layer.transform;
-    final isIdentity = _isIdentityTransform(tr);
+    final baseTr = layer.transform;
 
-    Offset pivot = Offset.zero;
-    if (!isIdentity) {
-      pivot = tr.pivot ?? _computeBoundsPivotForLayer(layer);
-
-      if (tr.pivot == null) {
-        final idx = _state.layers.indexWhere((l) => l.id == layer.id);
-        if (idx >= 0) {
-          final layers = List<CanvasLayer>.from(_state.layers);
-          layers[idx] = layer.copyWith(transform: tr.copyWith(pivot: pivot));
-          _state = _state.copyWith(layers: layers);
-        }
-      }
-    }
+    _drawingInWorld = _layerIsAnimatedNow(layer.id);
+    _drawingLayerId = layer.id;
+    _drawingBaseLayerTr = baseTr;
 
     _startMs = DateTime.now().millisecondsSinceEpoch;
 
-    final startPoint =
-        isIdentity ? pos : _inverseTransformPoint(pos, tr, pivot);
+    // ✅ If layer is animated, store WORLD points (normal drawing feel)
+    final startPoint = pos;
 
     _current = Stroke(
       id: 's${_state.allStrokes.length}_$_startMs',
       brushId: brushId,
-      // ✅ default stroke name (nice for UI)
       name: 'Stroke ${_state.allStrokes.length + 1}',
       visible: true,
       color: color,
@@ -2076,7 +2325,14 @@ class CanvasController extends ChangeNotifier {
       symmetryId: _symmetryId(symmetry),
     );
 
-    _renderer.beginStroke(_current!, layer.id, layer.transform);
+    // ✅ IMPORTANT:
+    // ✅ While dragging, draw active stroke in WORLD overlay (ignores layer rotation)
+    _drawingInWorld = true;
+    _drawingLayerId = layer.id;
+    _drawingBaseLayerTr = baseTr;
+
+    _renderer.beginStroke(_current!, '__WORLD__', const LayerTransform());
+
     _tick();
   }
 
@@ -2085,21 +2341,10 @@ class CanvasController extends ChangeNotifier {
     final sLocal = _current;
     if (sLocal == null) return;
 
-    final layer = activeLayer;
-    final tr = layer.transform;
-    final isIdentity = _isIdentityTransform(tr);
-
-    Offset pivot = Offset.zero;
-    if (!isIdentity) {
-      pivot = tr.pivot ?? _computeBoundsPivotForLayer(layer);
-    }
-
     final now = DateTime.now().millisecondsSinceEpoch;
     final tMs = now - _startMs;
 
-    final localPoint =
-        isIdentity ? pos : _inverseTransformPoint(pos, tr, pivot);
-    sLocal.points.add(PointSample(localPoint.dx, localPoint.dy, tMs));
+    sLocal.points.add(PointSample(pos.dx, pos.dy, tMs));
 
     _renderer.updateStroke(sLocal);
     _tick();
@@ -2109,16 +2354,63 @@ class CanvasController extends ChangeNotifier {
     if (_activePointerId != pointer) return;
     _activePointerId = null;
 
-    final sLocal = _current;
-    if (sLocal == null) return;
+    final sWorld = _current;
+    if (sWorld == null) return;
     _current = null;
 
-    _renderer.commitStroke();
+    final layer = activeLayer;
+    final baseTr = _drawingBaseLayerTr ?? layer.transform;
 
-    _state = _addStrokeToActiveLayer(_state, sLocal);
-    _recordStrokeCreation(sLocal);
+    // ✅ STEP 3: ensure pivot is persisted BEFORE baking/commit so it never changes on lift
+    _ensureLayerPivotForRotation(layer.id);
 
-    _renderer.rebuildFromLayers(_state.layers);
+    // Re-fetch the layer from state (because ensure pivot may have updated it)
+    final li = _state.layers.indexWhere((l) => l.id == layer.id);
+    final layerNow = (li >= 0) ? _state.layers[li] : layer;
+
+    // ✅ Use ONLY the persisted pivot (never recompute during bake)
+    final persistedPivot =
+        layerNow.transform.pivot ?? baseTr.pivot ?? Offset.zero;
+
+    // ✅ Bake: convert WORLD points into LAYER-LOCAL using EFFECTIVE transform at lift moment
+    if (_drawingInWorld && _drawingLayerId == layer.id) {
+      // Effective transform at lift moment (includes LFO rotation etc.)
+      var eff = _effectiveLayerTransformForInput(layer.id, baseTr);
+
+      // ✅ Force the effective transform to rotate around the same persisted pivot
+      eff = eff.copyWith(pivot: persistedPivot);
+
+      final isId = _isIdentityTransform(eff);
+
+      final localPts = <PointSample>[];
+      for (final p in sWorld.points) {
+        final w = Offset(p.x, p.y);
+        final l = isId ? w : _inverseTransformPoint(w, eff, persistedPivot);
+        localPts.add(PointSample(l.dx, l.dy, p.t));
+      }
+
+      final bakedLocal = sWorld.copyWith(points: localPts);
+
+      _renderer.commitStroke();
+
+      _state = _addStrokeToActiveLayer(_state, bakedLocal);
+      _recordStrokeCreation(bakedLocal);
+    } else {
+      // normal non-animated flow
+      _renderer.commitStroke();
+
+      _state = _addStrokeToActiveLayer(_state, sWorld);
+      _recordStrokeCreation(sWorld);
+    }
+
+    // reset flags
+    _drawingInWorld = false;
+    _drawingLayerId = null;
+    _drawingBaseLayerTr = null;
+
+    // ✅ Make sure pivot still exists (no refresh) + safe rebuild
+    _ensureLayerPivotForRotation(activeLayerId);
+    _rebuildRendererSafe();
 
     _hasUnsavedChanges = true;
     _tick();
@@ -2228,11 +2520,13 @@ class CanvasController extends ChangeNotifier {
     final mode = gb.glowBlendFromKey(key);
     gb.GlowBlendState.I.setMode(mode);
 
+    // ✅ ensure pivots for any layer that effectively needs them (base OR LFO/constant)
     for (final l in _state.layers) {
-      _ensureLayerPivotPersisted(l.id);
+      _ensureLayerPivot(l.id);
     }
 
-    _renderer.rebuildFromLayers(_state.layers);
+    _rebuildRendererSafe();
+
     _ensureTickerState();
     _tick();
     notifyListeners();
@@ -2255,10 +2549,6 @@ class CanvasController extends ChangeNotifier {
     _suppressBlendDirty = true;
     gb.GlowBlendState.I.setMode(gb.GlowBlend.additive);
 
-    for (final l in _state.layers) {
-      _ensureLayerPivotPersisted(l.id);
-    }
-
     if (_maybeDevEnableSpin) {
       _layerRotation['layer-main'] = const LayerRotationAnim(
         constantEnabled: true,
@@ -2272,7 +2562,13 @@ class CanvasController extends ChangeNotifier {
     _lfos.clear();
     _routes.clear();
 
-    _renderer.rebuildFromLayers(_state.layers);
+    // ✅ ensure pivots after resets
+    for (final l in _state.layers) {
+      _ensureLayerPivot(l.id);
+    }
+
+    _rebuildRendererSafe();
+
     _ensureTickerState();
     _tick();
     notifyListeners();
@@ -2326,9 +2622,10 @@ class CanvasController extends ChangeNotifier {
 
     if (_selectedStrokeId == removed.id) clearSelection();
 
-    _ensureLayerPivotPersisted(lastLoc.layerId);
+    _ensureLayerPivot(lastLoc.layerId);
 
-    _renderer.rebuildFromLayers(_state.layers);
+    _rebuildRendererSafe();
+
     _hasUnsavedChanges = true;
     _tick();
     notifyListeners();
@@ -2367,9 +2664,10 @@ class CanvasController extends ChangeNotifier {
 
     _history.add(loc);
 
-    _ensureLayerPivotPersisted(loc.layerId);
+    _ensureLayerPivot(loc.layerId);
 
-    _renderer.rebuildFromLayers(_state.layers);
+    _rebuildRendererSafe();
+
     _hasUnsavedChanges = true;
     _tick();
     notifyListeners();
@@ -2392,11 +2690,13 @@ class CanvasController extends ChangeNotifier {
       _hasUnsavedChanges = true;
     }
 
+    // blend changes can alter renderer behaviour; keep pivots valid
     for (final l in _state.layers) {
-      _ensureLayerPivotPersisted(l.id);
+      _ensureLayerPivot(l.id);
     }
 
-    _renderer.rebuildFromLayers(_state.layers);
+    _rebuildRendererSafe();
+
     _tick();
     notifyListeners();
   }

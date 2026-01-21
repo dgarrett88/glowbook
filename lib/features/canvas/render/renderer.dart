@@ -14,17 +14,15 @@ import 'brushes/inner_glow.dart';
 import 'brushes/liquid_neon.dart';
 import 'brushes/soft_glow.dart';
 
-/// Render entry = a stroke plus the layer context it belongs to.
-/// Stroke points are stored in "layer-local" space.
+/// Render entry = a stroke plus the layer it belongs to.
+/// Stroke points are stored in "layer-local" space (for committed strokes).
 class _RenderEntry {
   final Stroke strokeLocal;
   final String layerId;
-  final LayerTransform layerTransform;
 
   _RenderEntry({
     required this.strokeLocal,
     required this.layerId,
-    required this.layerTransform,
   });
 }
 
@@ -32,6 +30,9 @@ class Renderer extends CustomPainter {
   Renderer(
     this.repaint,
     this.symmetryFn, {
+    // ✅ NEW: get latest layer transform live (prevents stale pivot/rotation bugs)
+    required LayerTransform Function(String layerId) layerTransformFn,
+
     // LAYER extras
     required double Function(String layerId) layerExtraRotationRadians,
     double Function(String layerId)? layerExtraX,
@@ -49,7 +50,8 @@ class Renderer extends CustomPainter {
     double Function(String layerId, String strokeId)? strokeExtraGlowOpacity,
     double Function(String layerId, String strokeId)? strokeExtraGlowBrightness,
     required String? Function() selectedStrokeIdFn,
-  })  : _layerExtraRotationRadians = layerExtraRotationRadians,
+  })  : _layerTransformFn = layerTransformFn,
+        _layerExtraRotationRadians = layerExtraRotationRadians,
         _layerExtraX = layerExtraX,
         _layerExtraY = layerExtraY,
         _layerExtraScale = layerExtraScale,
@@ -71,6 +73,9 @@ class Renderer extends CustomPainter {
   // ---------------------------------------------------------------------------
   // CALLBACKS (from controller)
   // ---------------------------------------------------------------------------
+
+  /// ✅ Get latest layer transform by id (so pivot updates take effect immediately)
+  final LayerTransform Function(String layerId) _layerTransformFn;
 
   /// Returns the current extra rotation (radians) for a layer due to animation.
   final double Function(String layerId) _layerExtraRotationRadians;
@@ -132,7 +137,7 @@ class Renderer extends CustomPainter {
   /// Key = stroke id.
   final Map<String, ui.Picture> _bakedByStrokeId = <String, ui.Picture>{};
 
-  _RenderEntry? _activeEntry; // current drawing context (layer + transform)
+  _RenderEntry? _activeEntry; // current drawing context (layer + stroke)
   Size? _lastSize;
 
   SymmetryMode _modeForStroke(Stroke s) {
@@ -155,14 +160,12 @@ class Renderer extends CustomPainter {
   // PUBLIC API USED BY CONTROLLER
   // ---------------------------------------------------------------------------
 
-  /// Call when a stroke begins (we receive the stroke in layer-local space),
-  /// plus the layer transform it belongs to.
+  /// Call when a stroke begins.
+  /// - For normal drawing: strokeLocal points are layer-local, layerId = actual layer id.
+  /// - For "draw in world then bake on lift": strokeLocal points are WORLD, layerId='__WORLD__'
   void beginStroke(Stroke strokeLocal, String layerId, LayerTransform layerTr) {
-    _activeEntry = _RenderEntry(
-      strokeLocal: strokeLocal,
-      layerId: layerId,
-      layerTransform: layerTr,
-    );
+    // layerTr is intentionally ignored: we always pull latest transform by id.
+    _activeEntry = _RenderEntry(strokeLocal: strokeLocal, layerId: layerId);
   }
 
   void updateStroke(Stroke strokeLocal) {
@@ -170,12 +173,9 @@ class Renderer extends CustomPainter {
     _activeEntry = _RenderEntry(
       strokeLocal: strokeLocal,
       layerId: _activeEntry!.layerId,
-      layerTransform: _activeEntry!.layerTransform,
     );
   }
 
-  /// Commit doesn't bake to pictures (animation exists). Controller will call
-  /// rebuildFromLayers after commit anyway.
   void commitStroke() {
     _activeEntry = null;
   }
@@ -190,29 +190,21 @@ class Renderer extends CustomPainter {
     }
     _bakedByStrokeId.clear();
 
-    // rebuild entries in correct z order: layers list order then stroke order inside groups
+    // rebuild entries in correct z order
     for (final layer in layers) {
       if (!layer.visible) continue;
 
       for (final group in layer.groups) {
         for (final s in group.strokes) {
-          if (!s.visible) continue; // ✅ skip hidden strokes
-          _entries.add(_RenderEntry(
-            strokeLocal: s,
-            layerId: layer.id,
-            layerTransform: layer.transform,
-          ));
+          if (!s.visible) continue;
+          _entries.add(_RenderEntry(strokeLocal: s, layerId: layer.id));
         }
       }
     }
 
-    // ✅ IMPORTANT:
-    // If stroke-extras exist at all, baking becomes dangerous because a stroke can
-    // become animated after baking (assign LFO route) and still draw the stale picture.
-    // So: while stroke-extras are enabled, we DO NOT bake anything.
+    // While stroke-extras are enabled, do NOT bake anything.
     if (_strokeExtrasEnabled) return;
 
-    // pre-bake only strokes with 0 extra motion (layer only), AND not selected.
     final selectedId = _selectedStrokeIdFn();
     final sz = _lastSize ?? const Size(0, 0);
 
@@ -231,21 +223,22 @@ class Renderer extends CustomPainter {
           extraScale.abs() > 0.000001 ||
           extraOpacity.abs() > 0.000001;
 
-      if (isLayerAnimated) continue; // animated: no bake
+      if (isLayerAnimated) continue;
       if (selectedId != null && sid == selectedId) continue;
 
       final rec = ui.PictureRecorder();
       final can = Canvas(rec);
 
+      final baseTr = _layerTransformFn(e.layerId);
+
       final world = _strokeToWorldWithLayerExtras(
         e.strokeLocal,
-        e.layerTransform,
+        baseTr,
         e.layerId,
         freezeExtras: false,
       );
 
       _drawByBrush(can, world, sz, _modeForStroke(world));
-
       _bakedByStrokeId[sid] = rec.endRecording();
     }
   }
@@ -261,14 +254,9 @@ class Renderer extends CustomPainter {
         t.opacity == 1.0;
   }
 
-  Offset _computeBoundsPivotForEntry(_RenderEntry e) {
-    // If pivot is set, it is already in canvas coords.
-    final p = e.layerTransform.pivot;
-    if (p != null) return p;
-
-    // Fallback: bounds center of stroke points (layer-local)
+  Offset _strokeBoundsCenterLocal(Stroke sLocal) {
     double? minX, maxX, minY, maxY;
-    for (final pt in e.strokeLocal.points) {
+    for (final pt in sLocal.points) {
       final x = pt.x;
       final y = pt.y;
       minX = (minX == null) ? x : math.min(minX, x);
@@ -279,11 +267,7 @@ class Renderer extends CustomPainter {
     if (minX == null || minY == null || maxX == null || maxY == null) {
       return Offset.zero;
     }
-
-    final localCenter = Offset((minX + maxX) / 2.0, (minY + maxY) / 2.0);
-
-    // Base transform about localCenter (good-enough fallback)
-    return _forward(localCenter, e.layerTransform, localCenter);
+    return Offset((minX + maxX) / 2.0, (minY + maxY) / 2.0);
   }
 
   Offset _forward(Offset p, LayerTransform t, Offset pivotLocal) {
@@ -325,6 +309,7 @@ class Renderer extends CustomPainter {
       rotation: base.rotation + extraRot,
       scale: effScale,
       opacity: effOpacity,
+      pivot: base.pivot, // keep pivot stable
     );
   }
 
@@ -342,7 +327,9 @@ class Renderer extends CustomPainter {
 
     if (_isIdentity(t)) return sLocal;
 
-    final pivotLocal = t.pivot ?? Offset.zero;
+    // ✅ Never rotate around (0,0) when pivot is missing.
+    // Prefer layer pivot; fallback to stroke bounds center (local).
+    final pivotLocal = t.pivot ?? _strokeBoundsCenterLocal(sLocal);
 
     final opacityMul = t.opacity.clamp(0.0, 1.0);
 
@@ -467,16 +454,14 @@ class Renderer extends CustomPainter {
 
     final selectedId = _selectedStrokeIdFn();
 
-    // Draw all committed strokes
+    // Draw committed strokes
     for (final e in _entries) {
-      if (!e.strokeLocal.visible) continue; // ✅ safety
+      if (!e.strokeLocal.visible) continue;
 
       final isSelected = (selectedId != null && e.strokeLocal.id == selectedId);
-
-      // ✅ If selected, it "stops animating": freeze ALL extras (layer + stroke)
       final freezeExtras = isSelected;
 
-      // ✅ With stroke-extras enabled, NEVER use baked pictures (they can go stale).
+      // If stroke-extras enabled, never use baked pictures.
       if (!_strokeExtrasEnabled) {
         final baked = _bakedByStrokeId[e.strokeLocal.id];
         if (!freezeExtras && baked != null) {
@@ -485,15 +470,15 @@ class Renderer extends CustomPainter {
         }
       }
 
-      // Layer-local -> world with LAYER extras (pos/rot/scale/opacity)
+      final baseTr = _layerTransformFn(e.layerId);
+
       final world = _strokeToWorldWithLayerExtras(
         e.strokeLocal,
-        e.layerTransform,
+        baseTr,
         e.layerId,
         freezeExtras: freezeExtras,
       );
 
-      // Apply STROKE extras in world (x/y/rot + visual params)
       final finalStroke = _applyStrokeExtrasWorld(
         world,
         e.layerId,
@@ -504,18 +489,31 @@ class Renderer extends CustomPainter {
       _drawByBrush(canvas, finalStroke, size, _modeForStroke(finalStroke));
     }
 
-    // Draw active in-progress stroke (live)
+    // Draw active in-progress stroke
     final active = _activeEntry;
     if (active != null) {
       if (!active.strokeLocal.visible) return;
 
+      final bool activeIsWorld = active.layerId == '__WORLD__';
+
+      // ✅ If controller is feeding WORLD points, draw as-is (no transforms/extras).
+      if (activeIsWorld) {
+        _drawByBrush(canvas, active.strokeLocal, size,
+            _modeForStroke(active.strokeLocal));
+        return;
+      }
+
+      // Normal: layer-local -> world with extras
+      final selectedId2 = _selectedStrokeIdFn();
       final isSelected =
-          (selectedId != null && active.strokeLocal.id == selectedId);
+          (selectedId2 != null && active.strokeLocal.id == selectedId2);
       final freezeExtras = isSelected;
+
+      final baseTr = _layerTransformFn(active.layerId);
 
       final world = _strokeToWorldWithLayerExtras(
         active.strokeLocal,
-        active.layerTransform,
+        baseTr,
         active.layerId,
         freezeExtras: freezeExtras,
       );
