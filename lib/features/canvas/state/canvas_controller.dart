@@ -11,6 +11,8 @@ import '../../../core/models/canvas_doc.dart' as doc_model;
 import '../../../core/models/canvas_layer.dart';
 import '../../../core/models/stroke.dart';
 import '../../../core/models/lfo.dart'; // ✅ NEW
+import '../history/history_command.dart';
+import '../history/history_stack.dart';
 
 import '../render/renderer.dart';
 import 'canvas_state.dart';
@@ -21,15 +23,19 @@ enum SymmetryMode { off, mirrorV, mirrorH, quad }
 final canvasControllerProvider =
     ChangeNotifierProvider<CanvasController>((ref) => CanvasController());
 
-class _StrokeLocation {
-  final String strokeId;
-  final String layerId;
-  final int groupIndex;
+class _PendingKnobEdit {
+  final String key;
+  final String label;
+  final String? layerId;
+  final VoidCallback undo;
+  VoidCallback redo;
 
-  const _StrokeLocation({
-    required this.strokeId,
+  _PendingKnobEdit({
+    required this.key,
+    required this.label,
     required this.layerId,
-    required this.groupIndex,
+    required this.undo,
+    required this.redo,
   });
 }
 
@@ -198,8 +204,8 @@ class CanvasController extends ChangeNotifier {
   void _ensureTickerState() {
     final anyConstant = _layerRotation.values.any((a) => a.isActive);
 
-    // True if there is at least one enabled route whose LFO exists and is enabled.
     bool anyLfoActive = false;
+    // If you don't have LFO in your controller yet, you can delete this whole block.
     if (_routes.isNotEmpty && _lfos.isNotEmpty) {
       for (final r in _routes) {
         if (!r.enabled) continue;
@@ -213,16 +219,14 @@ class CanvasController extends ChangeNotifier {
 
     final anyActive = anyConstant || anyLfoActive;
 
+    // ✅ FIX #2: ticker start/stop must be side-effect free (NO pivot writes, NO rebuilds)
     if (anyActive && !_tickerRunning) {
       _ticker.start();
       _tickerRunning = true;
     } else if (!anyActive && _tickerRunning) {
       _ticker.stop();
       _tickerRunning = false;
-
-      // optional: keep as-is if you like “restarts from 0” when animation re-enabled
       _timeSec = 0.0;
-
       _tick();
     }
   }
@@ -438,43 +442,6 @@ class CanvasController extends ChangeNotifier {
     return unrotated + pivot;
   }
 
-  void _recordStrokeCreation(Stroke s) {
-    for (final layer in _state.layers) {
-      for (int gi = 0; gi < layer.groups.length; gi++) {
-        final group = layer.groups[gi];
-        final idx = group.strokes.indexWhere((st) => st.id == s.id);
-        if (idx != -1) {
-          _history.add(_StrokeLocation(
-            strokeId: s.id,
-            layerId: layer.id,
-            groupIndex: gi,
-          ));
-          _redoLocations.clear();
-          _state = _state.copyWith(redoStack: []);
-          return;
-        }
-      }
-    }
-  }
-
-  void _rebuildHistoryFromState() {
-    _history.clear();
-    _redoLocations.clear();
-
-    for (final layer in _state.layers) {
-      for (int gi = 0; gi < layer.groups.length; gi++) {
-        final group = layer.groups[gi];
-        for (final s in group.strokes) {
-          _history.add(_StrokeLocation(
-            strokeId: s.id,
-            layerId: layer.id,
-            groupIndex: gi,
-          ));
-        }
-      }
-    }
-  }
-
   // ---------------------------------------------------------------------------
   // LFO ROUTE EVAL HELPERS
   // ---------------------------------------------------------------------------
@@ -513,7 +480,7 @@ class CanvasController extends ChangeNotifier {
       }
 
       final shaped = _evalRouteShaped(r);
-      total += (r.amountDeg * shaped);
+      total += (r.amount * shaped);
     }
     return total;
   }
@@ -682,8 +649,7 @@ class CanvasController extends ChangeNotifier {
 
   bool _suppressBlendDirty = false;
 
-  final List<_StrokeLocation> _history = [];
-  final List<_StrokeLocation> _redoLocations = [];
+  final HistoryStack _history = HistoryStack();
 
   // ---------------------------------------------------------------------------
   // CANVAS SIZE (needed for symmetry selection hit test)
@@ -783,8 +749,82 @@ class CanvasController extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Change stroke thickness (size) from UI.
+  /// Change stroke thickness (size) from UI. (LIVE ONLY; history commits on pointer up)
   void setStrokeSizeRef(
+    String layerId,
+    int groupIndex,
+    String strokeId,
+    double newSize,
+  ) {
+    final after = newSize.clamp(0.5, 200.0).toDouble();
+    _applyStrokeSizeNoHistory(layerId, groupIndex, strokeId, after);
+  }
+
+  void setStrokeCoreOpacityRef(
+      String layerId, int groupIndex, String strokeId, double v) {
+    final clamped = v.clamp(0.0, 1.0).toDouble();
+    final key = 'strokeKnob:core:$layerId:$groupIndex:$strokeId';
+
+    _applyStrokePatchNoHistory(
+      layerId,
+      groupIndex,
+      strokeId,
+      knobKey: key,
+      patch: (s) => s.copyWith(coreOpacity: clamped),
+      redoLatest: () =>
+          setStrokeCoreOpacityRef(layerId, groupIndex, strokeId, clamped),
+    );
+  }
+
+  void setStrokeGlowRadiusRef(
+      String layerId, int groupIndex, String strokeId, double v) {
+    final clamped = v.clamp(0.0, 1.0).toDouble();
+    final key = 'strokeKnob:radius:$layerId:$groupIndex:$strokeId';
+
+    _applyStrokePatchNoHistory(
+      layerId,
+      groupIndex,
+      strokeId,
+      knobKey: key,
+      patch: (s) => s.copyWith(glowRadius: clamped),
+      redoLatest: () =>
+          setStrokeGlowRadiusRef(layerId, groupIndex, strokeId, clamped),
+    );
+  }
+
+  void setStrokeGlowOpacityRef(
+      String layerId, int groupIndex, String strokeId, double v) {
+    final clamped = v.clamp(0.0, 1.0).toDouble();
+    final key = 'strokeKnob:glowOp:$layerId:$groupIndex:$strokeId';
+
+    _applyStrokePatchNoHistory(
+      layerId,
+      groupIndex,
+      strokeId,
+      knobKey: key,
+      patch: (s) => s.copyWith(glowOpacity: clamped),
+      redoLatest: () =>
+          setStrokeGlowOpacityRef(layerId, groupIndex, strokeId, clamped),
+    );
+  }
+
+  void setStrokeGlowBrightnessRef(
+      String layerId, int groupIndex, String strokeId, double v) {
+    final clamped = v.clamp(0.0, 1.0).toDouble();
+    final key = 'strokeKnob:bright:$layerId:$groupIndex:$strokeId';
+
+    _applyStrokePatchNoHistory(
+      layerId,
+      groupIndex,
+      strokeId,
+      knobKey: key,
+      patch: (s) => s.copyWith(glowBrightness: clamped),
+      redoLatest: () =>
+          setStrokeGlowBrightnessRef(layerId, groupIndex, strokeId, clamped),
+    );
+  }
+
+  void _applyStrokeSizeNoHistory(
     String layerId,
     int groupIndex,
     String strokeId,
@@ -806,16 +846,495 @@ class CanvasController extends ChangeNotifier {
     if (si < 0) return;
 
     final clamped = newSize.clamp(0.5, 200.0).toDouble();
+    if ((strokes[si].size - clamped).abs() < 0.000001) return;
+
     strokes[si] = strokes[si].copyWith(size: clamped);
+    groups[groupIndex] = group.copyWith(strokes: strokes);
+    layers[li] = layer.copyWith(groups: groups);
+    _state = _state.copyWith(layers: layers);
+
+    _ensureLayerPivot(layerId);
+    _renderer.rebuildFromLayers(_state.layers);
+    _hasUnsavedChanges = true;
+    _tick();
+    // If a stroke-size knob edit is active for this stroke, keep updating redoLatest
+    final key = 'strokeSize:$layerId:$groupIndex:$strokeId';
+    if (_pendingKnob != null && _pendingKnob!.key == key) {
+      final latest = clamped;
+      knobEditUpdate(
+        key: key,
+        redoLatest: () =>
+            _applyStrokeSizeNoHistory(layerId, groupIndex, strokeId, latest),
+      );
+    }
+
+    notifyListeners();
+  }
+
+  void _applyStrokePatchNoHistory(
+    String layerId,
+    int groupIndex,
+    String strokeId, {
+    required String knobKey,
+    required Stroke Function(Stroke s) patch,
+    required VoidCallback redoLatest,
+  }) {
+    final li = _state.layers.indexWhere((l) => l.id == layerId);
+    if (li < 0) return;
+
+    final layers = List<CanvasLayer>.from(_state.layers);
+    final layer = layers[li];
+
+    if (groupIndex < 0 || groupIndex >= layer.groups.length) return;
+
+    final groups = List<StrokeGroup>.from(layer.groups);
+    final group = groups[groupIndex];
+
+    final strokes = List<Stroke>.from(group.strokes);
+    final si = strokes.indexWhere((s) => s.id == strokeId);
+    if (si < 0) return;
+
+    final before = strokes[si];
+    final after = patch(before);
+
+    // cheap equality guard: if nothing changed, bail
+    if (identical(before, after) || before == after) return;
+
+    strokes[si] = after;
 
     groups[groupIndex] = group.copyWith(strokes: strokes);
     layers[li] = layer.copyWith(groups: groups);
     _state = _state.copyWith(layers: layers);
 
+    _ensureLayerPivot(layerId);
     _renderer.rebuildFromLayers(_state.layers);
     _hasUnsavedChanges = true;
     _tick();
+
+    // Keep updating redoLatest during drag (matches your size pattern)
+    if (_pendingKnob != null && _pendingKnob!.key == knobKey) {
+      knobEditUpdate(
+        key: knobKey,
+        redoLatest: redoLatest,
+      );
+    }
+
     notifyListeners();
+  }
+
+  void _applyStrokePointsNoHistory(
+    String layerId,
+    int groupIndex,
+    String strokeId,
+    List<PointSample> newPoints, {
+    required String knobKey,
+  }) {
+    final li = _state.layers.indexWhere((l) => l.id == layerId);
+    if (li < 0) return;
+
+    final layers = List<CanvasLayer>.from(_state.layers);
+    final layer = layers[li];
+
+    if (groupIndex < 0 || groupIndex >= layer.groups.length) return;
+
+    final groups = List<StrokeGroup>.from(layer.groups);
+    final group = groups[groupIndex];
+
+    final strokes = List<Stroke>.from(group.strokes);
+    final si = strokes.indexWhere((s) => s.id == strokeId);
+    if (si < 0) return;
+
+    // Optional tiny guard to avoid pointless churn
+    if (strokes[si].points.length == newPoints.length) {
+      bool same = true;
+      for (int i = 0; i < newPoints.length; i++) {
+        final a = strokes[si].points[i];
+        final b = newPoints[i];
+        if ((a.x - b.x).abs() > 0.000001 ||
+            (a.y - b.y).abs() > 0.000001 ||
+            (a.t - b.t).abs() > 0.000001) {
+          same = false;
+          break;
+        }
+      }
+      if (same) return;
+    }
+
+    strokes[si] =
+        strokes[si].copyWith(points: List<PointSample>.from(newPoints));
+
+    groups[groupIndex] = group.copyWith(strokes: strokes);
+    layers[li] = layer.copyWith(groups: groups);
+    _state = _state.copyWith(layers: layers);
+
+    _ensureLayerPivot(layerId);
+    _renderer.rebuildFromLayers(_state.layers);
+    _hasUnsavedChanges = true;
+    _tick();
+
+    // keep redoLatest updated during drag
+    if (_pendingKnob != null && _pendingKnob!.key == knobKey) {
+      final latest = List<PointSample>.from(newPoints);
+      knobEditUpdate(
+        key: knobKey,
+        redoLatest: () => _applyStrokePointsNoHistory(
+          layerId,
+          groupIndex,
+          strokeId,
+          latest,
+          knobKey: knobKey,
+        ),
+      );
+    }
+
+    notifyListeners();
+  }
+
+  void beginStrokeKnob(
+    String layerId,
+    int groupIndex,
+    String strokeId, {
+    required String label,
+  }) {
+    final li = _state.layers.indexWhere((l) => l.id == layerId);
+    if (li < 0) return;
+
+    final layer = _state.layers[li];
+    if (groupIndex < 0 || groupIndex >= layer.groups.length) return;
+
+    final group = layer.groups[groupIndex];
+    final si = group.strokes.indexWhere((s) => s.id == strokeId);
+    if (si < 0) return;
+
+    final beforeStroke = group.strokes[si];
+
+    final key = 'strokeKnob:$layerId:$groupIndex:$strokeId';
+
+    knobEditBegin(
+      key: key,
+      label: label,
+      layerId: layerId,
+      undo: () {
+        _applyStrokePatchNoHistory(
+          layerId,
+          groupIndex,
+          strokeId,
+          knobKey: key,
+          patch: (_) => beforeStroke,
+          // redoLatest is irrelevant for undo, but required:
+          redoLatest: () {},
+        );
+      },
+      redoLatest: () {},
+    );
+  }
+
+  void endStrokeKnob(String layerId, int groupIndex, String strokeId) {
+    final key = 'strokeKnob:$layerId:$groupIndex:$strokeId';
+    final p = _pendingKnob;
+    if (p == null) return;
+    if (p.key != key) return;
+    knobEditEnd();
+  }
+
+  /// Call this from knob pointer-down / onChangeStart.
+  void beginStrokeSizeKnob(
+    String layerId,
+    int groupIndex,
+    String strokeId,
+  ) {
+    // locate stroke and capture BEFORE
+    final li = _state.layers.indexWhere((l) => l.id == layerId);
+    if (li < 0) return;
+
+    final layer = _state.layers[li];
+    if (groupIndex < 0 || groupIndex >= layer.groups.length) return;
+
+    final group = layer.groups[groupIndex];
+    final si = group.strokes.indexWhere((s) => s.id == strokeId);
+    if (si < 0) return;
+
+    final before = group.strokes[si].size;
+
+    final key = 'strokeSize:$layerId:$groupIndex:$strokeId';
+
+    knobEditBegin(
+      key: key,
+      label: 'Stroke Size',
+      layerId: layerId,
+      undo: () =>
+          _applyStrokeSizeNoHistory(layerId, groupIndex, strokeId, before),
+      // redo closure will be updated while dragging via knobEditUpdate()
+      redoLatest: () {},
+    );
+  }
+
+  /// Call this from knob pointer-up / onChangeEnd.
+  void endStrokeSizeKnob(
+    String layerId,
+    int groupIndex,
+    String strokeId,
+  ) {
+    final key = 'strokeSize:$layerId:$groupIndex:$strokeId';
+    final p = _pendingKnob;
+    if (p == null) return;
+    if (p.key != key) return;
+    knobEditEnd();
+  }
+
+  // ---------------------------------------------------------------------------
+// LAYER KNOB UNDO/REDO (X/Y/Scale/Rot/Opacity)
+// ---------------------------------------------------------------------------
+
+  void beginLayerKnob(String layerId, {required String label}) {
+    final idx = _state.layers.indexWhere((l) => l.id == layerId);
+    if (idx < 0) return;
+
+    final before = _state.layers[idx].transform;
+    final key = 'layerKnob:$layerId';
+
+    knobEditBegin(
+      key: key,
+      label: label,
+      layerId: layerId,
+      undo: () {
+        _applyLayerTransformNoHistory(layerId, before, knobKey: key);
+      },
+      redoLatest: () {},
+    );
+  }
+
+  void endLayerKnob(String layerId) {
+    final key = 'layerKnob:$layerId';
+    final p = _pendingKnob;
+    if (p == null) return;
+    if (p.key != key) return;
+    knobEditEnd();
+  }
+
+  /// Apply transform live WITHOUT pushing history.
+  /// Also keeps redo closure updated during drag.
+  void _applyLayerTransformNoHistory(
+    String layerId,
+    LayerTransform newTr, {
+    required String knobKey,
+  }) {
+    final idx = _state.layers.indexWhere((l) => l.id == layerId);
+    if (idx < 0) return;
+
+    final layers = List<CanvasLayer>.from(_state.layers);
+    final layer = layers[idx];
+
+    layers[idx] = layer.copyWith(transform: newTr);
+    _state = _state.copyWith(layers: layers);
+
+    _ensureLayerPivot(layerId);
+    _renderer.rebuildFromLayers(_state.layers);
+    _hasUnsavedChanges = true;
+    _tick();
+
+    // update redoLatest while dragging
+    if (_pendingKnob != null && _pendingKnob!.key == knobKey) {
+      final latest = newTr;
+      knobEditUpdate(
+        key: knobKey,
+        redoLatest: () => _applyLayerTransformNoHistory(
+          layerId,
+          latest,
+          knobKey: knobKey,
+        ),
+      );
+    }
+
+    notifyListeners();
+  }
+
+  // ---------------------------------------------------------------------------
+// LAYER KNOB LIVE SETTERS (NO HISTORY; history commits on endLayerKnob)
+// ---------------------------------------------------------------------------
+
+  void setLayerXRef(String layerId, double x) {
+    final idx = _state.layers.indexWhere((l) => l.id == layerId);
+    if (idx < 0) return;
+
+    final layer = _state.layers[idx];
+    final pos = layer.transform.position;
+    final tr = layer.transform.copyWith(position: Offset(x, pos.dy));
+
+    _applyLayerTransformNoHistory(layerId, tr, knobKey: 'layerKnob:$layerId');
+  }
+
+  void setLayerYRef(String layerId, double y) {
+    final idx = _state.layers.indexWhere((l) => l.id == layerId);
+    if (idx < 0) return;
+
+    final layer = _state.layers[idx];
+    final pos = layer.transform.position;
+    final tr = layer.transform.copyWith(position: Offset(pos.dx, y));
+
+    _applyLayerTransformNoHistory(layerId, tr, knobKey: 'layerKnob:$layerId');
+  }
+
+  void setLayerScaleRef(String layerId, double scale) {
+    final idx = _state.layers.indexWhere((l) => l.id == layerId);
+    if (idx < 0) return;
+
+    final v = scale.clamp(0.1, 5.0).toDouble();
+    final layer = _state.layers[idx];
+    final tr = layer.transform.copyWith(scale: v);
+
+    _applyLayerTransformNoHistory(layerId, tr, knobKey: 'layerKnob:$layerId');
+  }
+
+  void setLayerOpacityRef(String layerId, double opacity) {
+    final idx = _state.layers.indexWhere((l) => l.id == layerId);
+    if (idx < 0) return;
+
+    final v = opacity.clamp(0.0, 1.0).toDouble();
+    final layer = _state.layers[idx];
+    final tr = layer.transform.copyWith(opacity: v);
+
+    _applyLayerTransformNoHistory(layerId, tr, knobKey: 'layerKnob:$layerId');
+  }
+
+  void setLayerRotationDegRef(String layerId, double deg) {
+    final idx = _state.layers.indexWhere((l) => l.id == layerId);
+    if (idx < 0) return;
+
+    final radians = deg * math.pi / 180.0;
+    final layer = _state.layers[idx];
+    final tr = layer.transform.copyWith(rotation: radians);
+
+    _applyLayerTransformNoHistory(layerId, tr, knobKey: 'layerKnob:$layerId');
+  }
+
+// ---------------------------------------------------------------------------
+// STROKE KNOB UNDO/REDO (param-specific key)
+// ---------------------------------------------------------------------------
+
+  void beginStrokeParamKnob(
+    String layerId,
+    int groupIndex,
+    String strokeId, {
+    required String label,
+    required String
+        paramKey, // e.g. "core", "radius", "glowOp", "bright", "x", "y", "rot"
+  }) {
+    final li = _state.layers.indexWhere((l) => l.id == layerId);
+    if (li < 0) return;
+
+    final layer = _state.layers[li];
+    if (groupIndex < 0 || groupIndex >= layer.groups.length) return;
+
+    final group = layer.groups[groupIndex];
+    final si = group.strokes.indexWhere((s) => s.id == strokeId);
+    if (si < 0) return;
+
+    final beforeStroke = group.strokes[si];
+    final key = 'strokeKnob:$paramKey:$layerId:$groupIndex:$strokeId';
+
+    knobEditBegin(
+      key: key,
+      label: label,
+      layerId: layerId,
+      undo: () {
+        _applyStrokePatchNoHistory(
+          layerId,
+          groupIndex,
+          strokeId,
+          knobKey: key,
+          patch: (_) => beforeStroke,
+          redoLatest: () {},
+        );
+      },
+      redoLatest: () {},
+    );
+  }
+
+  /// Live preview update for stroke transform knobs (X/Y/Rot).
+  /// IMPORTANT: does NOT push history.
+  void setStrokePointsPreviewRef(
+    String layerId,
+    int groupIndex,
+    String strokeId,
+    List<PointSample> points,
+  ) {
+    final key = 'strokeXform:$layerId:$groupIndex:$strokeId';
+    _applyStrokePointsNoHistory(
+      layerId,
+      groupIndex,
+      strokeId,
+      points,
+      knobKey: key,
+    );
+  }
+
+  /// Call this on knob onChangeStart.
+  /// You pass in the stroke's BASELINE points (the "before" snapshot).
+  void beginStrokeTransformKnob(
+    String layerId,
+    int groupIndex,
+    String strokeId, {
+    required String label,
+    required List<PointSample> beforePoints,
+  }) {
+    final key = 'strokeXform:$layerId:$groupIndex:$strokeId';
+
+    knobEditBegin(
+      key: key,
+      label: label,
+      layerId: layerId,
+      undo: () {
+        _applyStrokePointsNoHistory(
+          layerId,
+          groupIndex,
+          strokeId,
+          beforePoints,
+          knobKey: key,
+        );
+      },
+      redoLatest:
+          () {}, // updated while dragging by _applyStrokePointsNoHistory
+    );
+  }
+
+  /// Call this on knob onChangeEnd.
+  /// You pass in the final computed "after" points.
+  void endStrokeTransformKnob(
+    String layerId,
+    int groupIndex,
+    String strokeId, {
+    required List<PointSample> afterPoints,
+  }) {
+    final key = 'strokeXform:$layerId:$groupIndex:$strokeId';
+
+    // Ensure current state is at AFTER (it should be already, but safe)
+    _applyStrokePointsNoHistory(
+      layerId,
+      groupIndex,
+      strokeId,
+      afterPoints,
+      knobKey: key,
+    );
+
+    final p = _pendingKnob;
+    if (p == null) return;
+    if (p.key != key) return;
+
+    knobEditEnd();
+  }
+
+  void endStrokeParamKnob(
+    String layerId,
+    int groupIndex,
+    String strokeId, {
+    required String paramKey,
+  }) {
+    final key = 'strokeKnob:$paramKey:$layerId:$groupIndex:$strokeId';
+    final p = _pendingKnob;
+    if (p == null) return;
+    if (p.key != key) return;
+    knobEditEnd();
   }
 
   /// ✅ Rename stroke from UI.
@@ -938,15 +1457,6 @@ class CanvasController extends ChangeNotifier {
     groups[groupIndex] = group.copyWith(strokes: strokes);
     layers[li] = layer.copyWith(groups: groups);
     _state = _state.copyWith(layers: layers);
-
-    _history.removeWhere((h) =>
-        h.layerId == layerId &&
-        h.groupIndex == groupIndex &&
-        h.strokeId == strokeId);
-    _redoLocations.removeWhere((h) =>
-        h.layerId == layerId &&
-        h.groupIndex == groupIndex &&
-        h.strokeId == strokeId);
 
     if (_selectedStrokeId == strokeId) {
       clearSelection();
@@ -1686,7 +2196,7 @@ class CanvasController extends ChangeNotifier {
       enabled: true,
       param: param,
       bipolar: true,
-      amountDeg: amount, // v1: also used as generic amount for X/Y
+      amount: amount, // v1: also used as generic amount for X/Y
     ));
 
     // ✅ if the route is rotation and enabled, ensure pivot exists now
@@ -1761,46 +2271,46 @@ class CanvasController extends ChangeNotifier {
     notifyListeners();
   }
 
-  void setRouteAmountDeg(String routeId, double amountDeg) {
+  void setRouteAmount(String routeId, double amount) {
     final i = _routes.indexWhere((r) => r.id == routeId);
     if (i < 0) return;
 
     final r = _routes[i];
 
-    // Rotation is degrees; X/Y are pixels (v1 uses amountDeg as generic amount).
+    // Rotation is degrees; X/Y are pixels (v1 uses amount as generic amount).
     final double v;
     switch (r.param) {
       case LfoParam.layerRotationDeg:
       case LfoParam.strokeRotationDeg:
-        v = amountDeg.clamp(0.0, 360.0).toDouble();
+        v = amount.clamp(0.0, 360.0).toDouble();
         break;
 
       case LfoParam.layerX:
       case LfoParam.layerY:
       case LfoParam.strokeX:
       case LfoParam.strokeY:
-        v = amountDeg.clamp(0.0, 4000.0).toDouble();
+        v = amount.clamp(0.0, 4000.0).toDouble();
         break;
 
       case LfoParam.layerOpacity:
       case LfoParam.strokeCoreOpacity:
       case LfoParam.strokeGlowOpacity:
       case LfoParam.strokeGlowBrightness:
-        v = amountDeg.clamp(-1.0, 1.0).toDouble();
+        v = amount.clamp(-1.0, 1.0).toDouble();
         break;
 
       case LfoParam.layerScale:
       case LfoParam.strokeSize:
       case LfoParam.strokeGlowRadius:
-        v = amountDeg.clamp(-5.0, 5.0).toDouble();
+        v = amount.clamp(-5.0, 5.0).toDouble();
         break;
 
       default:
-        v = amountDeg.toDouble();
+        v = amount.toDouble();
         break;
     }
 
-    _routes[i] = r.copyWith(amountDeg: v);
+    _routes[i] = r.copyWith(amount: v);
 
     _tick();
     notifyListeners();
@@ -1866,7 +2376,7 @@ class CanvasController extends ChangeNotifier {
       param: param,
       enabled: true,
       bipolar: true,
-      amountDeg: 25.0,
+      amount: 25.0,
     ));
 
     if (param == LfoParam.layerRotationDeg) {
@@ -1979,7 +2489,7 @@ class CanvasController extends ChangeNotifier {
       param: param,
       enabled: true,
       bipolar: true,
-      amountDeg: 25.0,
+      amount: 25.0,
     ));
 
     _ensureTickerState();
@@ -1991,6 +2501,35 @@ class CanvasController extends ChangeNotifier {
   // ---------------------------------------------------------------------------
   // STROKE UPDATE API (only size + points edits in this build)
   // ---------------------------------------------------------------------------
+
+  CanvasState _setStrokeInState(
+    CanvasState state, {
+    required String layerId,
+    required int groupIndex,
+    required String strokeId,
+    required Stroke newStroke,
+  }) {
+    final li = state.layers.indexWhere((l) => l.id == layerId);
+    if (li < 0) return state;
+
+    final layers = List<CanvasLayer>.from(state.layers);
+    final layer = layers[li];
+
+    if (groupIndex < 0 || groupIndex >= layer.groups.length) return state;
+
+    final groups = List<StrokeGroup>.from(layer.groups);
+    final group = groups[groupIndex];
+
+    final strokes = List<Stroke>.from(group.strokes);
+    final si = strokes.indexWhere((s) => s.id == strokeId);
+    if (si < 0) return state;
+
+    strokes[si] = newStroke;
+
+    groups[groupIndex] = group.copyWith(strokes: strokes);
+    layers[li] = layer.copyWith(groups: groups);
+    return state.copyWith(layers: layers);
+  }
 
   void updateStrokeById(
     String layerId,
@@ -2112,9 +2651,6 @@ class CanvasController extends ChangeNotifier {
       activeLayerId: newActiveId,
       redoStack: const [],
     );
-
-    _history.removeWhere((loc) => loc.layerId == id);
-    _redoLocations.removeWhere((loc) => loc.layerId == id);
 
     _layerRotation.remove(id);
 
@@ -2393,14 +2929,61 @@ class CanvasController extends ChangeNotifier {
 
       _renderer.commitStroke();
 
-      _state = _addStrokeToActiveLayer(_state, bakedLocal);
-      _recordStrokeCreation(bakedLocal);
+      final strokeToAdd = bakedLocal;
+
+      final targetLayerId = _drawingLayerId ?? activeLayerId;
+      const targetGroupIndex = 0;
+
+      final cmd = LambdaCommand(
+        label: 'Add Stroke',
+        apply: () {
+          _state = _addStrokeToLayer(
+            _state,
+            layerId: targetLayerId,
+            groupIndex: targetGroupIndex,
+            stroke: strokeToAdd,
+          );
+        },
+        undo: () {
+          _state = _removeStrokeById(
+            _state,
+            layerId: targetLayerId,
+            strokeId: strokeToAdd.id,
+          );
+          if (_selectedStrokeId == strokeToAdd.id) clearSelection();
+        },
+      );
+
+      _doCommand(cmd, layerId: targetLayerId);
     } else {
-      // normal non-animated flow
       _renderer.commitStroke();
 
-      _state = _addStrokeToActiveLayer(_state, sWorld);
-      _recordStrokeCreation(sWorld);
+      final strokeToAdd = sWorld;
+
+      final targetLayerId = _drawingLayerId ?? activeLayerId;
+      const targetGroupIndex = 0;
+
+      final cmd = LambdaCommand(
+        label: 'Add Stroke',
+        apply: () {
+          _state = _addStrokeToLayer(
+            _state,
+            layerId: targetLayerId,
+            groupIndex: targetGroupIndex,
+            stroke: strokeToAdd,
+          );
+        },
+        undo: () {
+          _state = _removeStrokeById(
+            _state,
+            layerId: targetLayerId,
+            strokeId: strokeToAdd.id,
+          );
+          if (_selectedStrokeId == strokeToAdd.id) clearSelection();
+        },
+      );
+
+      _doCommand(cmd, layerId: targetLayerId);
     }
 
     // reset flags
@@ -2415,6 +2998,63 @@ class CanvasController extends ChangeNotifier {
     _hasUnsavedChanges = true;
     _tick();
     notifyListeners();
+  }
+
+  CanvasState _removeStrokeById(
+    CanvasState state, {
+    required String layerId,
+    required String strokeId,
+  }) {
+    final li = state.layers.indexWhere((l) => l.id == layerId);
+    if (li < 0) return state;
+
+    final layers = List<CanvasLayer>.from(state.layers);
+    final layer = layers[li];
+
+    final groups = List<StrokeGroup>.from(layer.groups);
+    bool changed = false;
+
+    for (int gi = 0; gi < groups.length; gi++) {
+      final g = groups[gi];
+      final strokes = List<Stroke>.from(g.strokes);
+      final idx = strokes.indexWhere((s) => s.id == strokeId);
+      if (idx < 0) continue;
+
+      strokes.removeAt(idx);
+      groups[gi] = g.copyWith(strokes: strokes);
+      changed = true;
+      break;
+    }
+
+    if (!changed) return state;
+
+    layers[li] = layer.copyWith(groups: groups);
+    return state.copyWith(layers: layers);
+  }
+
+  CanvasState _addStrokeToLayer(
+    CanvasState state, {
+    required String layerId,
+    required int groupIndex,
+    required Stroke stroke,
+  }) {
+    final li = state.layers.indexWhere((l) => l.id == layerId);
+    if (li < 0) return state;
+
+    final layers = List<CanvasLayer>.from(state.layers);
+    final layer = layers[li];
+    if (layer.locked) return state;
+
+    final groups = List<StrokeGroup>.from(layer.groups);
+    if (groups.isEmpty) return state;
+
+    final gi = groupIndex.clamp(0, groups.length - 1);
+    final g = groups[gi];
+
+    groups[gi] = g.copyWith(strokes: [...g.strokes, stroke]);
+    layers[li] = layer.copyWith(groups: groups);
+
+    return state.copyWith(layers: layers);
   }
 
   CanvasState _addStrokeToActiveLayer(CanvasState state, Stroke stroke) {
@@ -2541,7 +3181,6 @@ class CanvasController extends ChangeNotifier {
     clearSelection();
 
     _history.clear();
-    _redoLocations.clear();
 
     backgroundColor = 0xFF000000;
     _hasCustomBackground = false;
@@ -2579,98 +3218,107 @@ class CanvasController extends ChangeNotifier {
     notifyListeners();
   }
 
+  void _afterEdit({String? layerId}) {
+    // Keep pivots stable & renderer consistent after any edit
+    if (layerId != null) _ensureLayerPivot(layerId);
+    _rebuildRendererSafe();
+
+    _hasUnsavedChanges = true;
+    _ensureTickerState();
+    _tick();
+    notifyListeners();
+  }
+
+  void _doCommand(
+    HistoryCommand cmd, {
+    String? layerId,
+    bool alreadyApplied = false,
+  }) {
+    if (!alreadyApplied) {
+      cmd.apply();
+    }
+    _history.push(cmd);
+    _afterEdit(layerId: layerId);
+  }
+
+  void _rebuildHistoryFromState() {
+    // When loading a document, history should start clean.
+    _history.clear();
+  }
+
+// ---------------------------------------------------------------------------
+// KNOB HISTORY (NO TIMERS): begin -> update -> end
+// ---------------------------------------------------------------------------
+
+  _PendingKnobEdit? _pendingKnob;
+
+  /// Call on finger DOWN (or onChangeStart).
+  void knobEditBegin({
+    required String key,
+    required String label,
+    required String? layerId,
+    required VoidCallback undo,
+    required VoidCallback redoLatest,
+  }) {
+    // If something else was mid-edit, commit it first
+    if (_pendingKnob != null && _pendingKnob!.key != key) {
+      knobEditEnd();
+    }
+
+    // Start a new pending edit (captures BEFORE via undo callback)
+    _pendingKnob = _PendingKnobEdit(
+      key: key,
+      label: label,
+      layerId: layerId,
+      undo: undo,
+      redo: redoLatest,
+    );
+  }
+
+  /// Call on finger MOVE (or onChanged).
+  void knobEditUpdate({
+    required String key,
+    required VoidCallback redoLatest,
+  }) {
+    final p = _pendingKnob;
+    if (p == null) return;
+    if (p.key != key) return;
+
+    // Keep updating the redo closure to the latest value
+    p.redo = redoLatest;
+  }
+
+  /// Call on finger UP (or onChangeEnd).
+  void knobEditEnd() {
+    final p = _pendingKnob;
+    if (p == null) return;
+
+    _pendingKnob = null;
+
+    final cmd = LambdaCommand(
+      label: p.label,
+      apply: p.redo,
+      undo: p.undo,
+    );
+
+    // State is already at "after" because we applied live during drag
+    _doCommand(cmd, layerId: p.layerId, alreadyApplied: true);
+  }
+
   // ---------------------------------------------------------------------------
   // UNDO / REDO
   // ---------------------------------------------------------------------------
 
   void undo() {
-    if (_history.isEmpty) return;
-
-    final lastLoc = _history.removeLast();
-
-    final layers = List<CanvasLayer>.from(_state.layers);
-    final layerIndex = layers.indexWhere((l) => l.id == lastLoc.layerId);
-    if (layerIndex == -1) return;
-
-    final layer = layers[layerIndex];
-    if (layer.groups.isEmpty ||
-        lastLoc.groupIndex < 0 ||
-        lastLoc.groupIndex >= layer.groups.length) {
-      return;
-    }
-
-    final groups = List<StrokeGroup>.from(layer.groups);
-    final group = groups[lastLoc.groupIndex];
-
-    final strokes = List<Stroke>.from(group.strokes);
-    final strokeIndex = strokes.indexWhere((st) => st.id == lastLoc.strokeId);
-    if (strokeIndex == -1) return;
-
-    final removed = strokes.removeAt(strokeIndex);
-
-    groups[lastLoc.groupIndex] = group.copyWith(strokes: strokes);
-    layers[layerIndex] = layer.copyWith(groups: groups);
-
-    final newRedo = List<Stroke>.from(_state.redoStack)..add(removed);
-
-    _state = _state.copyWith(
-      layers: layers,
-      redoStack: newRedo,
-    );
-
-    _redoLocations.add(lastLoc);
-
-    if (_selectedStrokeId == removed.id) clearSelection();
-
-    _ensureLayerPivot(lastLoc.layerId);
-
-    _rebuildRendererSafe();
-
-    _hasUnsavedChanges = true;
-    _tick();
-    notifyListeners();
+    if (!_history.canUndo) return;
+    _history.undo();
+    _afterEdit(); // rebuild + repaint
   }
 
   void redo() {
-    if (_state.redoStack.isEmpty || _redoLocations.isEmpty) return;
-
-    final loc = _redoLocations.last;
-    final stroke = _state.redoStack.last;
-
-    final layers = List<CanvasLayer>.from(_state.layers);
-    final layerIndex = layers.indexWhere((l) => l.id == loc.layerId);
-    if (layerIndex == -1) return;
-
-    final layer = layers[layerIndex];
-    if (layer.locked) return;
-
-    final groups = List<StrokeGroup>.from(layer.groups);
-    final groupIndex = (loc.groupIndex >= 0 && loc.groupIndex < groups.length)
-        ? loc.groupIndex
-        : 0;
-    final group = groups[groupIndex];
-
-    final strokes = List<Stroke>.from(group.strokes)..add(stroke);
-    groups[groupIndex] = group.copyWith(strokes: strokes);
-    layers[layerIndex] = layer.copyWith(groups: groups);
-
-    final newRedo = List<Stroke>.from(_state.redoStack)..removeLast();
-    _redoLocations.removeLast();
-
-    _state = _state.copyWith(
-      layers: layers,
-      redoStack: newRedo,
-    );
-
-    _history.add(loc);
-
-    _ensureLayerPivot(loc.layerId);
-
-    _rebuildRendererSafe();
-
-    _hasUnsavedChanges = true;
-    _tick();
-    notifyListeners();
+    if (!_history.canRedo) return;
+    _history.redo();
+    _afterEdit(); // rebuild + repaint
   }
 
   // ---------------------------------------------------------------------------

@@ -642,7 +642,7 @@ class _RouteRow extends ConsumerWidget {
             children: [
               SynthKnob(
                 label: 'Depth',
-                value: route.amountDeg.clamp(0.0, 360.0),
+                value: route.amount.clamp(0.0, 360.0),
                 min: 0.0,
                 max: 360.0,
                 defaultValue: 25.0,
@@ -650,7 +650,7 @@ class _RouteRow extends ConsumerWidget {
                 onInteractionChanged: onAnyKnobInteraction,
                 onChanged: (v) {
                   onAnyKnobValueChanged();
-                  controller.setRouteAmountDeg(route.id, v);
+                  controller.setRouteAmount(route.id, v);
                 },
               ),
             ],

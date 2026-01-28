@@ -186,13 +186,6 @@ class _LayerPanelState extends ConsumerState<LayerPanel> {
                               }
                             });
                           },
-                          onTransformChanged: (tx) {
-                            controller.setLayerPosition(layer.id, tx.x, tx.y);
-                            controller.setLayerRotationDegrees(
-                                layer.id, tx.rotationDegrees);
-                            controller.setLayerScale(layer.id, tx.scale);
-                            controller.setLayerOpacity(layer.id, tx.opacity);
-                          },
                         );
                       },
                     ),
@@ -307,7 +300,6 @@ class _LayerTile extends StatefulWidget {
     required this.onDelete,
     required this.onRename,
     required this.onToggleExpanded,
-    required this.onTransformChanged,
   });
 
   final CanvasLayer layer;
@@ -326,7 +318,6 @@ class _LayerTile extends StatefulWidget {
   final VoidCallback? onDelete;
   final VoidCallback onRename;
   final VoidCallback onToggleExpanded;
-  final ValueChanged<_LayerTransformValues> onTransformChanged;
 
   @override
   State<_LayerTile> createState() => _LayerTileState();
@@ -350,7 +341,6 @@ class _LayerTileState extends State<_LayerTile> {
 
   void _updateAndSend(_LayerTransformValues v) {
     setState(() => _values = v);
-    widget.onTransformChanged(v);
   }
 
   @override
@@ -599,6 +589,8 @@ class _LayerTransformEditor extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    final controller = ref.read(canvas_state.canvasControllerProvider);
+
     return Container(
       padding: const EdgeInsets.fromLTRB(10, 10, 10, 10),
       decoration: const BoxDecoration(
@@ -626,8 +618,19 @@ class _LayerTransformEditor extends ConsumerWidget {
                     defaultValue: 0,
                     valueFormatter: (v) => v.toStringAsFixed(0),
                     onInteractionChanged: onAnyKnobInteraction,
+
+                    // ✅ history transaction
+                    onChangeStart: () =>
+                        controller.beginLayerKnob(layerId, label: 'Layer X'),
+                    onChangeEnd: () => controller.endLayerKnob(layerId),
+
                     onChanged: (v) {
                       onAnyKnobValueChanged();
+
+                      // ✅ live apply NO HISTORY
+                      controller.setLayerXRef(layerId, v);
+
+                      // ✅ keep local UI state in sync (so knobs show the value)
                       onChanged(values.copyWith(x: v));
                     },
                   ),
@@ -648,8 +651,12 @@ class _LayerTransformEditor extends ConsumerWidget {
                     defaultValue: 0,
                     valueFormatter: (v) => v.toStringAsFixed(0),
                     onInteractionChanged: onAnyKnobInteraction,
+                    onChangeStart: () =>
+                        controller.beginLayerKnob(layerId, label: 'Layer Y'),
+                    onChangeEnd: () => controller.endLayerKnob(layerId),
                     onChanged: (v) {
                       onAnyKnobValueChanged();
+                      controller.setLayerYRef(layerId, v);
                       onChanged(values.copyWith(y: v));
                     },
                   ),
@@ -670,8 +677,12 @@ class _LayerTransformEditor extends ConsumerWidget {
                     defaultValue: 1.0,
                     valueFormatter: (v) => v.toStringAsFixed(2),
                     onInteractionChanged: onAnyKnobInteraction,
+                    onChangeStart: () => controller.beginLayerKnob(layerId,
+                        label: 'Layer Scale'),
+                    onChangeEnd: () => controller.endLayerKnob(layerId),
                     onChanged: (v) {
                       onAnyKnobValueChanged();
+                      controller.setLayerScaleRef(layerId, v);
                       onChanged(values.copyWith(scale: v));
                     },
                   ),
@@ -693,8 +704,12 @@ class _LayerTransformEditor extends ConsumerWidget {
                     defaultValue: 0.0,
                     valueFormatter: (v) => '${v.toStringAsFixed(0)}°',
                     onInteractionChanged: onAnyKnobInteraction,
+                    onChangeStart: () =>
+                        controller.beginLayerKnob(layerId, label: 'Layer Rot'),
+                    onChangeEnd: () => controller.endLayerKnob(layerId),
                     onChanged: (v) {
                       onAnyKnobValueChanged();
+                      controller.setLayerRotationDegRef(layerId, v);
                       onChanged(values.copyWith(rotationDegrees: v));
                     },
                   ),
@@ -716,8 +731,12 @@ class _LayerTransformEditor extends ConsumerWidget {
                     defaultValue: 1.0,
                     valueFormatter: (v) => '${(v * 100).round()}%',
                     onInteractionChanged: onAnyKnobInteraction,
+                    onChangeStart: () => controller.beginLayerKnob(layerId,
+                        label: 'Layer Opacity'),
+                    onChangeEnd: () => controller.endLayerKnob(layerId),
                     onChanged: (v) {
                       onAnyKnobValueChanged();
+                      controller.setLayerOpacityRef(layerId, v);
                       onChanged(values.copyWith(opacity: v));
                     },
                   ),
@@ -1270,28 +1289,6 @@ class _StrokeTileState extends State<_StrokeTile> {
     return out;
   }
 
-  void _commitTransform() {
-    final base = _basePts;
-    if (base == null) return;
-
-    final localDelta = _worldToLocalDelta(Offset(_tx, _ty));
-
-    final newPts = _applyTxRot(
-      base: base,
-      pivot: _pivot,
-      tx: localDelta.dx,
-      ty: localDelta.dy,
-      rotDeg: _rotDeg,
-    );
-
-    widget.controller.updateStrokeById(
-      widget.layerId,
-      widget.groupIndex,
-      widget.stroke.id,
-      (s) => s.copyWith(points: newPts),
-    );
-  }
-
   @override
   void didUpdateWidget(covariant _StrokeTile oldWidget) {
     super.didUpdateWidget(oldWidget);
@@ -1480,10 +1477,31 @@ class _StrokeTileState extends State<_StrokeTile> {
                             max: 200.0,
                             defaultValue: 10.0,
                             valueFormatter: (v) => v.toStringAsFixed(1),
-                            onInteractionChanged: widget.onAnyKnobInteraction,
+
+                            // ✅ keep your existing scroll/fade behaviour
+                            onInteractionChanged: (active) {
+                              widget.onAnyKnobInteraction(active);
+
+                              // ✅ start/end a history transaction for undo/redo
+                              if (active) {
+                                widget.controller.beginStrokeSizeKnob(
+                                  widget.layerId,
+                                  widget.groupIndex,
+                                  s.id,
+                                );
+                              } else {
+                                widget.controller.endStrokeSizeKnob(
+                                  widget.layerId,
+                                  widget.groupIndex,
+                                  s.id,
+                                );
+                              }
+                            },
+
                             onChanged: (v) {
                               widget.onAnyKnobValueChanged();
-                              widget.onSizeChanged(v);
+                              widget.onSizeChanged(
+                                  v); // still calls setStrokeSizeRef(...)
                             },
                           ),
                         ],
@@ -1507,10 +1525,13 @@ class _StrokeTileState extends State<_StrokeTile> {
                             defaultValue: 0,
                             valueFormatter: (v) => v.toStringAsFixed(0),
                             onInteractionChanged: widget.onAnyKnobInteraction,
+                            onChangeStart: () =>
+                                _beginStrokeTransformKnob('Stroke X'),
+                            onChangeEnd: _endStrokeTransformKnob,
                             onChanged: (v) {
                               widget.onAnyKnobValueChanged();
                               setState(() => _tx = v);
-                              _commitTransform();
+                              _previewStrokeTransformNoHistory();
                             },
                           ),
                         ],
@@ -1534,10 +1555,13 @@ class _StrokeTileState extends State<_StrokeTile> {
                             defaultValue: 0,
                             valueFormatter: (v) => v.toStringAsFixed(0),
                             onInteractionChanged: widget.onAnyKnobInteraction,
+                            onChangeStart: () =>
+                                _beginStrokeTransformKnob('Stroke Y'),
+                            onChangeEnd: _endStrokeTransformKnob,
                             onChanged: (v) {
                               widget.onAnyKnobValueChanged();
                               setState(() => _ty = v);
-                              _commitTransform();
+                              _previewStrokeTransformNoHistory();
                             },
                           ),
                         ],
@@ -1561,10 +1585,13 @@ class _StrokeTileState extends State<_StrokeTile> {
                             defaultValue: 0,
                             valueFormatter: (v) => '${v.toStringAsFixed(0)}°',
                             onInteractionChanged: widget.onAnyKnobInteraction,
+                            onChangeStart: () =>
+                                _beginStrokeTransformKnob('Stroke Rot'),
+                            onChangeEnd: _endStrokeTransformKnob,
                             onChanged: (v) {
                               widget.onAnyKnobValueChanged();
                               setState(() => _rotDeg = v);
-                              _commitTransform();
+                              _previewStrokeTransformNoHistory();
                             },
                           ),
                         ],
@@ -1588,15 +1615,26 @@ class _StrokeTileState extends State<_StrokeTile> {
                             defaultValue: 86.0,
                             valueFormatter: (v) => '${v.toStringAsFixed(0)}%',
                             onInteractionChanged: widget.onAnyKnobInteraction,
+                            onChangeStart: () =>
+                                widget.controller.beginStrokeParamKnob(
+                              widget.layerId,
+                              widget.groupIndex,
+                              s.id,
+                              label: 'Stroke Core',
+                              paramKey: 'core',
+                            ),
+                            onChangeEnd: () =>
+                                widget.controller.endStrokeParamKnob(
+                              widget.layerId,
+                              widget.groupIndex,
+                              s.id,
+                              paramKey: 'core',
+                            ),
                             onChanged: (ui) {
                               widget.onAnyKnobValueChanged();
                               final nv = (ui / 100.0).clamp(0.0, 1.0);
-                              widget.controller.updateStrokeById(
-                                widget.layerId,
-                                widget.groupIndex,
-                                s.id,
-                                (st) => st.copyWith(coreOpacity: nv),
-                              );
+                              widget.controller.setStrokeCoreOpacityRef(
+                                  widget.layerId, widget.groupIndex, s.id, nv);
                             },
                           ),
                         ],
@@ -1620,15 +1658,26 @@ class _StrokeTileState extends State<_StrokeTile> {
                             defaultValue: 15.0,
                             valueFormatter: (v) => v.toStringAsFixed(0),
                             onInteractionChanged: widget.onAnyKnobInteraction,
+                            onChangeStart: () =>
+                                widget.controller.beginStrokeParamKnob(
+                              widget.layerId,
+                              widget.groupIndex,
+                              s.id,
+                              label: 'Stroke Radius',
+                              paramKey: 'radius',
+                            ),
+                            onChangeEnd: () =>
+                                widget.controller.endStrokeParamKnob(
+                              widget.layerId,
+                              widget.groupIndex,
+                              s.id,
+                              paramKey: 'radius',
+                            ),
                             onChanged: (ui) {
                               widget.onAnyKnobValueChanged();
                               final nv = (ui / 300.0).clamp(0.0, 1.0);
-                              widget.controller.updateStrokeById(
-                                widget.layerId,
-                                widget.groupIndex,
-                                s.id,
-                                (st) => st.copyWith(glowRadius: nv),
-                              );
+                              widget.controller.setStrokeGlowRadiusRef(
+                                  widget.layerId, widget.groupIndex, s.id, nv);
                             },
                           ),
                         ],
@@ -1652,15 +1701,26 @@ class _StrokeTileState extends State<_StrokeTile> {
                             defaultValue: 100.0,
                             valueFormatter: (v) => '${v.toStringAsFixed(0)}%',
                             onInteractionChanged: widget.onAnyKnobInteraction,
+                            onChangeStart: () =>
+                                widget.controller.beginStrokeParamKnob(
+                              widget.layerId,
+                              widget.groupIndex,
+                              s.id,
+                              label: 'Glow Opacity',
+                              paramKey: 'glowOp',
+                            ),
+                            onChangeEnd: () =>
+                                widget.controller.endStrokeParamKnob(
+                              widget.layerId,
+                              widget.groupIndex,
+                              s.id,
+                              paramKey: 'glowOp',
+                            ),
                             onChanged: (ui) {
                               widget.onAnyKnobValueChanged();
                               final nv = (ui / 100.0).clamp(0.0, 1.0);
-                              widget.controller.updateStrokeById(
-                                widget.layerId,
-                                widget.groupIndex,
-                                s.id,
-                                (st) => st.copyWith(glowOpacity: nv),
-                              );
+                              widget.controller.setStrokeGlowOpacityRef(
+                                  widget.layerId, widget.groupIndex, s.id, nv);
                             },
                           ),
                         ],
@@ -1684,15 +1744,26 @@ class _StrokeTileState extends State<_StrokeTile> {
                             defaultValue: 50.0,
                             valueFormatter: (v) => v.toStringAsFixed(0),
                             onInteractionChanged: widget.onAnyKnobInteraction,
+                            onChangeStart: () =>
+                                widget.controller.beginStrokeParamKnob(
+                              widget.layerId,
+                              widget.groupIndex,
+                              s.id,
+                              label: 'Glow Brightness',
+                              paramKey: 'bright',
+                            ),
+                            onChangeEnd: () =>
+                                widget.controller.endStrokeParamKnob(
+                              widget.layerId,
+                              widget.groupIndex,
+                              s.id,
+                              paramKey: 'bright',
+                            ),
                             onChanged: (ui) {
                               widget.onAnyKnobValueChanged();
                               final nv = (ui / 100.0).clamp(0.0, 1.0);
-                              widget.controller.updateStrokeById(
-                                widget.layerId,
-                                widget.groupIndex,
-                                s.id,
-                                (st) => st.copyWith(glowBrightness: nv),
-                              );
+                              widget.controller.setStrokeGlowBrightnessRef(
+                                  widget.layerId, widget.groupIndex, s.id, nv);
                             },
                           ),
                         ],
@@ -1704,6 +1775,64 @@ class _StrokeTileState extends State<_StrokeTile> {
             ),
         ],
       ),
+    );
+  }
+
+  void _beginStrokeTransformKnob(String label) {
+    // Make sure baseline exists and matches current stroke points
+    _captureBaseline();
+
+    widget.controller.beginStrokeTransformKnob(
+      widget.layerId,
+      widget.groupIndex,
+      widget.stroke.id,
+      label: label,
+      beforePoints: List<PointSample>.from(_basePts ?? const []),
+    );
+  }
+
+  void _previewStrokeTransformNoHistory() {
+    final base = _basePts;
+    if (base == null) return;
+
+    final localDelta = _worldToLocalDelta(Offset(_tx, _ty));
+
+    final newPts = _applyTxRot(
+      base: base,
+      pivot: _pivot,
+      tx: localDelta.dx,
+      ty: localDelta.dy,
+      rotDeg: _rotDeg,
+    );
+
+    // ✅ live preview, but MUST NOT push history
+    widget.controller.setStrokePointsPreviewRef(
+      widget.layerId,
+      widget.groupIndex,
+      widget.stroke.id,
+      newPts,
+    );
+  }
+
+  void _endStrokeTransformKnob() {
+    final base = _basePts;
+    if (base == null) return;
+
+    final localDelta = _worldToLocalDelta(Offset(_tx, _ty));
+
+    final afterPts = _applyTxRot(
+      base: base,
+      pivot: _pivot,
+      tx: localDelta.dx,
+      ty: localDelta.dy,
+      rotDeg: _rotDeg,
+    );
+
+    widget.controller.endStrokeTransformKnob(
+      widget.layerId,
+      widget.groupIndex,
+      widget.stroke.id,
+      afterPoints: afterPts,
     );
   }
 }
@@ -2066,6 +2195,9 @@ class _RouteTile extends StatelessWidget {
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
 
+    final spec = _amountSpec(route.param);
+    final double uiValue = route.amount.clamp(spec.min, spec.max);
+
     return Container(
       margin: const EdgeInsets.only(bottom: 8),
       padding: const EdgeInsets.fromLTRB(10, 8, 10, 10),
@@ -2119,6 +2251,13 @@ class _RouteTile extends StatelessWidget {
                 onChanged: (p) {
                   if (p == null) return;
                   controller.setRouteParam(route.id, p);
+
+                  // Optional: if you want to “snap” amount into a sane range when param changes
+                  final ns = _amountSpec(p);
+                  final snapped = route.amount.clamp(ns.min, ns.max);
+                  if (snapped != route.amount) {
+                    controller.setRouteAmount(route.id, snapped);
+                  }
                 },
               ),
               const SizedBox(width: 8),
@@ -2148,16 +2287,16 @@ class _RouteTile extends StatelessWidget {
           Align(
             alignment: Alignment.center,
             child: SynthKnob(
-              label: 'Amt',
-              value: route.amountDeg.clamp(0.0, 360.0),
-              min: 0.0,
-              max: 360.0,
-              defaultValue: 25.0,
-              valueFormatter: (v) => '${v.toStringAsFixed(0)}°',
+              label: spec.label,
+              value: uiValue,
+              min: spec.min,
+              max: spec.max,
+              defaultValue: spec.def,
+              valueFormatter: spec.formatter,
               onInteractionChanged: onAnyKnobInteraction,
               onChanged: (v) {
                 onAnyKnobValueChanged();
-                controller.setRouteAmountDeg(route.id, v);
+                controller.setRouteAmount(route.id, v);
               },
             ),
           ),
@@ -2166,6 +2305,9 @@ class _RouteTile extends StatelessWidget {
     );
   }
 
+  // ------------------------------
+  // Param label (what shows in dropdown)
+  // ------------------------------
   static String _paramLabel(LfoParam p) {
     switch (p) {
       // Layer
@@ -2197,11 +2339,97 @@ class _RouteTile extends StatelessWidget {
         return 'Stroke Glow Op';
       case LfoParam.strokeGlowBrightness:
         return 'Stroke Bright';
-
-      default:
-        return p.name; // safe fallback
     }
   }
+
+  // ------------------------------
+  // Amount “spec” per param (min/max/format)
+  // ------------------------------
+  static _AmtSpec _amountSpec(LfoParam p) {
+    switch (p) {
+      // Positions in px
+      case LfoParam.layerX:
+      case LfoParam.layerY:
+      case LfoParam.strokeX:
+      case LfoParam.strokeY:
+        return _AmtSpec(
+          label: 'Amt',
+          min: -500,
+          max: 500,
+          def: 50,
+          formatter: (v) => v.toStringAsFixed(0),
+        );
+
+      // Rotation in degrees
+      case LfoParam.layerRotationDeg:
+      case LfoParam.strokeRotationDeg:
+        return _AmtSpec(
+          label: 'Amt',
+          min: -360,
+          max: 360,
+          def: 25,
+          formatter: (v) => '${v.toStringAsFixed(0)}°',
+        );
+
+      // Scale delta
+      case LfoParam.layerScale:
+        return _AmtSpec(
+          label: 'Amt',
+          min: -3.0,
+          max: 3.0,
+          def: 0.25,
+          formatter: (v) => v.toStringAsFixed(2),
+        );
+
+      // Stroke size delta
+      case LfoParam.strokeSize:
+        return _AmtSpec(
+          label: 'Amt',
+          min: -100.0,
+          max: 100.0,
+          def: 10.0,
+          formatter: (v) => v.toStringAsFixed(1),
+        );
+
+      // Opacities / brightness / radius (normalized deltas)
+      case LfoParam.layerOpacity:
+      case LfoParam.strokeCoreOpacity:
+      case LfoParam.strokeGlowOpacity:
+      case LfoParam.strokeGlowBrightness:
+        return _AmtSpec(
+          label: 'Amt',
+          min: -1.0,
+          max: 1.0,
+          def: 0.25,
+          formatter: (v) => v.toStringAsFixed(2),
+        );
+
+      case LfoParam.strokeGlowRadius:
+        return _AmtSpec(
+          label: 'Amt',
+          min: -1.0,
+          max: 1.0,
+          def: 0.25,
+          formatter: (v) => v.toStringAsFixed(2),
+        );
+    }
+  }
+}
+
+class _AmtSpec {
+  final String label;
+  final double min;
+  final double max;
+  final double def;
+  final String Function(double) formatter;
+
+  const _AmtSpec({
+    required this.label,
+    required this.min,
+    required this.max,
+    required this.def,
+    required this.formatter,
+  });
 }
 
 Future<void> _promptRenameLfo(

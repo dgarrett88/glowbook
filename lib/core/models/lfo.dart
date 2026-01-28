@@ -20,20 +20,19 @@ extension LfoWaveX on LfoWave {
 }
 
 /// What a route is allowed to modulate.
-/// Expanded to cover layer + stroke params.
 enum LfoParam {
-  // -----------------------
+  // -------------------------
   // Layer params
-  // -----------------------
+  // -------------------------
   layerRotationDeg,
   layerX,
   layerY,
   layerScale,
   layerOpacity,
 
-  // -----------------------
+  // -------------------------
   // Stroke params
-  // -----------------------
+  // -------------------------
   strokeSize,
   strokeX,
   strokeY,
@@ -44,22 +43,20 @@ enum LfoParam {
   strokeGlowBrightness,
 }
 
-/// One global LFO generator.
-/// LFOs do not know targets — routes do.
 class Lfo {
   final String id;
   final String name;
-  final bool enabled;
 
+  final bool enabled;
   final LfoWave wave;
 
-  /// cycles per second
+  /// Cycles per second.
   final double rateHz;
 
-  /// phase offset in [0..1)
+  /// 0..1
   final double phase;
 
-  /// output offset in [-1..1] (added after waveform)
+  /// -1..1 (added after waveform)
   final double offset;
 
   const Lfo({
@@ -71,6 +68,9 @@ class Lfo {
     this.phase = 0.0,
     this.offset = 0.0,
   });
+
+  // Back-compat aliases some older code sometimes uses
+  double get phase01 => phase;
 
   Lfo copyWith({
     String? id,
@@ -92,105 +92,122 @@ class Lfo {
     );
   }
 
-  /// Evaluate normalized waveform output in [-1..1], with optional offset.
-  /// Routing (amount/param) is applied elsewhere.
-  double eval(double tSec) {
-    final ph = (phase % 1.0 + 1.0) % 1.0;
-    final x = (tSec * rateHz + ph) % 1.0; // 0..1
-    double y;
+  /// Evaluate waveform at timeSec.
+  /// Returns [-1..1] (then offset added, still clamped).
+  double eval(double timeSec) {
+    final hz = rateHz <= 0 ? 0.0001 : rateHz;
+    final t = (timeSec * hz) + phase;
 
+    double v;
     switch (wave) {
       case LfoWave.sine:
-        y = math.sin(x * math.pi * 2.0);
+        v = math.sin(t * math.pi * 2.0);
         break;
 
       case LfoWave.triangle:
-        final tri01 = x < 0.5 ? (x * 2.0) : (2.0 - x * 2.0);
-        y = tri01 * 2.0 - 1.0;
-        break;
+        {
+          final f = t - t.floorToDouble(); // [0..1)
+          v = 1.0 - (4.0 * (f - 0.5).abs()); // [-1..1]
+          break;
+        }
 
       case LfoWave.saw:
-        y = x * 2.0 - 1.0;
-        break;
+        {
+          final f = t - t.floorToDouble(); // [0..1)
+          v = (f * 2.0) - 1.0; // [-1..1]
+          break;
+        }
 
       case LfoWave.square:
-        y = x < 0.5 ? 1.0 : -1.0;
-        break;
+        {
+          final f = t - t.floorToDouble();
+          v = (f < 0.5) ? 1.0 : -1.0;
+          break;
+        }
     }
 
-    y += offset;
-
-    return y.clamp(-1.0, 1.0).toDouble();
+    return (v + offset).clamp(-1.0, 1.0);
   }
 }
 
-/// A route connects one LFO to ONE parameter on ONE target.
+/// A single route from an LFO to a parameter.
 ///
-/// v1: target was a layer only.
-/// v2: target can be a layer OR a specific stroke ref.
+/// IMPORTANT:
+/// We intentionally support BOTH naming schemes:
+/// - `amount` (older code)
+/// - `amountDeg` (your newer UI)
 class LfoRoute {
   final String id;
   final String lfoId;
 
-  /// Layer target (always present)
+  /// Target layer
   final String layerId;
 
-  /// Stroke target (optional) — when set, this route targets a stroke
-  /// within `layerId` at `groupIndex`.
-  final int? groupIndex;
-  final String? strokeId;
-
-  /// What parameter this route modulates.
+  /// Target param
   final LfoParam param;
+
+  /// Canonical amount storage.
+  /// Older code often calls this `amount`.
+  final double amount;
+
+  /// If true: shaped value stays [-1..1]
+  /// If false: shaped value is mapped to [0..1]
+  final bool bipolar;
 
   final bool enabled;
 
-  /// If true: route output is bipolar (-1..+1).
-  /// If false: route output becomes unipolar (0..1).
-  final bool bipolar;
-
-  /// Peak amount (stored in amountDeg for backward compatibility).
-  /// Interpretation depends on param.
-  final double amountDeg;
+  // Stroke targeting (optional)
+  final int? groupIndex;
+  final String? strokeId;
 
   const LfoRoute({
     required this.id,
     required this.lfoId,
     required this.layerId,
+    required this.param,
+    this.amount = 25.0,
+    this.bipolar = true,
+    this.enabled = true,
     this.groupIndex,
     this.strokeId,
-    this.param = LfoParam.layerRotationDeg,
-    this.enabled = true,
-    this.bipolar = true,
-    this.amountDeg = 25.0,
   });
 
-  bool get isStrokeTarget => strokeId != null && groupIndex != null;
+  // ✅ Newer UI alias
+  double get amountDeg => amount;
 
-  /// Future-proof generic access (optional helper).
-  double get amount => amountDeg;
+  // ✅ Other “just in case” aliases (helps stop project-wide breakage)
+  String? get targetStrokeId => strokeId;
+  int? get targetGroupIndex => groupIndex;
+
+  // ✅ Fix for your controller errors
+  bool get isStrokeTarget => strokeId != null;
+  bool get isLayerTarget => strokeId == null;
 
   LfoRoute copyWith({
     String? id,
     String? lfoId,
     String? layerId,
+    LfoParam? param,
+    double? amount,
+    double? amountDeg,
+    bool? bipolar,
+    bool? enabled,
     int? groupIndex,
     String? strokeId,
-    LfoParam? param,
-    bool? enabled,
-    bool? bipolar,
-    double? amountDeg,
+    bool clearStrokeTarget = false,
   }) {
+    final newAmount = amount ?? amountDeg ?? this.amount;
+
     return LfoRoute(
       id: id ?? this.id,
       lfoId: lfoId ?? this.lfoId,
       layerId: layerId ?? this.layerId,
-      groupIndex: groupIndex ?? this.groupIndex,
-      strokeId: strokeId ?? this.strokeId,
       param: param ?? this.param,
-      enabled: enabled ?? this.enabled,
+      amount: newAmount,
       bipolar: bipolar ?? this.bipolar,
-      amountDeg: amountDeg ?? this.amountDeg,
+      enabled: enabled ?? this.enabled,
+      groupIndex: clearStrokeTarget ? null : (groupIndex ?? this.groupIndex),
+      strokeId: clearStrokeTarget ? null : (strokeId ?? this.strokeId),
     );
   }
 }

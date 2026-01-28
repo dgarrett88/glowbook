@@ -7,6 +7,7 @@ import 'package:flutter/material.dart';
 /// - Long press = type exact value
 /// - Optional value display & label
 /// - Notifies parent when interaction starts/ends so ScrollView can be disabled.
+/// - ✅ NEW: onChangeStart / onChangeEnd so you can commit undo ONLY on finger lift.
 class SynthKnob extends StatefulWidget {
   const SynthKnob({
     super.key,
@@ -24,6 +25,8 @@ class SynthKnob extends StatefulWidget {
     this.onTapModTag,
     this.enabled = true,
     this.onInteractionChanged,
+    this.onChangeStart,
+    this.onChangeEnd,
   });
 
   final double value;
@@ -46,8 +49,16 @@ class SynthKnob extends StatefulWidget {
 
   final bool enabled;
 
-  /// True while user is touching/dragging this knob.
+  /// True while user is touching/dragging this knob (use this to disable ScrollView).
   final ValueChanged<bool>? onInteractionChanged;
+
+  /// ✅ Called when the user starts a drag (finger down + pan start).
+  /// Use this to snapshot "before" for undo.
+  final VoidCallback? onChangeStart;
+
+  /// ✅ Called when the user ends a drag (finger up / cancel).
+  /// Use this to push ONE undo step.
+  final VoidCallback? onChangeEnd;
 
   @override
   State<SynthKnob> createState() => _SynthKnobState();
@@ -58,6 +69,7 @@ class _SynthKnobState extends State<SynthKnob> {
   Offset? _dragStart;
 
   bool _active = false;
+  bool _dragging = false;
 
   double get _clamped => widget.value.clamp(widget.min, widget.max);
 
@@ -138,8 +150,16 @@ class _SynthKnobState extends State<SynthKnob> {
     widget.onChanged(d.clamp(widget.min, widget.max));
   }
 
-  void _endInteraction() {
+  void _endInteraction({bool fireChangeEnd = false}) {
     _dragStart = null;
+
+    if (_dragging) {
+      _dragging = false;
+      if (fireChangeEnd) {
+        widget.onChangeEnd?.call(); // ✅ commit undo step on finger lift/cancel
+      }
+    }
+
     _setActive(false);
   }
 
@@ -176,15 +196,20 @@ class _SynthKnobState extends State<SynthKnob> {
           Listener(
             behavior: HitTestBehavior.opaque,
             onPointerDown: widget.enabled ? (_) => _setActive(true) : null,
-            onPointerUp: widget.enabled ? (_) => _endInteraction() : null,
-            onPointerCancel: widget.enabled ? (_) => _endInteraction() : null,
+            onPointerUp: widget.enabled
+                ? (_) => _endInteraction(fireChangeEnd: true)
+                : null,
+            onPointerCancel: widget.enabled
+                ? (_) => _endInteraction(fireChangeEnd: true)
+                : null,
             child: GestureDetector(
               behavior: HitTestBehavior.opaque,
               onDoubleTap: _reset,
               onLongPress: _promptExactValue,
               onPanStart: widget.enabled
                   ? (d) {
-                      // _setActive(true); // handled by Listener
+                      _dragging = true;
+                      widget.onChangeStart?.call(); // ✅ snapshot "before"
                       _startValue = _clamped;
                       _dragStart = d.localPosition;
                     }
@@ -203,8 +228,12 @@ class _SynthKnobState extends State<SynthKnob> {
                       widget.onChanged(newValue);
                     }
                   : null,
-              onPanEnd: widget.enabled ? (_) => _endInteraction() : null,
-              onPanCancel: widget.enabled ? () => _endInteraction() : null,
+              onPanEnd: widget.enabled
+                  ? (_) => _endInteraction(fireChangeEnd: true)
+                  : null,
+              onPanCancel: widget.enabled
+                  ? () => _endInteraction(fireChangeEnd: true)
+                  : null,
               child: knobPaint,
             ),
           ),
