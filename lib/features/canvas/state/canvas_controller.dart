@@ -442,19 +442,70 @@ class CanvasController extends ChangeNotifier {
     return unrotated + pivot;
   }
 
+  double _defaultAmountForParam(LfoParam p) {
+    switch (p) {
+      // --- LAYER ---
+      case LfoParam.layerRotationDeg:
+        return 25.0;
+      case LfoParam.layerX:
+      case LfoParam.layerY:
+        return 150.0;
+      case LfoParam.layerScale:
+        return 0.35; // used as extraScale where eff = base * (1 + extraScale)
+      case LfoParam.layerOpacity:
+        return 0.5; // additive delta on 0..1
+
+      // --- STROKE TRANSFORM ---
+      case LfoParam.strokeX:
+      case LfoParam.strokeY:
+        return 120.0;
+      case LfoParam.strokeRotationDeg:
+        return 45.0;
+
+      // --- STROKE VISUAL (0..1 ranges) ---
+      case LfoParam.strokeCoreOpacity:
+        return 0.5;
+      case LfoParam.strokeGlowRadius:
+        return 0.5;
+      case LfoParam.strokeGlowOpacity:
+        return 1.0;
+      case LfoParam.strokeGlowBrightness:
+        return 1.0;
+
+      // --- STROKE SIZE (pixels-ish) ---
+      case LfoParam.strokeSize:
+        return 25.0;
+
+      default:
+        return 25.0;
+    }
+  }
+
   // ---------------------------------------------------------------------------
   // LFO ROUTE EVAL HELPERS
   // ---------------------------------------------------------------------------
 
-  double _evalRouteShaped(LfoRoute r) {
+  double _evalRouteShaped(LfoRoute r, LfoParam param) {
     final i = _lfos.indexWhere((x) => x.id == r.lfoId);
     if (i < 0) return 0.0;
     final lfo = _lfos[i];
     if (!lfo.enabled) return 0.0;
 
     final raw = lfo.eval(_timeSec); // [-1..1]
-    final shaped = r.bipolar ? raw : ((raw + 1.0) * 0.5); // [-1..1] or [0..1]
-    return shaped;
+
+    // ✅ Visual params should be unipolar by default: 0..1
+    final bool forceUnipolar = (param == LfoParam.layerOpacity ||
+        param == LfoParam.strokeCoreOpacity ||
+        param == LfoParam.strokeGlowRadius ||
+        param == LfoParam.strokeGlowOpacity ||
+        param == LfoParam.strokeGlowBrightness);
+
+    if (forceUnipolar) {
+      return ((raw + 1.0) * 0.5); // [0..1]
+    }
+
+    // Existing behavior for transform params (X/Y/rot/scale etc.)
+    return r.bipolar ? raw : ((raw + 1.0) * 0.5);
   }
 
   double _sumRoutes({
@@ -472,14 +523,12 @@ class CanvasController extends ChangeNotifier {
 
       // stroke match rules:
       if (strokeId == null) {
-        // layer param: ignore stroke routes
-        if (r.strokeId != null) continue;
+        if (r.strokeId != null) continue; // layer param: ignore stroke routes
       } else {
-        // stroke param: must match
-        if (r.strokeId != strokeId) continue;
+        if (r.strokeId != strokeId) continue; // stroke param: must match
       }
 
-      final shaped = _evalRouteShaped(r);
+      final shaped = _evalRouteShaped(r, param);
       total += (r.amount * shaped);
     }
     return total;
@@ -531,6 +580,28 @@ class CanvasController extends ChangeNotifier {
     );
   }
 
+  double _applyVitalMod({
+    required double base,
+    required double min,
+    required double max,
+    required double lfo01, // 0..1
+    required double depth, // -1..1
+  }) {
+    base = base.clamp(min, max).toDouble();
+    lfo01 = lfo01.clamp(0.0, 1.0).toDouble();
+    depth = depth.clamp(-1.0, 1.0).toDouble();
+
+    if (depth == 0.0) return base;
+
+    if (depth > 0.0) {
+      final headroom = max - base;
+      return (base + headroom * depth * lfo01).clamp(min, max).toDouble();
+    } else {
+      final headroom = base - min;
+      return (base + headroom * depth * lfo01).clamp(min, max).toDouble();
+    }
+  }
+
   // NOTE: this returns an ADDITIVE delta; renderer will clamp final opacity.
   double _layerExtraOpacity(String layerId) {
     return _sumRoutes(layerId: layerId, param: LfoParam.layerOpacity);
@@ -551,24 +622,100 @@ class CanvasController extends ChangeNotifier {
     return deg * math.pi / 180.0;
   }
 
-  double _strokeExtraSize(String layerId, String strokeId) => _sumRoutes(
-      layerId: layerId, strokeId: strokeId, param: LfoParam.strokeSize);
+// ─────────────────────────────────────────────────────────────
+// Stroke SIZE (unbounded, delta-based → keep old behavior)
+// ─────────────────────────────────────────────────────────────
+  double strokeExtraSize(String layerId, String strokeId) {
+    return _sumRoutes(
+      layerId: layerId,
+      strokeId: strokeId,
+      param: LfoParam.strokeSize,
+    );
+  }
 
-  double _strokeExtraCoreOpacity(String layerId, String strokeId) => _sumRoutes(
-      layerId: layerId, strokeId: strokeId, param: LfoParam.strokeCoreOpacity);
+// ─────────────────────────────────────────────────────────────
+// Stroke VISUAL PARAMS (0..1, Vital-style FINAL values)
+// ─────────────────────────────────────────────────────────────
 
-  double _strokeExtraGlowRadius(String layerId, String strokeId) => _sumRoutes(
-      layerId: layerId, strokeId: strokeId, param: LfoParam.strokeGlowRadius);
+  double strokeCoreOpacityEffective(String layerId, String strokeId) {
+    final base =
+        _findStrokeBaseValue(layerId, strokeId, (s) => s.coreOpacity, 1.0);
+    return _applyVitalStrokeParam(
+      layerId: layerId,
+      strokeId: strokeId,
+      param: LfoParam.strokeCoreOpacity,
+      base: base,
+    );
+  }
 
-  double _strokeExtraGlowOpacity(String layerId, String strokeId) => _sumRoutes(
-      layerId: layerId, strokeId: strokeId, param: LfoParam.strokeGlowOpacity);
+  double strokeGlowRadiusEffective(String layerId, String strokeId) {
+    final base =
+        _findStrokeBaseValue(layerId, strokeId, (s) => s.glowRadius, 0.5);
+    return _applyVitalStrokeParam(
+      layerId: layerId,
+      strokeId: strokeId,
+      param: LfoParam.strokeGlowRadius,
+      base: base,
+    );
+  }
 
-  double _strokeExtraGlowBrightness(String layerId, String strokeId) =>
-      _sumRoutes(
-        layerId: layerId,
-        strokeId: strokeId,
-        param: LfoParam.strokeGlowBrightness,
+  double strokeGlowOpacityEffective(String layerId, String strokeId) {
+    final base =
+        _findStrokeBaseValue(layerId, strokeId, (s) => s.glowOpacity, 1.0);
+    return _applyVitalStrokeParam(
+      layerId: layerId,
+      strokeId: strokeId,
+      param: LfoParam.strokeGlowOpacity,
+      base: base,
+    );
+  }
+
+  double strokeGlowBrightnessEffective(String layerId, String strokeId) {
+    final base =
+        _findStrokeBaseValue(layerId, strokeId, (s) => s.glowBrightness, 1.0);
+    return _applyVitalStrokeParam(
+      layerId: layerId,
+      strokeId: strokeId,
+      param: LfoParam.strokeGlowBrightness,
+      base: base,
+    );
+  }
+
+  double _applyVitalStrokeParam({
+    required String layerId,
+    required String strokeId,
+    required LfoParam param,
+    required double base,
+  }) {
+    double out = base;
+
+    for (final r in _routes) {
+      if (!r.enabled) continue;
+      if (r.layerId != layerId) continue;
+      if (r.strokeId != strokeId) continue;
+      if (r.param != param) continue;
+
+      final i = _lfos.indexWhere((l) => l.id == r.lfoId);
+      if (i < 0) continue;
+
+      final lfo = _lfos[i];
+      if (!lfo.enabled) continue;
+
+      final raw = lfo.eval(_timeSec); // [-1..1]
+      final lfo01 = (raw + 1.0) * 0.5; // [0..1]
+      final depth = r.amount.clamp(-1.0, 1.0);
+
+      out = _applyVitalMod(
+        base: base,
+        min: 0.0,
+        max: 1.0,
+        lfo01: lfo01,
+        depth: depth,
       );
+    }
+
+    return out;
+  }
 
   String? _selectedStrokeIdFn() => _selectedStrokeId;
 
@@ -576,7 +723,7 @@ class CanvasController extends ChangeNotifier {
     repaint,
     () => symmetry,
 
-    // ✅ NEW: always use latest layer transform (fixes stale pivot issue)
+    // ✅ always use latest layer transform (fixes stale pivot issue)
     layerTransformFn: (layerId) {
       final i = _state.layers.indexWhere((l) => l.id == layerId);
       if (i < 0) return const LayerTransform();
@@ -588,14 +735,27 @@ class CanvasController extends ChangeNotifier {
     layerExtraY: _layerExtraY,
     layerExtraScale: _layerExtraScale,
     layerExtraOpacity: _layerExtraOpacity,
+
     strokeExtraX: _strokeExtraX,
     strokeExtraY: _strokeExtraY,
     strokeExtraRotationRad: _strokeExtraRotationRad,
-    strokeExtraSize: _strokeExtraSize,
-    strokeExtraCoreOpacity: _strokeExtraCoreOpacity,
-    strokeExtraGlowRadius: _strokeExtraGlowRadius,
-    strokeExtraGlowOpacity: _strokeExtraGlowOpacity,
-    strokeExtraGlowBrightness: _strokeExtraGlowBrightness,
+
+    // size stays delta-based
+    strokeExtraSize: strokeExtraSize,
+
+    // ✅ visuals now pass FINAL effective values (0..1), no "base" param
+    strokeExtraCoreOpacity: (layerId, strokeId) =>
+        strokeCoreOpacityEffective(layerId, strokeId),
+
+    strokeExtraGlowRadius: (layerId, strokeId) =>
+        strokeGlowRadiusEffective(layerId, strokeId),
+
+    strokeExtraGlowOpacity: (layerId, strokeId) =>
+        strokeGlowOpacityEffective(layerId, strokeId),
+
+    strokeExtraGlowBrightness: (layerId, strokeId) =>
+        strokeGlowBrightnessEffective(layerId, strokeId),
+
     selectedStrokeIdFn: _selectedStrokeIdFn,
   );
 
@@ -651,6 +811,23 @@ class CanvasController extends ChangeNotifier {
 
   final HistoryStack _history = HistoryStack();
 
+  double _findStrokeBaseValue(
+    String layerId,
+    String strokeId,
+    double Function(Stroke s) pick,
+    double fallback,
+  ) {
+    final li = _state.layers.indexWhere((l) => l.id == layerId);
+    if (li < 0) return fallback;
+
+    final layer = _state.layers[li];
+    for (final g in layer.groups) {
+      final si = g.strokes.indexWhere((s) => s.id == strokeId);
+      if (si >= 0) return pick(g.strokes[si]);
+    }
+    return fallback;
+  }
+
   // ---------------------------------------------------------------------------
   // CANVAS SIZE (needed for symmetry selection hit test)
   // ---------------------------------------------------------------------------
@@ -660,6 +837,149 @@ class CanvasController extends ChangeNotifier {
   void setCanvasSize(Size s) {
     if (_canvasSize == s) return;
     _canvasSize = s;
+  }
+
+  // ---------------------------------------------------------------------------
+// NO-HISTORY HELPERS (state only; _doCommand/_afterEdit handles rebuild+repaint)
+// ---------------------------------------------------------------------------
+
+  void _deleteStrokeNoHistory(String layerId, int groupIndex, String strokeId) {
+    final li = _state.layers.indexWhere((l) => l.id == layerId);
+    if (li < 0) return;
+
+    final layers = List<CanvasLayer>.from(_state.layers);
+    final layer = layers[li];
+
+    if (groupIndex < 0 || groupIndex >= layer.groups.length) return;
+
+    final groups = List<StrokeGroup>.from(layer.groups);
+    final group = groups[groupIndex];
+
+    final strokes = List<Stroke>.from(group.strokes);
+    final si = strokes.indexWhere((s) => s.id == strokeId);
+    if (si < 0) return;
+
+    strokes.removeAt(si);
+
+    groups[groupIndex] = group.copyWith(strokes: strokes);
+    layers[li] = layer.copyWith(groups: groups);
+    _state = _state.copyWith(layers: layers);
+
+    // clear selection if we deleted the selected stroke
+    if (_selectedStrokeId == strokeId) {
+      clearSelection();
+    }
+  }
+
+  void _insertStrokeNoHistory(
+    String layerId,
+    int groupIndex,
+    int insertIndex,
+    Stroke stroke,
+  ) {
+    final li = _state.layers.indexWhere((l) => l.id == layerId);
+    if (li < 0) return;
+
+    final layers = List<CanvasLayer>.from(_state.layers);
+    final layer = layers[li];
+
+    if (groupIndex < 0 || groupIndex >= layer.groups.length) return;
+
+    final groups = List<StrokeGroup>.from(layer.groups);
+    final group = groups[groupIndex];
+
+    final strokes = List<Stroke>.from(group.strokes);
+
+    final idx = insertIndex.clamp(0, strokes.length);
+    strokes.insert(idx, stroke);
+
+    groups[groupIndex] = group.copyWith(strokes: strokes);
+    layers[li] = layer.copyWith(groups: groups);
+    _state = _state.copyWith(layers: layers);
+  }
+
+  void _reorderStrokesNoHistory(
+    String layerId,
+    int groupIndex,
+    List<String> orderedStrokeIds,
+  ) {
+    final li = _state.layers.indexWhere((l) => l.id == layerId);
+    if (li < 0) return;
+
+    final layers = List<CanvasLayer>.from(_state.layers);
+    final layer = layers[li];
+
+    if (groupIndex < 0 || groupIndex >= layer.groups.length) return;
+
+    final groups = List<StrokeGroup>.from(layer.groups);
+    final group = groups[groupIndex];
+
+    if (orderedStrokeIds.length != group.strokes.length) return;
+
+    final map = <String, Stroke>{for (final s in group.strokes) s.id: s};
+
+    final newStrokes = <Stroke>[];
+    for (final id in orderedStrokeIds) {
+      final s = map[id];
+      if (s == null) return; // invalid list
+      newStrokes.add(s);
+    }
+
+    groups[groupIndex] = group.copyWith(strokes: newStrokes);
+    layers[li] = layer.copyWith(groups: groups);
+    _state = _state.copyWith(layers: layers);
+  }
+
+  void _reorderLayersNoHistory(List<String> orderedIds) {
+    if (orderedIds.length != _state.layers.length) return;
+
+    final map = {for (final l in _state.layers) l.id: l};
+
+    final newLayers = <CanvasLayer>[];
+    for (final id in orderedIds) {
+      final layer = map[id];
+      if (layer == null) return;
+      newLayers.add(layer);
+    }
+
+    _state = _state.copyWith(layers: newLayers);
+  }
+
+  void _removeLayerNoHistory(String layerId) {
+    if (_state.layers.length <= 1) return;
+
+    final newLayers = List<CanvasLayer>.from(_state.layers)
+      ..removeWhere((l) => l.id == layerId);
+    if (newLayers.isEmpty) return;
+
+    String newActiveId = _state.activeLayerId;
+    if (!newLayers.any((l) => l.id == newActiveId)) {
+      newActiveId = newLayers.last.id;
+    }
+
+    _state = _state.copyWith(
+      layers: newLayers,
+      activeLayerId: newActiveId,
+      redoStack: const [],
+    );
+
+    // if we removed the selected layer, clear selection
+    if (_selectedLayerId == layerId) {
+      clearSelection();
+    }
+  }
+
+  void _insertLayerNoHistory(int insertIndex, CanvasLayer layerToInsert) {
+    final layers = List<CanvasLayer>.from(_state.layers);
+    final idx = insertIndex.clamp(0, layers.length);
+    layers.insert(idx, layerToInsert);
+
+    _state = _state.copyWith(
+      layers: layers,
+      // keep current active unless it no longer exists
+      activeLayerId: _state.activeLayerId,
+      redoStack: const [],
+    );
   }
 
   // ---------------------------------------------------------------------------
@@ -1395,7 +1715,7 @@ class CanvasController extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// ✅ Reorder strokes within a layer/group by ids (top-to-bottom list order).
+  /// Reorder strokes within a layer/group by ids (UNDO/REDO).
   void reorderStrokesRef(
     String layerId,
     int groupIndex,
@@ -1404,70 +1724,80 @@ class CanvasController extends ChangeNotifier {
     final li = _state.layers.indexWhere((l) => l.id == layerId);
     if (li < 0) return;
 
-    final layers = List<CanvasLayer>.from(_state.layers);
-    final layer = layers[li];
-
+    final layer = _state.layers[li];
     if (groupIndex < 0 || groupIndex >= layer.groups.length) return;
 
-    final groups = List<StrokeGroup>.from(layer.groups);
-    final group = groups[groupIndex];
-
+    final group = layer.groups[groupIndex];
     if (orderedStrokeIds.length != group.strokes.length) return;
 
-    final map = <String, Stroke>{for (final s in group.strokes) s.id: s};
+    final beforeIds = [for (final s in group.strokes) s.id];
+    // no-op guard
+    if (_listEquals(beforeIds, orderedStrokeIds)) return;
 
-    final newStrokes = <Stroke>[];
-    for (final id in orderedStrokeIds) {
-      final s = map[id];
-      if (s == null) return; // invalid request
-      newStrokes.add(s);
-    }
+    final afterIds = List<String>.from(orderedStrokeIds);
 
-    groups[groupIndex] = group.copyWith(strokes: newStrokes);
-    layers[li] = layer.copyWith(groups: groups);
-    _state = _state.copyWith(layers: layers);
+    final cmd = LambdaCommand(
+      label: 'Reorder Strokes',
+      apply: () {
+        _reorderStrokesNoHistory(layerId, groupIndex, afterIds);
+      },
+      undo: () {
+        _reorderStrokesNoHistory(layerId, groupIndex, beforeIds);
+      },
+    );
 
-    _ensureLayerPivot(layerId);
-
-    _renderer.rebuildFromLayers(_state.layers);
-    _hasUnsavedChanges = true;
-    _tick();
-    notifyListeners();
+    _doCommand(cmd, layerId: layerId);
   }
 
-  /// Delete stroke from UI.
+  /// tiny helper
+  bool _listEquals(List<String> a, List<String> b) {
+    if (a.length != b.length) return false;
+    for (int i = 0; i < a.length; i++) {
+      if (a[i] != b[i]) return false;
+    }
+    return true;
+  }
+
+  /// Delete stroke from UI (UNDO/REDO).
   void deleteStrokeRef(String layerId, int groupIndex, String strokeId) {
     final li = _state.layers.indexWhere((l) => l.id == layerId);
     if (li < 0) return;
 
-    final layers = List<CanvasLayer>.from(_state.layers);
-    final layer = layers[li];
-
+    final layer = _state.layers[li];
     if (groupIndex < 0 || groupIndex >= layer.groups.length) return;
 
-    final groups = List<StrokeGroup>.from(layer.groups);
-    final group = groups[groupIndex];
-
-    final strokes = List<Stroke>.from(group.strokes);
-    final si = strokes.indexWhere((s) => s.id == strokeId);
+    final group = layer.groups[groupIndex];
+    final si = group.strokes.indexWhere((s) => s.id == strokeId);
     if (si < 0) return;
 
-    strokes.removeAt(si);
+    final deletedStroke = group.strokes[si];
+    final deletedIndex = si;
 
-    groups[groupIndex] = group.copyWith(strokes: strokes);
-    layers[li] = layer.copyWith(groups: groups);
-    _state = _state.copyWith(layers: layers);
+    final wasSelected = (_selectedStrokeId == strokeId);
+    final prevSelection = (
+      strokeId: _selectedStrokeId,
+      layerId: _selectedLayerId,
+      groupIndex: _selectedGroupIndex,
+    );
 
-    if (_selectedStrokeId == strokeId) {
-      clearSelection();
-    }
+    final cmd = LambdaCommand(
+      label: 'Delete Stroke',
+      apply: () {
+        _deleteStrokeNoHistory(layerId, groupIndex, strokeId);
+      },
+      undo: () {
+        _insertStrokeNoHistory(
+            layerId, groupIndex, deletedIndex, deletedStroke);
+        // restore selection if it was selected
+        if (wasSelected) {
+          _selectedStrokeId = prevSelection.strokeId;
+          _selectedLayerId = prevSelection.layerId;
+          _selectedGroupIndex = prevSelection.groupIndex;
+        }
+      },
+    );
 
-    _ensureLayerPivot(layerId);
-
-    _renderer.rebuildFromLayers(_state.layers);
-    _hasUnsavedChanges = true;
-    _tick();
-    notifyListeners();
+    _doCommand(cmd, layerId: layerId);
   }
 
   // ---------------------------------------------------------------------------
@@ -2292,17 +2622,23 @@ class CanvasController extends ChangeNotifier {
         v = amount.clamp(0.0, 4000.0).toDouble();
         break;
 
+      case LfoParam.layerScale:
+        v = amount
+            .clamp(-0.99, 5.0)
+            .toDouble(); // avoid negative/zero scale multipliers
+        break;
+
+      case LfoParam.strokeSize:
+        v = amount.clamp(-200.0, 200.0).toDouble();
+        break;
+
+      // ✅ VISUAL PARAMS: treat "amount" as DEPTH above base (0..1)
       case LfoParam.layerOpacity:
       case LfoParam.strokeCoreOpacity:
+      case LfoParam.strokeGlowRadius:
       case LfoParam.strokeGlowOpacity:
       case LfoParam.strokeGlowBrightness:
         v = amount.clamp(-1.0, 1.0).toDouble();
-        break;
-
-      case LfoParam.layerScale:
-      case LfoParam.strokeSize:
-      case LfoParam.strokeGlowRadius:
-        v = amount.clamp(-5.0, 5.0).toDouble();
         break;
 
       default:
@@ -2376,7 +2712,7 @@ class CanvasController extends ChangeNotifier {
       param: param,
       enabled: true,
       bipolar: true,
-      amount: 25.0,
+      amount: _defaultAmountForParam(param),
     ));
 
     if (param == LfoParam.layerRotationDeg) {
@@ -2489,7 +2825,7 @@ class CanvasController extends ChangeNotifier {
       param: param,
       enabled: true,
       bipolar: true,
-      amount: 25.0,
+      amount: _defaultAmountForParam(param),
     ));
 
     _ensureTickerState();
@@ -2637,34 +2973,65 @@ class CanvasController extends ChangeNotifier {
   void removeLayer(String id) {
     if (_state.layers.length <= 1) return;
 
-    final newLayers = List<CanvasLayer>.from(_state.layers)
-      ..removeWhere((l) => l.id == id);
-    if (newLayers.isEmpty) return;
+    final idx = _state.layers.indexWhere((l) => l.id == id);
+    if (idx < 0) return;
 
-    String newActiveId = _state.activeLayerId;
-    if (!newLayers.any((l) => l.id == newActiveId)) {
-      newActiveId = newLayers.last.id;
-    }
+    final removedLayer = _state.layers[idx];
 
-    _state = _state.copyWith(
-      layers: newLayers,
-      activeLayerId: newActiveId,
-      redoStack: const [],
+    // capture associated state we currently destroy
+    final removedRotation = _layerRotation[id];
+    final removedRoutes = _routes.where((r) => r.layerId == id).toList();
+
+    final prevActive = _state.activeLayerId;
+
+    final wasSelectedLayer = (_selectedLayerId == id);
+    final prevSelection = (
+      strokeId: _selectedStrokeId,
+      layerId: _selectedLayerId,
+      groupIndex: _selectedGroupIndex,
     );
 
-    _layerRotation.remove(id);
+    final cmd = LambdaCommand(
+      label: 'Delete Layer',
+      apply: () {
+        // state
+        _removeLayerNoHistory(id);
 
-    // ✅ remove any LFO routes pointing to this layer
-    _routes.removeWhere((r) => r.layerId == id);
+        // side state
+        _layerRotation.remove(id);
+        _routes.removeWhere((r) => r.layerId == id);
 
-    _ensureTickerState();
+        if (wasSelectedLayer) clearSelection();
+      },
+      undo: () {
+        // restore layer at same index
+        _insertLayerNoHistory(idx, removedLayer);
 
-    if (_selectedLayerId == id) clearSelection();
+        // restore active exactly
+        if (_state.layers.any((l) => l.id == prevActive)) {
+          _state = _state.copyWith(activeLayerId: prevActive);
+        }
 
-    _renderer.rebuildFromLayers(_state.layers);
-    _hasUnsavedChanges = true;
-    _tick();
-    notifyListeners();
+        // restore side state
+        if (removedRotation != null) {
+          _layerRotation[id] = removedRotation;
+        }
+        if (removedRoutes.isNotEmpty) {
+          // remove any current routes to that layer (safety) then restore
+          _routes.removeWhere((r) => r.layerId == id);
+          _routes.addAll(removedRoutes);
+        }
+
+        // restore selection if it was on that layer
+        if (wasSelectedLayer) {
+          _selectedStrokeId = prevSelection.strokeId;
+          _selectedLayerId = prevSelection.layerId;
+          _selectedGroupIndex = prevSelection.groupIndex;
+        }
+      },
+    );
+
+    _doCommand(cmd, layerId: id);
   }
 
   void setLayerVisibility(String id, bool visible) {
@@ -2803,21 +3170,18 @@ class CanvasController extends ChangeNotifier {
   void reorderLayersByIds(List<String> orderedIds) {
     if (orderedIds.length != _state.layers.length) return;
 
-    final map = {for (final l in _state.layers) l.id: l};
+    final beforeIds = [for (final l in _state.layers) l.id];
+    if (_listEquals(beforeIds, orderedIds)) return;
 
-    final newLayers = <CanvasLayer>[];
-    for (final id in orderedIds) {
-      final layer = map[id];
-      if (layer == null) return;
-      newLayers.add(layer);
-    }
+    final afterIds = List<String>.from(orderedIds);
 
-    _state = _state.copyWith(layers: newLayers);
+    final cmd = LambdaCommand(
+      label: 'Reorder Layers',
+      apply: () => _reorderLayersNoHistory(afterIds),
+      undo: () => _reorderLayersNoHistory(beforeIds),
+    );
 
-    _renderer.rebuildFromLayers(_state.layers);
-    _hasUnsavedChanges = true;
-    _tick();
-    notifyListeners();
+    _doCommand(cmd);
   }
 
   // ---------------------------------------------------------------------------

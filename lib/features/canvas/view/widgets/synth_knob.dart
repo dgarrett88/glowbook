@@ -264,8 +264,9 @@ class _SynthKnobState extends State<SynthKnob> {
               child: Container(
                 padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
                 decoration: BoxDecoration(
-                  color: Colors.white.withOpacity(0.10),
-                  border: Border.all(color: Colors.white.withOpacity(0.12)),
+                  color: Colors.white.withValues(alpha: 0.10),
+                  border:
+                      Border.all(color: Colors.white.withValues(alpha: 0.12)),
                   borderRadius: BorderRadius.circular(999),
                 ),
                 child: Text(
@@ -310,7 +311,7 @@ class _KnobPainter extends CustomPainter {
       ..style = PaintingStyle.fill;
 
     final rimPaint = Paint()
-      ..color = Colors.white.withOpacity(0.10)
+      ..color = Colors.white.withValues(alpha: 0.10)
       ..style = PaintingStyle.stroke
       ..strokeWidth = 1.2;
 
@@ -318,7 +319,7 @@ class _KnobPainter extends CustomPainter {
     canvas.drawCircle(c, r, rimPaint);
 
     final trackPaint = Paint()
-      ..color = Colors.white.withOpacity(0.10)
+      ..color = Colors.white.withValues(alpha: 0.10)
       ..style = PaintingStyle.stroke
       ..strokeCap = StrokeCap.round
       ..strokeWidth = 3.2;
@@ -327,8 +328,9 @@ class _KnobPainter extends CustomPainter {
     canvas.drawArc(rect, _startAngle, _sweep, false, trackPaint);
 
     final valuePaint = Paint()
-      ..color =
-          enabled ? accent.withOpacity(0.95) : Colors.white.withOpacity(0.22)
+      ..color = enabled
+          ? accent.withValues(alpha: 0.95)
+          : Colors.white.withValues(alpha: 0.22)
       ..style = PaintingStyle.stroke
       ..strokeCap = StrokeCap.round
       ..strokeWidth = 3.2;
@@ -340,7 +342,7 @@ class _KnobPainter extends CustomPainter {
     final p2 = c + Offset(math.cos(ang), math.sin(ang)) * (r - 18);
 
     final tickPaint = Paint()
-      ..color = Colors.white.withOpacity(enabled ? 0.92 : 0.35)
+      ..color = Colors.white.withValues(alpha: enabled ? 0.92 : 0.35)
       ..style = PaintingStyle.stroke
       ..strokeCap = StrokeCap.round
       ..strokeWidth = 2.0;
@@ -348,7 +350,7 @@ class _KnobPainter extends CustomPainter {
     canvas.drawLine(p2, p1, tickPaint);
 
     final dotPaint = Paint()
-      ..color = Colors.black.withOpacity(0.35)
+      ..color = Colors.black.withValues(alpha: 0.35)
       ..style = PaintingStyle.fill;
 
     canvas.drawCircle(c, 4.0, dotPaint);

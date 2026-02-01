@@ -98,7 +98,7 @@ class _LayerPanelState extends ConsumerState<LayerPanel> {
                   filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
                   child: Container(
                     decoration: BoxDecoration(
-                      color: const Color(0xFF101018).withOpacity(0.4),
+                      color: const Color(0xFF101018).withValues(alpha: 0.4),
                       border: const Border(
                         top: BorderSide(color: Color(0xFF303040)),
                       ),
@@ -123,7 +123,8 @@ class _LayerPanelState extends ConsumerState<LayerPanel> {
                                       width: 44,
                                       height: 5,
                                       decoration: BoxDecoration(
-                                        color: Colors.white.withOpacity(0.25),
+                                        color: Colors.white
+                                            .withValues(alpha: 0.25),
                                         borderRadius:
                                             BorderRadius.circular(999),
                                       ),
@@ -368,10 +369,10 @@ class _LayerTileState extends State<_LayerTile> {
 
     // ✅ Selected highlight is done via border + subtle glow overlay
     final Color borderColor =
-        widget.isActive ? cs.primary.withOpacity(0.65) : Colors.white10;
+        widget.isActive ? cs.primary.withValues(alpha: 0.65) : Colors.white10;
 
     final Color textColor =
-        layer.visible ? Colors.white : Colors.white.withOpacity(0.5);
+        layer.visible ? Colors.white : Colors.white.withValues(alpha: 0.5);
 
     final strokeCount = _strokeCount(layer);
 
@@ -428,7 +429,7 @@ class _LayerTileState extends State<_LayerTile> {
         boxShadow: widget.isActive
             ? [
                 BoxShadow(
-                  color: cs.primary.withOpacity(0.18),
+                  color: cs.primary.withValues(alpha: 0.18),
                   blurRadius: 10,
                   spreadRadius: 1,
                 ),
@@ -506,7 +507,7 @@ class _LayerTileState extends State<_LayerTile> {
                         icon: Icon(
                           Icons.delete,
                           color: widget.isOnlyLayer
-                              ? Colors.white.withOpacity(0.25)
+                              ? Colors.white.withValues(alpha: 0.25)
                               : Colors.redAccent,
                           size: 18,
                         ),
@@ -535,7 +536,7 @@ class _LayerTileState extends State<_LayerTile> {
                     child: Container(
                       decoration: BoxDecoration(
                         borderRadius: BorderRadius.circular(10),
-                        color: cs.primary.withOpacity(0.08),
+                        color: cs.primary.withValues(alpha: 0.08),
                       ),
                     ),
                   ),
@@ -781,7 +782,7 @@ class _ModLightDot extends StatelessWidget {
             boxShadow: isOn
                 ? [
                     BoxShadow(
-                      color: Colors.greenAccent.withOpacity(0.35),
+                      color: Colors.greenAccent.withValues(alpha: 0.35),
                       blurRadius: 8,
                       spreadRadius: 1,
                     )
@@ -1072,7 +1073,8 @@ class _StrokeList extends ConsumerWidget {
         padding: const EdgeInsets.only(bottom: 10),
         child: Text(
           'No strokes yet',
-          style: TextStyle(color: Colors.white.withOpacity(0.35), fontSize: 11),
+          style: TextStyle(
+              color: Colors.white.withValues(alpha: 0.35), fontSize: 11),
         ),
       );
     }
@@ -1319,7 +1321,7 @@ class _StrokeTileState extends State<_StrokeTile> {
 
     final baseBg = const Color(0xFF151524);
     final borderColor =
-        widget.isSelected ? cs.primary.withOpacity(0.70) : Colors.white10;
+        widget.isSelected ? cs.primary.withValues(alpha: 0.70) : Colors.white10;
 
     return Container(
       margin: const EdgeInsets.symmetric(vertical: 3),
@@ -1331,7 +1333,7 @@ class _StrokeTileState extends State<_StrokeTile> {
         boxShadow: widget.isSelected
             ? [
                 BoxShadow(
-                  color: cs.primary.withOpacity(0.18),
+                  color: cs.primary.withValues(alpha: 0.18),
                   blurRadius: 10,
                   spreadRadius: 1,
                 )
@@ -1373,7 +1375,7 @@ class _StrokeTileState extends State<_StrokeTile> {
                                   style: TextStyle(
                                     color: s.visible
                                         ? Colors.white70
-                                        : Colors.white.withOpacity(0.45),
+                                        : Colors.white.withValues(alpha: 0.45),
                                     fontSize: 12,
                                     fontWeight: widget.isSelected
                                         ? FontWeight.w700
@@ -1440,7 +1442,7 @@ class _StrokeTileState extends State<_StrokeTile> {
                     child: Container(
                       decoration: BoxDecoration(
                         borderRadius: BorderRadius.circular(10),
-                        color: cs.primary.withOpacity(0.08),
+                        color: cs.primary.withValues(alpha: 0.08),
                       ),
                     ),
                   ),
@@ -1912,7 +1914,7 @@ class _LfoPanelState extends State<_LfoPanel> {
               child: Text(
                 'No LFOs yet',
                 style: TextStyle(
-                    color: Colors.white.withOpacity(0.35), fontSize: 11),
+                    color: Colors.white.withValues(alpha: 0.35), fontSize: 11),
               ),
             )
           else
@@ -2151,7 +2153,8 @@ class _LfoCard extends StatelessWidget {
                 child: Text(
                   'No routes yet',
                   style: TextStyle(
-                      color: Colors.white.withOpacity(0.35), fontSize: 11),
+                      color: Colors.white.withValues(alpha: 0.35),
+                      fontSize: 11),
                 ),
               )
             else

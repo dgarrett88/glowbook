@@ -76,7 +76,7 @@ class _LfoPanelState extends ConsumerState<LfoPanel> {
                   filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
                   child: Container(
                     decoration: BoxDecoration(
-                      color: const Color(0xFF101018).withOpacity(0.4),
+                      color: const Color(0xFF101018).withValues(alpha: 0.4),
                       border: const Border(
                         top: BorderSide(color: Color(0xFF303040)),
                       ),
@@ -101,7 +101,8 @@ class _LfoPanelState extends ConsumerState<LfoPanel> {
                                       width: 44,
                                       height: 5,
                                       decoration: BoxDecoration(
-                                        color: Colors.white.withOpacity(0.25),
+                                        color: Colors.white
+                                            .withValues(alpha: 0.25),
                                         borderRadius:
                                             BorderRadius.circular(999),
                                       ),
@@ -295,7 +296,8 @@ class _LfoTile extends ConsumerWidget {
         color: const Color(0xFF121220),
         borderRadius: BorderRadius.circular(10),
         border: Border.all(
-          color: lfo.enabled ? cs.primary.withOpacity(0.40) : Colors.white10,
+          color:
+              lfo.enabled ? cs.primary.withValues(alpha: 0.40) : Colors.white10,
           width: lfo.enabled ? 1.2 : 1.0,
         ),
       ),
@@ -362,7 +364,7 @@ class _LfoTile extends ConsumerWidget {
                     child: Container(
                       decoration: BoxDecoration(
                         borderRadius: BorderRadius.circular(10),
-                        color: cs.primary.withOpacity(0.06),
+                        color: cs.primary.withValues(alpha: 0.06),
                       ),
                     ),
                   ),
@@ -487,7 +489,7 @@ class _LfoTile extends ConsumerWidget {
                           Text(
                             'No routes yet',
                             style: TextStyle(
-                                color: Colors.white.withOpacity(0.35),
+                                color: Colors.white.withValues(alpha: .35),
                                 fontSize: 11),
                           )
                         else

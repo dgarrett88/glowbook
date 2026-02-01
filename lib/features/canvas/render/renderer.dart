@@ -357,6 +357,27 @@ class Renderer extends CustomPainter {
     return Offset(sx / pts.length, sy / pts.length);
   }
 
+  // ---------------------------------------------------------------------------
+  // ✅ NEW HELPERS: smoother 0..1 modulation without clamp "dead zones"
+  // ---------------------------------------------------------------------------
+
+  /// Applies a 0..1 "extra" smoothly as modulation based on knob base value.
+  ///
+  /// - If extra >= 0: treat as "depth up" (base -> base+extra).
+  /// - If extra < 0: treat as "depth down" (base -> base+extra).
+  ///
+  /// The key is that `u` should be UNIPOLAR [0..1] (sine mapped etc),
+  /// so the result never spends half the cycle stuck at 0 due to clamping.
+  double _applyUnitMod(double base, double extra, {required double u}) {
+    final b = base.clamp(0.0, 1.0).toDouble();
+    final uu = u.clamp(0.0, 1.0).toDouble();
+    final e = extra;
+
+    // base + (depth * u)
+    final v = (b + e * uu).clamp(0.0, 1.0).toDouble();
+    return v;
+  }
+
   Stroke _applyStrokeExtrasWorld(
     Stroke sWorld,
     String layerId,
@@ -370,6 +391,9 @@ class Renderer extends CustomPainter {
     final rot = _strokeExtraRotationRad?.call(layerId, strokeId) ?? 0.0;
 
     final dSize = _strokeExtraSize?.call(layerId, strokeId) ?? 0.0;
+
+    // These extras should be produced by controller as UNIPOLAR-shaped deltas
+    // for smooth modulation (ex: u = (raw+1)/2).
     final dCoreOp = _strokeExtraCoreOpacity?.call(layerId, strokeId) ?? 0.0;
     final dGlowRadius = _strokeExtraGlowRadius?.call(layerId, strokeId) ?? 0.0;
     final dGlowOp = _strokeExtraGlowOpacity?.call(layerId, strokeId) ?? 0.0;
@@ -401,23 +425,33 @@ class Renderer extends CustomPainter {
       outStroke = outStroke.copyWith(points: outPts);
     }
 
-    // Visual params (clamped)
+    // Visual params
+    // Size stays additive (unbounded)
     final newSize = (outStroke.size + dSize).clamp(0.5, 500.0).toDouble();
-    final newCoreOpacity =
-        (outStroke.coreOpacity + dCoreOp).clamp(0.0, 1.0).toDouble();
-    final newGlowRadius =
-        (outStroke.glowRadius + dGlowRadius).clamp(0.0, 1.0).toDouble();
-    final newGlowOpacity =
-        (outStroke.glowOpacity + dGlowOp).clamp(0.0, 1.0).toDouble();
-    final newGlowBrightness =
-        (outStroke.glowBrightness + dGlowBright).clamp(0.0, 1.0).toDouble();
+
+    // ✅ VISUAL PARAMS: controller now returns FINAL values (Vital-style)
+    final coreOpacity = _strokeExtraCoreOpacity != null
+        ? _strokeExtraCoreOpacity!(layerId, strokeId)
+        : outStroke.coreOpacity;
+
+    final glowRadius = _strokeExtraGlowRadius != null
+        ? _strokeExtraGlowRadius!(layerId, strokeId)
+        : outStroke.glowRadius;
+
+    final glowOpacity = _strokeExtraGlowOpacity != null
+        ? _strokeExtraGlowOpacity!(layerId, strokeId)
+        : outStroke.glowOpacity;
+
+    final glowBrightness = _strokeExtraGlowBrightness != null
+        ? _strokeExtraGlowBrightness!(layerId, strokeId)
+        : outStroke.glowBrightness;
 
     return outStroke.copyWith(
       size: newSize,
-      coreOpacity: newCoreOpacity,
-      glowRadius: newGlowRadius,
-      glowOpacity: newGlowOpacity,
-      glowBrightness: newGlowBrightness,
+      coreOpacity: coreOpacity.clamp(0.0, 1.0),
+      glowRadius: glowRadius.clamp(0.0, 1.0),
+      glowOpacity: glowOpacity.clamp(0.0, 1.0),
+      glowBrightness: glowBrightness.clamp(0.0, 1.0),
     );
   }
 
@@ -498,8 +532,12 @@ class Renderer extends CustomPainter {
 
       // ✅ If controller is feeding WORLD points, draw as-is (no transforms/extras).
       if (activeIsWorld) {
-        _drawByBrush(canvas, active.strokeLocal, size,
-            _modeForStroke(active.strokeLocal));
+        _drawByBrush(
+          canvas,
+          active.strokeLocal,
+          size,
+          _modeForStroke(active.strokeLocal),
+        );
         return;
       }
 
