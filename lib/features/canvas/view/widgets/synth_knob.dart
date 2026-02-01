@@ -7,10 +7,14 @@ import 'package:flutter/material.dart';
 /// - Long press = type exact value
 /// - Optional value display & label
 /// - Notifies parent when interaction starts/ends so ScrollView can be disabled.
-/// - ✅ NEW: onChangeStart / onChangeEnd so you can commit undo ONLY on finger lift.
+/// - onChangeStart / onChangeEnd for undo transactions:
+///     - Drag: start on panStart, end on panEnd/cancel
+///     - Reset/Typed: do a 1-step transaction (start -> set -> end) with end deferred
 class SynthKnob extends StatefulWidget {
   const SynthKnob({
     super.key,
+
+    // ✅ Current API
     required this.value,
     required this.onChanged,
     this.min = 0.0,
@@ -27,8 +31,20 @@ class SynthKnob extends StatefulWidget {
     this.onInteractionChanged,
     this.onChangeStart,
     this.onChangeEnd,
+
+    // ✅ Back-compat aliases (older call-sites)
+    this.title,
+    this.diameter,
+    this.showValue,
+    this.formatter,
+    this.isEnabled,
+    this.onStart,
+    this.onEnd,
   });
 
+  // -------------------------
+  // Current API
+  // -------------------------
   final double value;
   final ValueChanged<double> onChanged;
 
@@ -41,7 +57,6 @@ class SynthKnob extends StatefulWidget {
   final String Function(double v)? valueFormatter;
 
   final double sensitivity;
-
   final bool showValueText;
 
   final String? modTag;
@@ -52,13 +67,37 @@ class SynthKnob extends StatefulWidget {
   /// True while user is touching/dragging this knob (use this to disable ScrollView).
   final ValueChanged<bool>? onInteractionChanged;
 
-  /// ✅ Called when the user starts a drag (finger down + pan start).
+  /// Called when the user starts a drag (finger down + pan start).
   /// Use this to snapshot "before" for undo.
   final VoidCallback? onChangeStart;
 
-  /// ✅ Called when the user ends a drag (finger up / cancel).
+  /// Called when the user ends a drag (finger up / cancel).
   /// Use this to push ONE undo step.
   final VoidCallback? onChangeEnd;
+
+  // -------------------------
+  // Back-compat aliases
+  // -------------------------
+  /// Older code: `title:` instead of `label:`
+  final String? title;
+
+  /// Older code: `diameter:` instead of `size:`
+  final double? diameter;
+
+  /// Older code: `showValue:` instead of `showValueText:`
+  final bool? showValue;
+
+  /// Older code: `formatter:` instead of `valueFormatter:`
+  final String Function(double v)? formatter;
+
+  /// Older code: `isEnabled:` instead of `enabled:`
+  final bool? isEnabled;
+
+  /// Older code: `onStart:` instead of `onChangeStart:`
+  final VoidCallback? onStart;
+
+  /// Older code: `onEnd:` instead of `onChangeEnd:`
+  final VoidCallback? onEnd;
 
   @override
   State<SynthKnob> createState() => _SynthKnobState();
@@ -70,6 +109,21 @@ class _SynthKnobState extends State<SynthKnob> {
 
   bool _active = false;
   bool _dragging = false;
+
+  /// Guard against multiple queued "end" calls for one-step commits.
+  int _commitToken = 0;
+
+  // -------------------------
+  // Effective values (new OR old API)
+  // -------------------------
+  bool get _enabled => widget.isEnabled ?? widget.enabled;
+  double get _size => widget.diameter ?? widget.size;
+  String? get _label => widget.label ?? widget.title;
+  bool get _showValueText => widget.showValue ?? widget.showValueText;
+  String Function(double v)? get _valueFormatter =>
+      widget.valueFormatter ?? widget.formatter;
+  VoidCallback? get _onChangeStart => widget.onChangeStart ?? widget.onStart;
+  VoidCallback? get _onChangeEnd => widget.onChangeEnd ?? widget.onEnd;
 
   double get _clamped => widget.value.clamp(widget.min, widget.max);
 
@@ -85,7 +139,9 @@ class _SynthKnobState extends State<SynthKnob> {
   }
 
   String _format(double v) {
-    if (widget.valueFormatter != null) return widget.valueFormatter!(v);
+    final fmt = _valueFormatter;
+    if (fmt != null) return fmt(v);
+
     final range = (widget.max - widget.min).abs();
     if (range <= 2.0) return v.toStringAsFixed(2);
     return v.toStringAsFixed(1);
@@ -97,8 +153,39 @@ class _SynthKnobState extends State<SynthKnob> {
     widget.onInteractionChanged?.call(v);
   }
 
+  /// ✅ For reset + typed input:
+  /// make a single history transaction (start -> apply -> end),
+  /// but defer end until next frame so the "after" value is actually applied.
+  void _commitOneStep(double v) {
+    if (!_enabled) return;
+
+    final nv = v.clamp(widget.min, widget.max);
+
+    // If we're mid-drag, don't open/close a separate transaction.
+    if (_dragging) {
+      widget.onChanged(nv);
+      return;
+    }
+
+    // Mark interaction active (helps your scroll-lock UX feel consistent)
+    _setActive(true);
+
+    _onChangeStart?.call();
+    widget.onChanged(nv);
+
+    final token = ++_commitToken;
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      if (token != _commitToken) return;
+
+      _onChangeEnd?.call();
+      _setActive(false);
+    });
+  }
+
   Future<void> _promptExactValue() async {
-    if (!widget.enabled) return;
+    if (!_enabled) return;
 
     final ctrl = TextEditingController(text: _clamped.toStringAsFixed(3));
     final res = await showDialog<double?>(
@@ -106,7 +193,7 @@ class _SynthKnobState extends State<SynthKnob> {
       builder: (ctx) => AlertDialog(
         backgroundColor: const Color(0xFF171720),
         title: Text(
-          widget.label ?? 'Set value',
+          _label ?? 'Set value',
           style: const TextStyle(color: Colors.white),
         ),
         content: TextField(
@@ -139,15 +226,14 @@ class _SynthKnobState extends State<SynthKnob> {
     );
 
     if (res == null) return;
-    final v = res.clamp(widget.min, widget.max);
-    widget.onChanged(v);
+    _commitOneStep(res);
   }
 
   void _reset() {
-    if (!widget.enabled) return;
+    if (!_enabled) return;
     final d = widget.defaultValue;
     if (d == null) return;
-    widget.onChanged(d.clamp(widget.min, widget.max));
+    _commitOneStep(d);
   }
 
   void _endInteraction({bool fireChangeEnd = false}) {
@@ -156,7 +242,7 @@ class _SynthKnobState extends State<SynthKnob> {
     if (_dragging) {
       _dragging = false;
       if (fireChangeEnd) {
-        widget.onChangeEnd?.call(); // ✅ commit undo step on finger lift/cancel
+        _onChangeEnd?.call(); // commit undo step on finger lift/cancel
       }
     }
 
@@ -175,46 +261,44 @@ class _SynthKnobState extends State<SynthKnob> {
     final t = _norm(_clamped);
 
     final knobPaint = SizedBox(
-      width: widget.size,
-      height: widget.size,
+      width: _size,
+      height: _size,
       child: CustomPaint(
         painter: _KnobPainter(
           t: t,
-          enabled: widget.enabled,
+          enabled: _enabled,
           accent: cs.primary,
         ),
       ),
     );
 
     return Opacity(
-      opacity: widget.enabled ? 1.0 : 0.45,
+      opacity: _enabled ? 1.0 : 0.45,
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          // ✅ Listener fires immediately on touch (not in gesture arena),
+          // Listener fires immediately on touch (not in gesture arena),
           // so we can disable scrolling BEFORE the list steals the drag.
           Listener(
             behavior: HitTestBehavior.opaque,
-            onPointerDown: widget.enabled ? (_) => _setActive(true) : null,
-            onPointerUp: widget.enabled
-                ? (_) => _endInteraction(fireChangeEnd: true)
-                : null,
-            onPointerCancel: widget.enabled
-                ? (_) => _endInteraction(fireChangeEnd: true)
-                : null,
+            onPointerDown: _enabled ? (_) => _setActive(true) : null,
+            onPointerUp:
+                _enabled ? (_) => _endInteraction(fireChangeEnd: true) : null,
+            onPointerCancel:
+                _enabled ? (_) => _endInteraction(fireChangeEnd: true) : null,
             child: GestureDetector(
               behavior: HitTestBehavior.opaque,
               onDoubleTap: _reset,
               onLongPress: _promptExactValue,
-              onPanStart: widget.enabled
+              onPanStart: _enabled
                   ? (d) {
                       _dragging = true;
-                      widget.onChangeStart?.call(); // ✅ snapshot "before"
+                      _onChangeStart?.call(); // snapshot "before"
                       _startValue = _clamped;
                       _dragStart = d.localPosition;
                     }
                   : null,
-              onPanUpdate: widget.enabled
+              onPanUpdate: _enabled
                   ? (d) {
                       final start = _dragStart;
                       if (start == null) return;
@@ -228,26 +312,24 @@ class _SynthKnobState extends State<SynthKnob> {
                       widget.onChanged(newValue);
                     }
                   : null,
-              onPanEnd: widget.enabled
-                  ? (_) => _endInteraction(fireChangeEnd: true)
-                  : null,
-              onPanCancel: widget.enabled
-                  ? () => _endInteraction(fireChangeEnd: true)
-                  : null,
+              onPanEnd:
+                  _enabled ? (_) => _endInteraction(fireChangeEnd: true) : null,
+              onPanCancel:
+                  _enabled ? () => _endInteraction(fireChangeEnd: true) : null,
               child: knobPaint,
             ),
           ),
           const SizedBox(height: 6),
-          if (widget.label != null)
+          if (_label != null)
             Text(
-              widget.label!,
+              _label!,
               style: const TextStyle(
                 fontSize: 11,
                 color: Colors.white70,
                 height: 1.0,
               ),
             ),
-          if (widget.showValueText)
+          if (_showValueText)
             Text(
               _format(_clamped),
               style: const TextStyle(

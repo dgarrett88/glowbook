@@ -1310,53 +1310,6 @@ class CanvasController extends ChangeNotifier {
     notifyListeners();
   }
 
-  void beginStrokeKnob(
-    String layerId,
-    int groupIndex,
-    String strokeId, {
-    required String label,
-  }) {
-    final li = _state.layers.indexWhere((l) => l.id == layerId);
-    if (li < 0) return;
-
-    final layer = _state.layers[li];
-    if (groupIndex < 0 || groupIndex >= layer.groups.length) return;
-
-    final group = layer.groups[groupIndex];
-    final si = group.strokes.indexWhere((s) => s.id == strokeId);
-    if (si < 0) return;
-
-    final beforeStroke = group.strokes[si];
-
-    final key = 'strokeKnob:$layerId:$groupIndex:$strokeId';
-
-    knobEditBegin(
-      key: key,
-      label: label,
-      layerId: layerId,
-      undo: () {
-        _applyStrokePatchNoHistory(
-          layerId,
-          groupIndex,
-          strokeId,
-          knobKey: key,
-          patch: (_) => beforeStroke,
-          // redoLatest is irrelevant for undo, but required:
-          redoLatest: () {},
-        );
-      },
-      redoLatest: () {},
-    );
-  }
-
-  void endStrokeKnob(String layerId, int groupIndex, String strokeId) {
-    final key = 'strokeKnob:$layerId:$groupIndex:$strokeId';
-    final p = _pendingKnob;
-    if (p == null) return;
-    if (p.key != key) return;
-    knobEditEnd();
-  }
-
   /// Call this from knob pointer-down / onChangeStart.
   void beginStrokeSizeKnob(
     String layerId,
@@ -2740,34 +2693,6 @@ class CanvasController extends ChangeNotifier {
     _ensureTickerState();
     _tick();
     notifyListeners();
-  }
-
-  /// Map the string keys used by the UI to LfoParam.
-  /// IMPORTANT: update these keys to exactly match what layer_panel.dart uses.
-  LfoParam? _strokeParamFromKey(String key) {
-    switch (key) {
-      // ---- STROKE PARAMS ----
-      case 'strokeSize':
-        return LfoParam.strokeSize;
-      case 'strokeX':
-        return LfoParam.strokeX;
-      case 'strokeY':
-        return LfoParam.strokeY;
-      case 'strokeRotationDeg':
-        return LfoParam.strokeRotationDeg;
-
-      case 'strokeCoreOpacity':
-        return LfoParam.strokeCoreOpacity;
-      case 'strokeGlowRadius':
-        return LfoParam.strokeGlowRadius;
-      case 'strokeGlowOpacity':
-        return LfoParam.strokeGlowOpacity;
-      case 'strokeGlowBrightness':
-        return LfoParam.strokeGlowBrightness;
-
-      default:
-        return null;
-    }
   }
 
 // ---------------------------------------------------------------------------

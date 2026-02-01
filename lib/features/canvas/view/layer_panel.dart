@@ -1481,24 +1481,20 @@ class _StrokeTileState extends State<_StrokeTile> {
                             valueFormatter: (v) => v.toStringAsFixed(1),
 
                             // ✅ keep your existing scroll/fade behaviour
-                            onInteractionChanged: (active) {
-                              widget.onAnyKnobInteraction(active);
+                            onInteractionChanged: widget.onAnyKnobInteraction,
 
-                              // ✅ start/end a history transaction for undo/redo
-                              if (active) {
+                            onChangeStart: () =>
                                 widget.controller.beginStrokeSizeKnob(
-                                  widget.layerId,
-                                  widget.groupIndex,
-                                  s.id,
-                                );
-                              } else {
+                              widget.layerId,
+                              widget.groupIndex,
+                              s.id,
+                            ),
+                            onChangeEnd: () =>
                                 widget.controller.endStrokeSizeKnob(
-                                  widget.layerId,
-                                  widget.groupIndex,
-                                  s.id,
-                                );
-                              }
-                            },
+                              widget.layerId,
+                              widget.groupIndex,
+                              s.id,
+                            ),
 
                             onChanged: (v) {
                               widget.onAnyKnobValueChanged();
