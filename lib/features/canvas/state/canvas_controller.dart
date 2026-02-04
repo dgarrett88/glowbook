@@ -231,6 +231,21 @@ class CanvasController extends ChangeNotifier {
     }
   }
 
+  int _lfoIndexById(String id) => _lfos.indexWhere((x) => x.id == id);
+
+  void _replaceLfoAt(int index, Lfo next) {
+    if (index < 0 || index >= _lfos.length) return;
+
+    _lfos[index] = next;
+
+    _ensureTickerState();
+    _tick();
+    notifyListeners();
+  }
+
+  String _newLfoId() => 'lfo-${DateTime.now().microsecondsSinceEpoch}';
+  String _newRouteId() => 'route-${DateTime.now().microsecondsSinceEpoch}';
+
   // ---------------------------------------------------------------------------
   // PIVOT / TRANSFORM POLICY (REFACTOR CORE)
   // ---------------------------------------------------------------------------
@@ -2353,10 +2368,6 @@ class CanvasController extends ChangeNotifier {
   // LFO API (v1: routes -> layer extra rotation)
   // ---------------------------------------------------------------------------
 
-  // ---------------------------------------------------------------------------
-// LFO API (v1: routes -> layer extra rotation)
-// ---------------------------------------------------------------------------
-
   String addLfo({String? name}) {
     final id = 'lfo-${DateTime.now().millisecondsSinceEpoch}';
     final index = _lfos.length + 1;
@@ -2457,6 +2468,118 @@ class CanvasController extends ChangeNotifier {
     final v = offset.clamp(-1.0, 1.0).toDouble();
     _lfos[i] = _lfos[i].copyWith(offset: v);
 
+    _tick();
+    notifyListeners();
+  }
+
+  // ---------------------------------------------------------------------------
+  // LFO VISUAL CURVE API (Vital-style)
+  // ---------------------------------------------------------------------------
+
+  void setLfoShapeMode(String id, LfoShapeMode mode) {
+    final i = _lfos.indexWhere((l) => l.id == id);
+    if (i < 0) return;
+
+    var l = _lfos[i];
+
+    // If switching to curve with no nodes, seed a nice default loop curve.
+    if (mode == LfoShapeMode.curve && l.nodes.isEmpty) {
+      l = l.copyWith(nodes: const [
+        LfoNode(0.0, 0.0),
+        LfoNode(0.25, 1.0),
+        LfoNode(0.50, 0.0),
+        LfoNode(0.75, -1.0),
+        LfoNode(1.0, 0.0),
+      ]);
+    }
+
+    _lfos[i] = l.copyWith(shapeMode: mode);
+    _ensureTickerState();
+    _tick();
+    notifyListeners();
+  }
+
+  void setLfoNodes(String id, List<LfoNode> nodes) {
+    final i = _lfos.indexWhere((l) => l.id == id);
+    if (i < 0) return;
+
+    // sanitize
+    final cleaned = nodes
+        .map((n) => LfoNode(
+              n.x.clamp(0.0, 1.0).toDouble(),
+              n.y.clamp(-1.0, 1.0).toDouble(),
+            ))
+        .toList()
+      ..sort((a, b) => a.x.compareTo(b.x));
+
+    _lfos[i] = _lfos[i].copyWith(nodes: cleaned);
+    _ensureTickerState();
+    _tick();
+    notifyListeners();
+  }
+
+  /// Add a node at a normalized position.
+  /// Returns the index in the sorted list.
+  int addLfoNode(String id, {required double x01, required double y11}) {
+    final i = _lfos.indexWhere((l) => l.id == id);
+    if (i < 0) return -1;
+
+    final l = _lfos[i];
+    final nodes = List<LfoNode>.from(l.nodes);
+
+    final nx = x01.clamp(0.0, 1.0).toDouble();
+    final ny = y11.clamp(-1.0, 1.0).toDouble();
+
+    nodes.add(LfoNode(nx, ny));
+    nodes.sort((a, b) => a.x.compareTo(b.x));
+
+    _lfos[i] = l.copyWith(nodes: nodes, shapeMode: LfoShapeMode.curve);
+    _ensureTickerState();
+    _tick();
+    notifyListeners();
+
+    return nodes
+        .indexWhere((n) => (n.x - nx).abs() < 1e-9 && (n.y - ny).abs() < 1e-9);
+  }
+
+  void moveLfoNode(String id, int index,
+      {required double x01, required double y11}) {
+    final i = _lfos.indexWhere((l) => l.id == id);
+    if (i < 0) return;
+
+    final l = _lfos[i];
+    final nodes = List<LfoNode>.from(l.nodes);
+    if (index < 0 || index >= nodes.length) return;
+
+    final nx = x01.clamp(0.0, 1.0).toDouble();
+    final ny = y11.clamp(-1.0, 1.0).toDouble();
+
+    // If endpoints exist, you may want to "lock" x of 0 and 1 points.
+    // We'll keep it simple: allow movement.
+    nodes[index] = nodes[index].copyWith(x: nx, y: ny);
+    nodes.sort((a, b) => a.x.compareTo(b.x));
+
+    _lfos[i] = l.copyWith(nodes: nodes, shapeMode: LfoShapeMode.curve);
+    _ensureTickerState();
+    _tick();
+    notifyListeners();
+  }
+
+  void removeLfoNode(String id, int index) {
+    final i = _lfos.indexWhere((l) => l.id == id);
+    if (i < 0) return;
+
+    final l = _lfos[i];
+    final nodes = List<LfoNode>.from(l.nodes);
+    if (index < 0 || index >= nodes.length) return;
+
+    // Don’t allow deleting if it would leave empty (optional).
+    if (nodes.length <= 2) return;
+
+    nodes.removeAt(index);
+
+    _lfos[i] = l.copyWith(nodes: nodes, shapeMode: LfoShapeMode.curve);
+    _ensureTickerState();
     _tick();
     notifyListeners();
   }

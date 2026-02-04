@@ -3,10 +3,11 @@ import 'dart:ui' show ImageFilter;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import 'widgets/lfo_visual_editor.dart';
+
 import '../state/canvas_controller.dart' as canvas_state;
 import '../../../core/models/canvas_layer.dart';
 import '../../../core/models/lfo.dart';
-import 'widgets/synth_knob.dart';
 
 class LfoPanel extends ConsumerStatefulWidget {
   const LfoPanel({
@@ -235,8 +236,6 @@ class _LfoTile extends ConsumerWidget {
     final controller = ref.watch(canvas_state.canvasControllerProvider);
     final cs = Theme.of(context).colorScheme;
 
-    final routes = controller.routesForLfo(lfo.id);
-
     Widget dragRow() {
       final row = Row(
         children: [
@@ -371,292 +370,21 @@ class _LfoTile extends ConsumerWidget {
                 ),
             ],
           ),
+
+          // ✅ Expanded content: the Vital-ish visual editor
           if (isExpanded)
             Padding(
-              padding: const EdgeInsets.fromLTRB(10, 0, 10, 10),
-              child: Column(
-                children: [
-                  const SizedBox(height: 6),
-
-                  // Wave selector row
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      const Text('Wave',
-                          style:
-                              TextStyle(color: Colors.white54, fontSize: 11)),
-                      const SizedBox(width: 10),
-                      _WavePicker(
-                        value: lfo.wave,
-                        onChanged: (w) => controller.setLfoWave(lfo.id, w),
-                      ),
-                    ],
-                  ),
-
-                  const SizedBox(height: 10),
-
-                  Wrap(
-                    alignment: WrapAlignment.center,
-                    spacing: 10,
-                    runSpacing: 10,
-                    children: [
-                      SynthKnob(
-                        label: 'Rate',
-                        value: lfo.rateHz.clamp(0.01, 20.0),
-                        min: 0.01,
-                        max: 20.0,
-                        defaultValue: 0.25,
-                        valueFormatter: (v) =>
-                            v < 1 ? v.toStringAsFixed(2) : v.toStringAsFixed(1),
-                        onInteractionChanged: onAnyKnobInteraction,
-                        onChanged: (v) {
-                          onAnyKnobValueChanged();
-                          controller.setLfoRate(lfo.id, v);
-                        },
-                      ),
-                      SynthKnob(
-                        label: 'Phase',
-                        value: (lfo.phase * 100.0).clamp(0.0, 100.0),
-                        min: 0.0,
-                        max: 100.0,
-                        defaultValue: 0.0,
-                        valueFormatter: (v) => '${v.toStringAsFixed(0)}%',
-                        onInteractionChanged: onAnyKnobInteraction,
-                        onChanged: (v) {
-                          onAnyKnobValueChanged();
-                          controller.setLfoPhase(
-                              lfo.id, (v / 100.0).clamp(0.0, 1.0));
-                        },
-                      ),
-                      SynthKnob(
-                        label: 'Offset',
-                        value: (lfo.offset * 100.0).clamp(-100.0, 100.0),
-                        min: -100.0,
-                        max: 100.0,
-                        defaultValue: 0.0,
-                        valueFormatter: (v) => '${v.toStringAsFixed(0)}%',
-                        onInteractionChanged: onAnyKnobInteraction,
-                        onChanged: (v) {
-                          onAnyKnobValueChanged();
-                          controller.setLfoOffset(
-                              lfo.id, (v / 100.0).clamp(-1.0, 1.0));
-                        },
-                      ),
-                    ],
-                  ),
-
-                  const SizedBox(height: 12),
-
-                  // Routes
-                  Container(
-                    padding: const EdgeInsets.fromLTRB(10, 8, 10, 8),
-                    decoration: BoxDecoration(
-                      color: const Color(0xFF0F0F18),
-                      borderRadius: BorderRadius.circular(10),
-                      border: Border.all(color: Colors.white10),
-                    ),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [
-                        Row(
-                          children: [
-                            Text(
-                              'Routes (${routes.length})',
-                              style: const TextStyle(
-                                color: Colors.white70,
-                                fontSize: 11,
-                                fontWeight: FontWeight.w600,
-                              ),
-                            ),
-                            const Spacer(),
-                            IconButton(
-                              tooltip: 'Add route to a layer',
-                              iconSize: 18,
-                              visualDensity: VisualDensity.compact,
-                              onPressed: layers.isEmpty
-                                  ? null
-                                  : () => controller.addRouteToLayer(
-                                        lfo.id,
-                                        layers.last.id,
-                                      ),
-                              icon:
-                                  const Icon(Icons.add, color: Colors.white70),
-                            ),
-                          ],
-                        ),
-                        const SizedBox(height: 6),
-                        if (routes.isEmpty)
-                          Text(
-                            'No routes yet',
-                            style: TextStyle(
-                                color: Colors.white.withValues(alpha: .35),
-                                fontSize: 11),
-                          )
-                        else
-                          ...routes.map((r) => _RouteRow(
-                                lfo: lfo,
-                                route: r,
-                                layers: layers,
-                                onAnyKnobInteraction: onAnyKnobInteraction,
-                                onAnyKnobValueChanged: onAnyKnobValueChanged,
-                              )),
-                      ],
-                    ),
-                  ),
-                ],
+              padding: const EdgeInsets.fromLTRB(10, 8, 10, 10),
+              child: SizedBox(
+                height: 220, // ✅ gives it proper space
+                width: double.infinity,
+                child: LfoVisualEditor(
+                  lfoId: lfo.id,
+                  onInteractionChanged:
+                      onAnyKnobInteraction, // ✅ reuse your existing scroll lock
+                ),
               ),
             ),
-        ],
-      ),
-    );
-  }
-}
-
-class _WavePicker extends StatelessWidget {
-  const _WavePicker({required this.value, required this.onChanged});
-  final LfoWave value;
-  final ValueChanged<LfoWave> onChanged;
-
-  @override
-  Widget build(BuildContext context) {
-    return PopupMenuButton<LfoWave>(
-      tooltip: 'Waveform',
-      color: const Color(0xFF1C1C24),
-      onSelected: onChanged,
-      itemBuilder: (ctx) => [
-        for (final w in LfoWave.values)
-          PopupMenuItem<LfoWave>(
-            value: w,
-            child: Text(w.label, style: const TextStyle(color: Colors.white)),
-          ),
-      ],
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-        decoration: BoxDecoration(
-          color: Colors.white10,
-          borderRadius: BorderRadius.circular(999),
-          border: Border.all(color: Colors.white10),
-        ),
-        child: Text(
-          value.label,
-          style: const TextStyle(color: Colors.white70, fontSize: 11),
-        ),
-      ),
-    );
-  }
-}
-
-class _RouteRow extends ConsumerWidget {
-  const _RouteRow({
-    required this.lfo,
-    required this.route,
-    required this.layers,
-    required this.onAnyKnobInteraction,
-    required this.onAnyKnobValueChanged,
-  });
-
-  final Lfo lfo;
-  final LfoRoute route;
-  final List<CanvasLayer> layers;
-
-  final ValueChanged<bool> onAnyKnobInteraction;
-  final VoidCallback onAnyKnobValueChanged;
-
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final controller = ref.watch(canvas_state.canvasControllerProvider);
-
-    final layerName = layers
-        .firstWhere(
-          (l) => l.id == route.layerId,
-          orElse: () => const CanvasLayer(
-            id: 'missing',
-            name: 'Missing layer',
-            visible: true,
-            locked: false,
-            transform: LayerTransform(),
-            groups: [],
-          ),
-        )
-        .name;
-
-    return Container(
-      margin: const EdgeInsets.symmetric(vertical: 4),
-      padding: const EdgeInsets.fromLTRB(8, 8, 8, 8),
-      decoration: BoxDecoration(
-        color: const Color(0xFF151524),
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: Colors.white10),
-      ),
-      child: Column(
-        children: [
-          Row(
-            children: [
-              IconButton(
-                tooltip: route.enabled ? 'Disable route' : 'Enable route',
-                iconSize: 18,
-                visualDensity: VisualDensity.compact,
-                onPressed: () =>
-                    controller.setRouteEnabled(route.id, !route.enabled),
-                icon: Icon(
-                  route.enabled ? Icons.check_circle : Icons.circle_outlined,
-                  color: route.enabled ? Colors.white70 : Colors.white24,
-                ),
-              ),
-              Expanded(
-                child: DropdownButtonHideUnderline(
-                  child: DropdownButton<String>(
-                    dropdownColor: const Color(0xFF1C1C24),
-                    value: route.layerId,
-                    items: [
-                      for (final l in layers)
-                        DropdownMenuItem<String>(
-                          value: l.id,
-                          child: Text(l.name,
-                              style: const TextStyle(color: Colors.white70)),
-                        ),
-                    ],
-                    onChanged: (id) {
-                      if (id == null) return;
-                      controller.setRouteLayer(route.id, id);
-                    },
-                  ),
-                ),
-              ),
-              const SizedBox(width: 8),
-              Text(
-                layerName,
-                style: const TextStyle(color: Colors.white38, fontSize: 10),
-              ),
-              IconButton(
-                tooltip: 'Remove route',
-                iconSize: 18,
-                visualDensity: VisualDensity.compact,
-                onPressed: () => controller.removeRoute(route.id),
-                icon: const Icon(Icons.close, color: Colors.redAccent),
-              ),
-            ],
-          ),
-          Wrap(
-            alignment: WrapAlignment.center,
-            spacing: 10,
-            runSpacing: 10,
-            children: [
-              SynthKnob(
-                label: 'Depth',
-                value: route.amount.clamp(0.0, 360.0),
-                min: 0.0,
-                max: 360.0,
-                defaultValue: 25.0,
-                valueFormatter: (v) => '${v.toStringAsFixed(0)}°',
-                onInteractionChanged: onAnyKnobInteraction,
-                onChanged: (v) {
-                  onAnyKnobValueChanged();
-                  controller.setRouteAmount(route.id, v);
-                },
-              ),
-            ],
-          ),
         ],
       ),
     );
