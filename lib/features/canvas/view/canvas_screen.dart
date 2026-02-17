@@ -104,7 +104,10 @@ class _CanvasScreenState extends ConsumerState<CanvasScreen> {
       strokes: List.of(controller.strokes),
       layers: List.of(controller.layers),
       activeLayerId: controller.activeLayerId,
-      // LFO persistence not added yet (v1 session-only).
+
+      // ✅ persist per-document LFO state
+      lfos: List.of(controller.lfos),
+      lfoRoutes: List.of(controller.lfoRoutes),
     );
 
     final savedId = await DocumentStorage.instance.saveBundle(

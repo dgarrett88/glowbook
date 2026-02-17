@@ -1,151 +1,122 @@
 // lib/core/models/lfo.dart
 import 'dart:math' as math;
 
-/// Built-in oscillator waves (your current behavior).
-enum LfoWave { sine, triangle, sawUp, sawDown, square }
+/// Waveform types.
+/// Note: the visual editor can still be curve-mode while the "wave" enum is kept for quick presets.
+enum LfoWave { sine, triangle, sawUp, sawDown, square, random, curve }
 
-extension LfoWaveLabel on LfoWave {
+extension LfoWaveX on LfoWave {
   String get label {
-    // IMPORTANT:
-    // Replace the case names below to EXACTLY match your enum values.
     switch (this) {
       case LfoWave.sine:
         return 'Sine';
       case LfoWave.triangle:
         return 'Triangle';
       case LfoWave.sawUp:
-        return 'Saw ↑';
+        return 'Saw Up';
       case LfoWave.sawDown:
-        return 'Saw ↓';
+        return 'Saw Down';
       case LfoWave.square:
         return 'Square';
+      case LfoWave.random:
+        return 'Random';
+      case LfoWave.curve:
+        return 'Curve';
     }
   }
 }
 
-/// Shape mode:
-/// - wave: classic oscillator
-/// - curve: Vital-style node curve (0..1 -> -1..1)
+/// How the curve is interpreted visually (your editor supports these).
+enum LfoCurveMode { bulge, bend }
+
+/// Shape source for the LFO output.
 enum LfoShapeMode { wave, curve }
 
+/// A control point in the breakpoint curve.
+/// x: 0..1
+/// y: -1..1
+///
+/// Handle params:
+/// - bias: 0..1 (segment-local x position of handle)
+/// - bulgeAmt: -2.5..2.5 (matches your old core range; editor may normalize)
+/// - bendY: -1..1 (bend mode vertical influence)
 class LfoNode {
-  /// Normalized x in [0..1]
   final double x;
-
-  /// Normalized y in [-1..1]
   final double y;
 
-  const LfoNode(this.x, this.y);
+  final double bias;
+  final double bulgeAmt;
+  final double bendY;
 
-  LfoNode copyWith({double? x, double? y}) => LfoNode(x ?? this.x, y ?? this.y);
-}
-
-class LfoRoute {
-  final String id;
-  final String lfoId;
-  final String layerId;
-
-  /// If null => layer-level route.
-  /// If not null => stroke-level route.
-  final String? strokeId;
-
-  final bool enabled;
-  final LfoParam param;
-
-  /// If true: shaped signal is [-1..1].
-  /// If false: shaped signal is [0..1].
-  final bool bipolar;
-
-  /// Generic amount:
-  /// - rotation: degrees
-  /// - x/y: pixels
-  /// - scale: delta multiplier
-  /// - visual params: depth (-1..1)
-  final double amount;
-
-  const LfoRoute({
-    required this.id,
-    required this.lfoId,
-    required this.layerId,
-    this.strokeId,
-    required this.enabled,
-    required this.param,
-    required this.bipolar,
-    required this.amount,
+  const LfoNode(
+    this.x,
+    this.y, {
+    this.bias = 0.5,
+    this.bulgeAmt = 0.0,
+    this.bendY = 0.0,
   });
 
-  bool get isStrokeTarget => strokeId != null;
-
-  LfoRoute copyWith({
-    String? id,
-    String? lfoId,
-    String? layerId,
-    String? strokeId,
-    bool? enabled,
-    LfoParam? param,
-    bool? bipolar,
-    double? amount,
+  LfoNode copyWith({
+    double? x,
+    double? y,
+    double? bias,
+    double? bulgeAmt,
+    double? bendY,
   }) {
-    return LfoRoute(
-      id: id ?? this.id,
-      lfoId: lfoId ?? this.lfoId,
-      layerId: layerId ?? this.layerId,
-      strokeId: strokeId ?? this.strokeId,
-      enabled: enabled ?? this.enabled,
-      param: param ?? this.param,
-      bipolar: bipolar ?? this.bipolar,
-      amount: amount ?? this.amount,
+    return LfoNode(
+      x ?? this.x,
+      y ?? this.y,
+      bias: bias ?? this.bias,
+      bulgeAmt: bulgeAmt ?? this.bulgeAmt,
+      bendY: bendY ?? this.bendY,
+    );
+  }
+
+  Map<String, dynamic> toJson() => {
+        'x': x,
+        'y': y,
+        'bias': bias,
+        'bulgeAmt': bulgeAmt,
+        'bendY': bendY,
+      };
+
+  static double _asDouble(dynamic v, double fallback) {
+    if (v is num) return v.toDouble();
+    return fallback;
+  }
+
+  factory LfoNode.fromJson(Map<String, dynamic> j) {
+    return LfoNode(
+      _asDouble(j['x'], 0.0),
+      _asDouble(j['y'], 0.0),
+      bias: _asDouble(j['bias'], 0.5),
+      bulgeAmt: _asDouble(j['bulgeAmt'], 0.0),
+      bendY: _asDouble(j['bendY'], 0.0),
     );
   }
 }
 
-/// IMPORTANT: This enum must match what your controller expects.
-/// If you already have LfoParam elsewhere, delete this and import yours.
-enum LfoParam {
-  // layer
-  layerRotationDeg,
-  layerX,
-  layerY,
-  layerScale,
-  layerOpacity,
-
-  // stroke transform
-  strokeX,
-  strokeY,
-  strokeRotationDeg,
-
-  // stroke size
-  strokeSize,
-
-  // stroke visuals (0..1)
-  strokeCoreOpacity,
-  strokeGlowRadius,
-  strokeGlowOpacity,
-  strokeGlowBrightness,
-}
-
-/// LFO model:
-/// - When shapeMode == wave => same math as before.
-/// - When shapeMode == curve => evaluate by sampling node curve (Vital-ish).
 class Lfo {
   final String id;
   final String name;
   final bool enabled;
 
   final LfoWave wave;
+
+  /// Cycles per second.
   final double rateHz;
 
-  /// Phase offset in [0..1] (0 = start)
+  /// 0..1
   final double phase;
 
-  /// Additive output offset in [-1..1]
+  /// -1..1
   final double offset;
 
-  /// ✅ NEW: curve mode for the visual editor.
+  /// Curve settings
   final LfoShapeMode shapeMode;
+  final LfoCurveMode curveMode;
 
-  /// ✅ NEW: nodes for curve mode.
-  /// x in [0..1], y in [-1..1], sorted by x.
+  /// Breakpoint curve nodes (sorted by x).
   final List<LfoNode> nodes;
 
   const Lfo({
@@ -157,6 +128,7 @@ class Lfo {
     required this.phase,
     required this.offset,
     this.shapeMode = LfoShapeMode.wave,
+    this.curveMode = LfoCurveMode.bulge,
     this.nodes = const [],
   });
 
@@ -169,6 +141,7 @@ class Lfo {
     double? phase,
     double? offset,
     LfoShapeMode? shapeMode,
+    LfoCurveMode? curveMode,
     List<LfoNode>? nodes,
   }) {
     return Lfo(
@@ -180,146 +153,239 @@ class Lfo {
       phase: phase ?? this.phase,
       offset: offset ?? this.offset,
       shapeMode: shapeMode ?? this.shapeMode,
+      curveMode: curveMode ?? this.curveMode,
       nodes: nodes ?? this.nodes,
     );
   }
 
-  /// Evaluate output in [-1..1].
+  // ---------------------------------------------------------------------------
+  // Eval
+  // ---------------------------------------------------------------------------
+
+  /// Output in [-1..1] (then offset applied & clamped).
   double eval(double timeSec) {
     if (!enabled) return 0.0;
 
-    final hz = rateHz <= 0 ? 0.0 : rateHz;
-    final baseT = (hz == 0.0) ? 0.0 : (timeSec * hz);
-
-    // Apply phase (normalized)
-    double t01 = (baseT + phase).remainder(1.0);
-    if (t01 < 0) t01 += 1.0;
+    final hz = rateHz.abs() < 0.000001 ? 0.0 : rateHz;
+    final t = (timeSec * hz) + phase; // cycles
+    final frac = t - t.floorToDouble(); // 0..1
 
     double out;
-    if (shapeMode == LfoShapeMode.curve) {
-      out = _evalCurve(t01);
+
+    // If user is using the curve editor, prefer it.
+    if (shapeMode == LfoShapeMode.curve || wave == LfoWave.curve) {
+      out = _evalCurve(frac);
     } else {
-      out = _evalWave(t01);
+      out = _evalWave(frac, wave);
     }
 
-    // offset (additive) + clamp
     out = (out + offset).clamp(-1.0, 1.0).toDouble();
     return out;
   }
 
-  double _evalWave(double t01) {
-    switch (wave) {
+  double _evalWave(double x01, LfoWave w) {
+    final x = x01.clamp(0.0, 1.0).toDouble();
+
+    switch (w) {
       case LfoWave.sine:
-        return math.sin(t01 * math.pi * 2.0);
+        return math.sin(x * 2.0 * math.pi);
       case LfoWave.triangle:
-        // triangle in [-1..1]
-        final v = (t01 * 4.0);
-        if (v < 1.0) return v;
-        if (v < 3.0) return 2.0 - v;
-        return v - 4.0;
+        // 0..1 -> -1..1 triangle
+        final v = (x < 0.5) ? (x * 2.0) : (2.0 - x * 2.0);
+        return (v * 2.0) - 1.0;
       case LfoWave.sawUp:
-        return (t01 * 2.0) - 1.0;
+        return (x * 2.0) - 1.0;
       case LfoWave.sawDown:
-        return 1.0 - (t01 * 2.0);
+        return ((1.0 - x) * 2.0) - 1.0;
       case LfoWave.square:
-        return (t01 < 0.5) ? 1.0 : -1.0;
+        return (x < 0.5) ? 1.0 : -1.0;
+      case LfoWave.random:
+        // Deterministic-ish pseudo random based on x
+        final s = math.sin((x * 999.0) * 12.9898) * 43758.5453;
+        final r = s - s.floorToDouble(); // 0..1
+        return (r * 2.0) - 1.0;
+      case LfoWave.curve:
+        return _evalCurve(x);
     }
   }
 
-  /// Vital-ish curve sampling:
-  /// - nodes define y at x
-  /// - we do smooth interpolation (Catmull-Rom style) for "curvy" feel
-  /// - curve loops: we treat x=0 and x=1 as connected
-  double _evalCurve(double t01) {
-    final n = nodes;
-    if (n.isEmpty) {
-      // fallback to sine if no nodes exist
-      return math.sin(t01 * math.pi * 2.0);
+  double _evalCurve(double x01) {
+    if (nodes.isEmpty) return 0.0;
+
+    // Ensure sorted by x
+    final pts = nodes;
+    final x = x01.clamp(0.0, 1.0).toDouble();
+
+    if (x <= pts.first.x) return pts.first.y.clamp(-1.0, 1.0).toDouble();
+    if (x >= pts.last.x) return pts.last.y.clamp(-1.0, 1.0).toDouble();
+
+    int hi = 1;
+    while (hi < pts.length && pts[hi].x < x) {
+      hi++;
     }
-    if (n.length == 1) return n.first.y.clamp(-1.0, 1.0).toDouble();
+    final lo = (hi - 1).clamp(0, pts.length - 2);
 
-    // Ensure sorted copy (defensive)
-    final pts = List<LfoNode>.from(n)..sort((a, b) => a.x.compareTo(b.x));
+    final a = pts[lo];
+    final b = pts[lo + 1];
 
-    // Find segment [i..i+1] that contains t01
-    int i1 = 0;
-    while (i1 < pts.length && pts[i1].x < t01) {
-      i1++;
+    final ax = a.x;
+    final bx = b.x;
+    final span = (bx - ax).abs() < 1e-9 ? 1e-9 : (bx - ax);
+
+    final t = ((x - ax) / span).clamp(0.0, 1.0).toDouble();
+
+    // Basic linear baseline
+    final yLin = _lerp(a.y, b.y, t);
+
+    // Apply curve mode shaping using persisted handle params
+    switch (curveMode) {
+      case LfoCurveMode.bulge:
+        return _bulge(a, b, t, yLin);
+      case LfoCurveMode.bend:
+        return _bend(a, b, t, yLin);
     }
-
-    // Wrap segments for loop:
-    // If t is before first point or after last, segment crosses boundary.
-    if (i1 == 0) {
-      // between last -> first across wrap
-      final a = pts.last;
-      final b = pts.first.copyWith(x: pts.first.x + 1.0);
-      return _catmullSegment(pts, a, b, t01 + 1.0);
-    }
-    if (i1 >= pts.length) {
-      // between last -> first
-      final a = pts.last;
-      final b = pts.first.copyWith(x: pts.first.x + 1.0);
-      return _catmullSegment(pts, a, b, t01 + 1.0);
-    }
-
-    final a = pts[i1 - 1];
-    final b = pts[i1];
-
-    return _catmullSegment(pts, a, b, t01);
   }
 
-  double _catmullSegment(List<LfoNode> pts, LfoNode a, LfoNode b, double t) {
-    // Local u in [0..1]
-    final dx = (b.x - a.x);
-    if (dx.abs() < 1e-9) return a.y.clamp(-1.0, 1.0).toDouble();
-    final u = ((t - a.x) / dx).clamp(0.0, 1.0).toDouble();
+  double _bulge(LfoNode a, LfoNode b, double t, double yLin) {
+    // bulgeAmt in [-2.5..2.5]
+    final amt = a.bulgeAmt.clamp(-2.5, 2.5).toDouble();
+    if (amt.abs() < 1e-6) return yLin.clamp(-1.0, 1.0).toDouble();
 
-    // For Catmull-Rom we need p0,p1,p2,p3:
-    // p1=a, p2=b, p0=prev(a), p3=next(b), with wrap.
-    LfoNode p1 = a;
-    LfoNode p2 = b;
+    // bias in [0..1] controls where the bulge peaks in the segment
+    final bias = a.bias.clamp(0.0, 1.0).toDouble();
 
-    LfoNode p0 = _prevPoint(pts, a);
-    LfoNode p3 = _nextPoint(pts, b);
+    // A smooth "bump" centered around bias
+    // peak at bias; 0 at ends.
+    final bump = _bump(t, bias);
 
-    // Convert into scalar y values; x spacing varies so we still do a
-    // standard Catmull-Rom on y only (good enough for editor feel).
-    final y0 = p0.y;
-    final y1 = p1.y;
-    final y2 = p2.y;
-    final y3 = p3.y;
-
-    // Catmull-Rom spline (uniform)
-    final u2 = u * u;
-    final u3 = u2 * u;
-
-    final y = 0.5 *
-        ((2.0 * y1) +
-            (-y0 + y2) * u +
-            (2.0 * y0 - 5.0 * y1 + 4.0 * y2 - y3) * u2 +
-            (-y0 + 3.0 * y1 - 3.0 * y2 + y3) * u3);
-
+    // scale bulge: amt is fairly strong, keep it sane
+    final y = yLin + (bump * (amt / 2.5));
     return y.clamp(-1.0, 1.0).toDouble();
   }
 
-  LfoNode _prevPoint(List<LfoNode> pts, LfoNode p) {
-    // find exact by x/y match in sorted list
-    final i = pts.indexWhere((x) => x.x == p.x && x.y == p.y);
-    if (i <= 0) {
-      // wrap to last, but shift x -1 so continuity works conceptually
-      final last = pts.last;
-      return last.copyWith(x: last.x - 1.0);
-    }
-    return pts[i - 1];
+  double _bend(LfoNode a, LfoNode b, double t, double yLin) {
+    final bias = a.bias.clamp(0.0, 1.0).toDouble();
+    final bendY = a.bendY.clamp(-1.0, 1.0).toDouble();
+
+    if (bendY.abs() < 1e-6) return yLin.clamp(-1.0, 1.0).toDouble();
+
+    // Bias the curve's "time" locally
+    final tb = _bias(t, bias);
+
+    // Then bend vertically but clamp between endpoints
+    final y = _lerp(a.y, b.y, tb) + (bendY * 0.35);
+    final lo = math.min(a.y, b.y);
+    final hi = math.max(a.y, b.y);
+    return y.clamp(lo, hi).clamp(-1.0, 1.0).toDouble();
   }
 
-  LfoNode _nextPoint(List<LfoNode> pts, LfoNode p) {
-    final i = pts.indexWhere((x) => x.x == p.x && x.y == p.y);
-    if (i < 0 || i >= pts.length - 1) {
-      // wrap to first, shift x +1
-      final first = pts.first;
-      return first.copyWith(x: first.x + 1.0);
-    }
-    return pts[i + 1];
+  // ---------------------------------------------------------------------------
+  // JSON
+  // ---------------------------------------------------------------------------
+
+  Map<String, dynamic> toJson() => {
+        'id': id,
+        'name': name,
+        'enabled': enabled,
+        'wave': wave.name,
+        'rateHz': rateHz,
+        'phase': phase,
+        'offset': offset,
+        'shapeMode': shapeMode.name,
+        'curveMode': curveMode.name,
+        'nodes': nodes.map((n) => n.toJson()).toList(),
+      };
+
+  static double _asDouble(dynamic v, double fallback) {
+    if (v is num) return v.toDouble();
+    return fallback;
   }
+
+  static bool _asBool(dynamic v, bool fallback) {
+    if (v is bool) return v;
+    return fallback;
+  }
+
+  static String _asString(dynamic v, String fallback) {
+    if (v is String) return v;
+    return fallback;
+  }
+
+  static T _enumByName<T extends Enum>(
+      List<T> values, String name, T fallback) {
+    for (final v in values) {
+      if (v.name == name) return v;
+    }
+    return fallback;
+  }
+
+  factory Lfo.fromJson(Map<String, dynamic> j) {
+    final nodesJson = j['nodes'];
+    final nodes = <LfoNode>[];
+    if (nodesJson is List) {
+      for (final it in nodesJson) {
+        if (it is Map<String, dynamic>) {
+          nodes.add(LfoNode.fromJson(it));
+        } else if (it is Map) {
+          nodes.add(LfoNode.fromJson(Map<String, dynamic>.from(it)));
+        }
+      }
+    }
+
+    nodes.sort((a, b) => a.x.compareTo(b.x));
+
+    return Lfo(
+      id: _asString(j['id'], ''),
+      name: _asString(j['name'], 'LFO'),
+      enabled: _asBool(j['enabled'], true),
+      wave: _enumByName(
+          LfoWave.values, _asString(j['wave'], 'sine'), LfoWave.sine),
+      rateHz: _asDouble(j['rateHz'], 0.25),
+      phase: _asDouble(j['phase'], 0.0).clamp(0.0, 1.0).toDouble(),
+      offset: _asDouble(j['offset'], 0.0).clamp(-1.0, 1.0).toDouble(),
+      shapeMode: _enumByName(
+        LfoShapeMode.values,
+        _asString(j['shapeMode'], 'wave'),
+        LfoShapeMode.wave,
+      ),
+      curveMode: _enumByName(
+        LfoCurveMode.values,
+        _asString(j['curveMode'], 'bulge'),
+        LfoCurveMode.bulge,
+      ),
+      nodes: nodes,
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Small math helpers (no dart:ui dependencies)
+// ---------------------------------------------------------------------------
+
+double _lerp(double a, double b, double t) => a + (b - a) * t;
+
+/// Bias function: bias=0.5 keeps linear. <0.5 pushes early, >0.5 pushes late.
+double _bias(double t, double bias) {
+  final b = bias.clamp(0.000001, 0.999999).toDouble();
+  final k = math.log(b) / math.log(0.5);
+  return math.pow(t, k).toDouble().clamp(0.0, 1.0);
+}
+
+/// Smooth bump in [0..1] with peak at `center` and 0 at ends.
+double _bump(double t, double center) {
+  final c = center.clamp(0.0, 1.0).toDouble();
+  // Two smoothsteps stitched together
+  if (t <= c) {
+    final u = (c <= 1e-9) ? 0.0 : (t / c);
+    return _smoothstep(u);
+  } else {
+    final denom = (1.0 - c);
+    final u = (denom <= 1e-9) ? 0.0 : ((1.0 - t) / denom);
+    return _smoothstep(u);
+  }
+}
+
+double _smoothstep(double t) {
+  final x = t.clamp(0.0, 1.0).toDouble();
+  return x * x * (3.0 - 2.0 * x);
 }

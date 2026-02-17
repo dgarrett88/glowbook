@@ -9,6 +9,7 @@ import '../state/canvas_controller.dart' as canvas_state;
 import '../../../core/models/canvas_layer.dart';
 import '../../../core/models/stroke.dart';
 import '../../../core/models/lfo.dart';
+import 'package:glowbook/core/models/lfo_route.dart';
 
 import 'widgets/synth_knob.dart';
 

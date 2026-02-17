@@ -177,6 +177,14 @@ class _MainMenuScreenState extends State<MainMenuScreen> {
     final newBundle = CanvasDocumentBundle(
       doc: newDoc,
       strokes: List.of(bundle.strokes),
+
+      // ✅ keep layered docs intact too
+      layers: bundle.layers == null ? null : List.of(bundle.layers!),
+      activeLayerId: bundle.activeLayerId,
+
+      // ✅ keep LFO state
+      lfos: bundle.lfos == null ? null : List.of(bundle.lfos!),
+      lfoRoutes: bundle.lfoRoutes == null ? null : List.of(bundle.lfoRoutes!),
     );
 
     await _storage.saveBundle(newBundle);

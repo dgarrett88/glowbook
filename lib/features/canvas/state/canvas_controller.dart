@@ -13,6 +13,7 @@ import '../../../core/models/stroke.dart';
 import '../../../core/models/lfo.dart'; // ✅ NEW
 import '../history/history_command.dart';
 import '../history/history_stack.dart';
+import 'package:glowbook/core/models/lfo_route.dart';
 
 import '../render/renderer.dart';
 import 'canvas_state.dart';
@@ -2381,6 +2382,8 @@ class CanvasController extends ChangeNotifier {
       offset: 0.0,
     ));
 
+    _hasUnsavedChanges = true; // ✅ ADD
+
     _ensureTickerState();
     _tick();
     notifyListeners();
@@ -2390,6 +2393,8 @@ class CanvasController extends ChangeNotifier {
   void removeLfo(String id) {
     _lfos.removeWhere((l) => l.id == id);
     _routes.removeWhere((r) => r.lfoId == id);
+
+    _hasUnsavedChanges = true; // ✅ ADD
 
     _ensureTickerState();
     _tick();
@@ -2403,6 +2408,8 @@ class CanvasController extends ChangeNotifier {
     if (trimmed.isEmpty) return;
 
     _lfos[i] = _lfos[i].copyWith(name: trimmed);
+
+    _hasUnsavedChanges = true; // ✅ ADD
     notifyListeners();
   }
 
@@ -2412,6 +2419,8 @@ class CanvasController extends ChangeNotifier {
 
     final item = _lfos.removeAt(oldIndex);
     _lfos.insert(newIndex, item);
+
+    _hasUnsavedChanges = true; // ✅ ADD
 
     _tick();
     notifyListeners();
@@ -2430,6 +2439,19 @@ class CanvasController extends ChangeNotifier {
     _ensureTickerState();
     _tick();
     notifyListeners();
+    _hasUnsavedChanges = true;
+  }
+
+  void setLfoCurveMode(String lfoId, LfoCurveMode mode) {
+    final i = _lfos.indexWhere((x) => x.id == lfoId);
+    if (i < 0) return;
+
+    final old = _lfos[i];
+    if (old.curveMode == mode) return;
+
+    _lfos[i] = old.copyWith(curveMode: mode);
+    notifyListeners(); // or your existing state update call
+    _hasUnsavedChanges = true;
   }
 
   void setLfoWave(String id, LfoWave wave) {
@@ -2439,6 +2461,7 @@ class CanvasController extends ChangeNotifier {
 
     _tick();
     notifyListeners();
+    _hasUnsavedChanges = true;
   }
 
   void setLfoRate(String id, double hz) {
@@ -2450,6 +2473,7 @@ class CanvasController extends ChangeNotifier {
     _ensureTickerState();
     _tick();
     notifyListeners();
+    _hasUnsavedChanges = true;
   }
 
   void setLfoPhase(String id, double phase01) {
@@ -2460,6 +2484,7 @@ class CanvasController extends ChangeNotifier {
 
     _tick();
     notifyListeners();
+    _hasUnsavedChanges = true;
   }
 
   void setLfoOffset(String id, double offset) {
@@ -2470,6 +2495,7 @@ class CanvasController extends ChangeNotifier {
 
     _tick();
     notifyListeners();
+    _hasUnsavedChanges = true;
   }
 
   // ---------------------------------------------------------------------------
@@ -2497,17 +2523,50 @@ class CanvasController extends ChangeNotifier {
     _ensureTickerState();
     _tick();
     notifyListeners();
+    _hasUnsavedChanges = true;
+  }
+
+  /// Back-compat for UI code that calls setLfoCurve().
+  /// This just forces curve mode and forwards to setLfoNodes().
+  void setLfoCurve(String id, List<LfoNode> nodes) {
+    final i = _lfos.indexWhere((l) => l.id == id);
+    if (i < 0) return;
+
+    // sanitize + sort (same as setLfoNodes)
+    final cleaned = nodes
+        .map((n) => LfoNode(
+              n.x.clamp(0.0, 1.0).toDouble(),
+              n.y.clamp(-1.0, 1.0).toDouble(),
+              bias: n.bias.clamp(0.0, 1.0).toDouble(),
+              bulgeAmt: n.bulgeAmt.clamp(-2.5, 2.5).toDouble(),
+              bendY: n.bendY.clamp(-1.0, 1.0).toDouble(),
+            ))
+        .toList()
+      ..sort((a, b) => a.x.compareTo(b.x));
+
+    _lfos[i] = _lfos[i].copyWith(
+      shapeMode: LfoShapeMode.curve,
+      nodes: cleaned,
+    );
+
+    _ensureTickerState();
+    _tick();
+    notifyListeners();
+    _hasUnsavedChanges = true;
   }
 
   void setLfoNodes(String id, List<LfoNode> nodes) {
     final i = _lfos.indexWhere((l) => l.id == id);
     if (i < 0) return;
 
-    // sanitize
+    // sanitize (KEEP handle data)
     final cleaned = nodes
         .map((n) => LfoNode(
               n.x.clamp(0.0, 1.0).toDouble(),
               n.y.clamp(-1.0, 1.0).toDouble(),
+              bias: n.bias.clamp(0.0, 1.0).toDouble(),
+              bulgeAmt: n.bulgeAmt.clamp(-2.5, 2.5).toDouble(),
+              bendY: n.bendY.clamp(-1.0, 1.0).toDouble(),
             ))
         .toList()
       ..sort((a, b) => a.x.compareTo(b.x));
@@ -2516,6 +2575,7 @@ class CanvasController extends ChangeNotifier {
     _ensureTickerState();
     _tick();
     notifyListeners();
+    _hasUnsavedChanges = true;
   }
 
   /// Add a node at a normalized position.
@@ -2537,6 +2597,7 @@ class CanvasController extends ChangeNotifier {
     _ensureTickerState();
     _tick();
     notifyListeners();
+    _hasUnsavedChanges = true;
 
     return nodes
         .indexWhere((n) => (n.x - nx).abs() < 1e-9 && (n.y - ny).abs() < 1e-9);
@@ -2563,6 +2624,7 @@ class CanvasController extends ChangeNotifier {
     _ensureTickerState();
     _tick();
     notifyListeners();
+    _hasUnsavedChanges = true;
   }
 
   void removeLfoNode(String id, int index) {
@@ -2582,6 +2644,7 @@ class CanvasController extends ChangeNotifier {
     _ensureTickerState();
     _tick();
     notifyListeners();
+    _hasUnsavedChanges = true;
   }
 
   String addRouteToLayer(
@@ -2613,6 +2676,7 @@ class CanvasController extends ChangeNotifier {
     _ensureTickerState();
     _tick();
     notifyListeners();
+    _hasUnsavedChanges = true;
     return id;
   }
 
@@ -2627,6 +2691,7 @@ class CanvasController extends ChangeNotifier {
     _ensureTickerState();
     _tick();
     notifyListeners();
+    _hasUnsavedChanges = true;
   }
 
   void setRouteEnabled(String routeId, bool enabled) {
@@ -2653,6 +2718,7 @@ class CanvasController extends ChangeNotifier {
     _ensureTickerState();
     _tick();
     notifyListeners();
+    _hasUnsavedChanges = true;
   }
 
   void setRouteLayer(String routeId, String layerId) {
@@ -2675,6 +2741,7 @@ class CanvasController extends ChangeNotifier {
 
     _tick();
     notifyListeners();
+    _hasUnsavedChanges = true;
   }
 
   void setRouteAmount(String routeId, double amount) {
@@ -2726,6 +2793,7 @@ class CanvasController extends ChangeNotifier {
 
     _tick();
     notifyListeners();
+    _hasUnsavedChanges = true;
   }
 
   void setRouteParam(String routeId, LfoParam param) {
@@ -2749,6 +2817,7 @@ class CanvasController extends ChangeNotifier {
 
     _tick();
     notifyListeners();
+    _hasUnsavedChanges = true;
   }
 
   void setRouteBipolar(String routeId, bool bipolar) {
@@ -2759,6 +2828,7 @@ class CanvasController extends ChangeNotifier {
 
     _tick();
     notifyListeners();
+    _hasUnsavedChanges = true;
   }
 
   LfoRoute? findRouteForLayerParam(String layerId, LfoParam param) {
@@ -2802,6 +2872,7 @@ class CanvasController extends ChangeNotifier {
     _ensureTickerState();
     _tick();
     notifyListeners();
+    _hasUnsavedChanges = true;
     return id;
   }
 
@@ -2816,6 +2887,7 @@ class CanvasController extends ChangeNotifier {
     _ensureTickerState();
     _tick();
     notifyListeners();
+    _hasUnsavedChanges = true;
   }
 
 // ---------------------------------------------------------------------------
@@ -2850,6 +2922,7 @@ class CanvasController extends ChangeNotifier {
     _ensureTickerState();
     _tick();
     notifyListeners();
+    _hasUnsavedChanges = true;
   }
 
   String upsertRouteForStrokeParam({
@@ -2879,6 +2952,8 @@ class CanvasController extends ChangeNotifier {
     _ensureTickerState();
     _tick();
     notifyListeners();
+    _hasUnsavedChanges = true;
+
     return id;
   }
 
@@ -3528,6 +3603,7 @@ class CanvasController extends ChangeNotifier {
   void loadFromBundle(CanvasDocumentBundle bundle) {
     final hasLayers = bundle.layers != null && bundle.layers!.isNotEmpty;
 
+    // ---- 1) Restore core canvas state (layers/strokes) ----
     if (hasLayers) {
       final restoredLayers = List<CanvasLayer>.from(bundle.layers!);
 
@@ -3551,12 +3627,21 @@ class CanvasController extends ChangeNotifier {
 
     _current = null;
     _activePointerId = null;
-    _hasUnsavedChanges = false;
 
+    // ---- 2) Restore per-document LFO state FIRST (so pivots/renderer see it) ----
+    _lfos
+      ..clear()
+      ..addAll(bundle.lfos ?? const []);
+
+    _routes
+      ..clear()
+      ..addAll(bundle.lfoRoutes ?? const []);
+
+    // ---- 3) Clear selection + history for a freshly loaded doc ----
     clearSelection();
-
     _rebuildHistoryFromState();
 
+    // ---- 4) Restore background ----
     final bg = bundle.doc.background;
     if (bg.type == doc_model.BackgroundType.solid &&
         bg.params['color'] is int) {
@@ -3567,19 +3652,24 @@ class CanvasController extends ChangeNotifier {
       _hasCustomBackground = false;
     }
 
+    // ---- 5) Restore blend mode without flagging as dirty ----
     _suppressBlendDirty = true;
     final key = bundle.doc.blendModeKey;
     final mode = gb.glowBlendFromKey(key);
     gb.GlowBlendState.I.setMode(mode);
 
-    // ✅ ensure pivots for any layer that effectively needs them (base OR LFO/constant)
+    // ---- 6) Ensure pivots AFTER LFO restore (because LFO routes affect "needs pivot") ----
     for (final l in _state.layers) {
       _ensureLayerPivot(l.id);
     }
 
+    // ---- 7) Rebuild renderer + ticker state ----
     _rebuildRendererSafe();
-
     _ensureTickerState();
+
+    // ---- 8) Loaded docs start "clean" ----
+    _hasUnsavedChanges = false;
+
     _tick();
     notifyListeners();
   }

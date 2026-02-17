@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'widgets/lfo_visual_editor.dart';
 
 import '../state/canvas_controller.dart' as canvas_state;
+import '../state/lfo_editor_types.dart';
 import '../../../core/models/canvas_layer.dart';
 import '../../../core/models/lfo.dart';
 
@@ -231,6 +232,23 @@ class _LfoTile extends ConsumerWidget {
   final ValueChanged<bool> onAnyKnobInteraction;
   final VoidCallback onAnyKnobValueChanged;
 
+  /// Convert core LFO curve -> shared editor nodes (x 0..1, y -1..1).
+  List<LfoEditorNode>? _toEditorNodes(Lfo lfo) {
+    if (lfo.shapeMode != LfoShapeMode.curve) return null;
+    if (lfo.nodes.isEmpty) return null;
+
+    return lfo.nodes.map((n) {
+      return LfoEditorNode(
+        x: n.x.clamp(0.0, 1.0),
+        y: n.y.clamp(-1.0, 1.0),
+        bias: n.bias.clamp(0.0, 1.0),
+        // core: -2.5..2.5, shared contract: -1..1
+        bulgeAmt: (n.bulgeAmt / 2.5).clamp(-1.0, 1.0),
+        bendY: n.bendY.clamp(-1.0, 1.0),
+      );
+    }).toList(growable: false);
+  }
+
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final controller = ref.watch(canvas_state.canvasControllerProvider);
@@ -288,6 +306,9 @@ class _LfoTile extends ConsumerWidget {
         child: row,
       );
     }
+
+    final initialMode =
+        (lfo.curveMode == LfoCurveMode.bend) ? CurveMode.bend : CurveMode.bulge;
 
     return Container(
       margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
@@ -371,17 +392,48 @@ class _LfoTile extends ConsumerWidget {
             ],
           ),
 
-          // ✅ Expanded content: the Vital-ish visual editor
+          // Expanded content: the visual editor (persisted)
           if (isExpanded)
             Padding(
               padding: const EdgeInsets.fromLTRB(10, 8, 10, 10),
               child: SizedBox(
-                height: 220, // ✅ gives it proper space
+                height: 220,
                 width: double.infinity,
                 child: LfoVisualEditor(
                   lfoId: lfo.id,
-                  onInteractionChanged:
-                      onAnyKnobInteraction, // ✅ reuse your existing scroll lock
+                  onInteractionChanged: onAnyKnobInteraction,
+
+                  // LOAD persisted curve
+                  initialMode: initialMode,
+                  initialNodes: _toEditorNodes(lfo),
+
+                  // SAVE curve edits (persist into controller)
+                  onCurveChanged: (curve) {
+                    // Convert editor nodes -> core nodes.
+                    final coreNodes = curve.nodes.map((n) {
+                      return LfoNode(
+                        n.x.clamp(0.0, 1.0),
+                        n.y.clamp(-1.0, 1.0),
+                        bias: n.bias.clamp(0.0, 1.0),
+                        // shared contract: -1..1  -> core: -2.5..2.5
+                        bulgeAmt: (n.bulgeAmt.clamp(-1.0, 1.0) * 2.5),
+                        bendY: n.bendY.clamp(-1.0, 1.0),
+                      );
+                    }).toList(growable: false);
+
+                    controller.setLfoNodes(lfo.id, coreNodes);
+
+                    // Once user edits a curve, force curve mode so reopening shows it.
+                    controller.setLfoShapeMode(lfo.id, LfoShapeMode.curve);
+
+                    // Persist curve mode too (bulge/bend)
+                    controller.setLfoCurveMode(
+                      lfo.id,
+                      (curve.mode == CurveMode.bend)
+                          ? LfoCurveMode.bend
+                          : LfoCurveMode.bulge,
+                    );
+                  },
                 ),
               ),
             ),

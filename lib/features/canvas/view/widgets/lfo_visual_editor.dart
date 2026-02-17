@@ -5,31 +5,43 @@ import 'dart:ui' show lerpDouble;
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 
+import '../../state/lfo_editor_types.dart';
+
 class LfoVisualEditor extends StatefulWidget {
   const LfoVisualEditor({
     super.key,
     required this.lfoId,
     this.onInteractionChanged,
+
+    // persisted curve
+    this.initialMode = CurveMode.bulge,
+    this.initialNodes,
+
+    // persist curve changes to controller
+    this.onCurveChanged,
   });
 
   final String lfoId;
   final ValueChanged<bool>? onInteractionChanged;
 
+  /// Shared types:
+  /// - x 0..1
+  /// - y -1..1
+  final CurveMode initialMode;
+  final List<LfoEditorNode>? initialNodes;
+
+  final ValueChanged<LfoEditorCurve>? onCurveChanged;
+
   @override
   State<LfoVisualEditor> createState() => _LfoVisualEditorState();
 }
 
-/// Two curvature styles:
-/// - Bulge: your “rounding / overshoot vibe” using a bulge amount.
-/// - Bend: “Vital-ish bend handle” (bias X + bend Y clamped between endpoints).
-enum CurveMode { bulge, bend }
-
 class _LfoNode {
-  Offset p;
+  Offset p; // internal normalized editor space: x 0..1, y 0..1
 
   double bias; // 0.0..1.0 (segment-local X position of handle)
-  double bulgeAmt; // -2.5..2.5 (bulge strength)
-  double bendY; // clamped between endpoints in Bend mode
+  double bulgeAmt; // internal: -2.5..2.5
+  double bendY; // internal: 0..1
 
   _LfoNode(
     this.p, {
@@ -39,7 +51,7 @@ class _LfoNode {
   }) : bendY = bendY ?? p.dy;
 }
 
-enum _DragKind { none, node, handleAmt, handleCurve } // ✅ NEW handleCurve
+enum _DragKind { none, node, handleAmt, handleCurve }
 
 class _Hit {
   final bool isNode;
@@ -49,12 +61,11 @@ class _Hit {
 }
 
 class _LfoVisualEditorState extends State<LfoVisualEditor> {
-  CurveMode _mode = CurveMode.bulge;
+  late CurveMode _mode;
+  bool _lockedOrder = true; // default ON
+  bool _linkEndpoints = false; // endpoints move independently by default
 
-  final List<_LfoNode> _nodes = <_LfoNode>[
-    _LfoNode(const Offset(0.0, 1.0), bendY: 1.0),
-    _LfoNode(const Offset(1.0, 1.0), bendY: 1.0),
-  ];
+  late List<_LfoNode> _nodes;
 
   int? _selectedIndex;
 
@@ -63,25 +74,66 @@ class _LfoVisualEditorState extends State<LfoVisualEditor> {
 
   static const double _nodeHitRadiusPx = 28.0;
   static const double _handleHitRadiusPx = 24.0;
+  static const double _endNodeHitRadiusPx = 35.0;
+
+  // Graph padding so nodes/handles stay fully visible & easy to grab.
+  static const double _graphPadPx = 8.0;
+
+  static const double _bottomAssistZonePx = 26.0;
+  static const double _bottomAssistBoostPx = 22.0;
 
   // Visuals
   static const double _nodeRadius = 8.0; // parent nodes
-  static const double _handleRadius = 5.0; // same as nodes = center alignment
+  static const double _handleRadius = 5.0;
   static const double _strokeWidth = 3.0;
 
   static const int _curveResolution = 140;
 
   // --- LONG PRESS CURVE DRAG ---
   static const Duration _longPressDelay = Duration(milliseconds: 100);
-  static const double _curveDragSensitivity = .2; // tweak feel
+  static const double _curveDragSensitivity = .2;
 
   Timer? _lpTimer;
-  bool _lpArmed = false; // we are waiting to see if it becomes a long press
-  bool _lpActive = false; // long press triggered (curve mode)
+  bool _lpArmed = false;
+  bool _lpActive = false;
   Offset? _lpStartLocal;
   double? _lpStartBulge;
   double? _lpStartBendY;
   int? _lpSeg;
+
+  @override
+  void initState() {
+    super.initState();
+
+    _mode = widget.initialMode;
+
+    final init = widget.initialNodes;
+    if (init != null && init.length >= 2) {
+      _nodes = init.map((n) {
+        // shared y (-1..1) -> internal y01 (0..1, top=0)
+        final y01 = ((-n.y + 1.0) * 0.5).clamp(0.0, 1.0);
+        final bend01 = ((-n.bendY + 1.0) * 0.5).clamp(0.0, 1.0);
+
+        return _LfoNode(
+          Offset(n.x.clamp(0.0, 1.0), y01),
+          bias: n.bias.clamp(0.0, 1.0),
+          // shared bulge (-1..1) -> internal (-2.5..2.5)
+          bulgeAmt: (n.bulgeAmt.clamp(-1.0, 1.0) * 2.5),
+          bendY: bend01,
+        );
+      }).toList();
+    } else {
+      _nodes = <_LfoNode>[
+        _LfoNode(const Offset(0.0, 1.0), bendY: 1.0),
+        _LfoNode(const Offset(1.0, 1.0), bendY: 1.0),
+      ];
+    }
+
+    _ensureSortedAndSafe();
+
+    // Emit once on load so controller can “adopt” the curve if needed.
+    _emitCurve();
+  }
 
   @override
   void dispose() {
@@ -89,17 +141,54 @@ class _LfoVisualEditorState extends State<LfoVisualEditor> {
     super.dispose();
   }
 
+  static Rect _graphRectFor(Size size) {
+    final padX = _graphPadPx + _nodeRadius + 2.0;
+    final padTop = _graphPadPx + _nodeRadius + 2.0;
+    final padBottom = _graphPadPx + _nodeRadius + 2.0;
+
+    return Rect.fromLTWH(
+      padX,
+      padTop,
+      math.max(1.0, size.width - padX * 2),
+      math.max(1.0, size.height - padTop - padBottom),
+    );
+  }
+
+  Rect _graphRect(Size size) => _graphRectFor(size);
+
+  void _emitCurve() {
+    final cb = widget.onCurveChanged;
+    if (cb == null) return;
+
+    final nodes = _nodes.map((n) {
+      // internal y01 -> shared y (-1..1)
+      final y = (1.0 - (n.p.dy.clamp(0.0, 1.0) * 2.0)).clamp(-1.0, 1.0);
+      final bendY = (1.0 - (n.bendY.clamp(0.0, 1.0) * 2.0)).clamp(-1.0, 1.0);
+
+      return LfoEditorNode(
+        x: n.p.dx.clamp(0.0, 1.0),
+        y: y,
+        bias: n.bias.clamp(0.0, 1.0),
+        // internal (-2.5..2.5) -> shared (-1..1)
+        bulgeAmt: (n.bulgeAmt / 2.5).clamp(-1.0, 1.0),
+        bendY: bendY,
+      );
+    }).toList(growable: false);
+
+    cb(LfoEditorCurve(mode: _mode, nodes: nodes));
+  }
+
   @override
   Widget build(BuildContext context) {
     return LayoutBuilder(
       builder: (context, c) {
-        final size = Size(c.maxWidth, c.maxHeight);
-
         return Column(
           mainAxisSize: MainAxisSize.min,
           children: [
             _TopBar(
               mode: _mode,
+              lockedOrder: _lockedOrder,
+              linkEndpoints: _linkEndpoints,
               onToggleMode: () {
                 setState(() {
                   _mode = (_mode == CurveMode.bulge)
@@ -107,70 +196,92 @@ class _LfoVisualEditorState extends State<LfoVisualEditor> {
                       : CurveMode.bulge;
                   _ensureSortedAndSafe();
                 });
+                _emitCurve();
+              },
+              onToggleLockedOrder: () {
+                setState(() {
+                  _lockedOrder = !_lockedOrder;
+                  _ensureSortedAndSafe();
+                });
+                _emitCurve();
+              },
+              onToggleLinkEndpoints: () {
+                setState(() {
+                  _linkEndpoints = !_linkEndpoints;
+                  if (_linkEndpoints) {
+                    final y = _nodes.first.p.dy;
+                    _nodes.first.p = Offset(0.0, y);
+                    _nodes.last.p = Offset(1.0, y);
+                  }
+                });
+                _emitCurve();
               },
             ),
             Expanded(
-              child: ClipRRect(
-                borderRadius:
-                    const BorderRadius.vertical(bottom: Radius.circular(12)),
-                child: DecoratedBox(
-                  decoration: BoxDecoration(
-                    color: const Color(0xFF0F0F18),
-                    border: Border.all(color: Colors.white10),
-                    borderRadius: const BorderRadius.vertical(
-                      bottom: Radius.circular(12),
-                    ),
-                  ),
-                  child: Listener(
-                    behavior: HitTestBehavior.opaque,
-                    onPointerDown: (e) {
-                      widget.onInteractionChanged?.call(true);
+              child: LayoutBuilder(
+                builder: (context, gc) {
+                  final graphSize = Size(gc.maxWidth, gc.maxHeight);
 
-                      final hit = _hitTest(e.localPosition, size);
-                      if (hit == null) {
-                        _cancelLongPress();
-                        setState(() {
+                  return ClipRRect(
+                    borderRadius: const BorderRadius.vertical(
+                        bottom: Radius.circular(12)),
+                    child: DecoratedBox(
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF0F0F18),
+                        border: Border.all(color: Colors.white10),
+                        borderRadius: const BorderRadius.vertical(
+                            bottom: Radius.circular(12)),
+                      ),
+                      child: Listener(
+                        behavior: HitTestBehavior.opaque,
+                        onPointerDown: (e) {
+                          widget.onInteractionChanged?.call(true);
+
+                          final hit = _hitTest(e.localPosition, graphSize);
+                          if (hit == null) {
+                            _cancelLongPress();
+                            setState(() {
+                              _dragKind = _DragKind.none;
+                              _dragIndex = null;
+                            });
+                            return;
+                          }
+
+                          if (hit.isNode) {
+                            _cancelLongPress();
+                            setState(() {
+                              _selectedIndex = hit.index;
+                              _dragKind = _DragKind.node;
+                              _dragIndex = hit.index;
+                            });
+                          } else {
+                            _armLongPressForSegment(hit.index, e.localPosition);
+                            setState(() {
+                              _selectedIndex = null;
+                              _dragKind = _DragKind.handleAmt;
+                              _dragIndex = hit.index;
+                            });
+                          }
+                        },
+                        onPointerUp: (_) {
+                          _cancelLongPress();
                           _dragKind = _DragKind.none;
                           _dragIndex = null;
-                        });
-                        return;
-                      }
-
-                      if (hit.isNode) {
-                        _cancelLongPress();
-                        setState(() {
-                          _selectedIndex = hit.index;
-                          _dragKind = _DragKind.node;
-                          _dragIndex = hit.index;
-                        });
-                      } else {
-                        // ✅ segment handle pressed: arm long-press curve drag
-                        _armLongPressForSegment(hit.index, e.localPosition);
-
-                        setState(() {
-                          _selectedIndex = null;
-                          _dragKind = _DragKind.handleAmt;
-                          _dragIndex = hit.index; // seg index
-                        });
-                      }
-                    },
-                    onPointerUp: (_) {
-                      _cancelLongPress();
-                      _dragKind = _DragKind.none;
-                      _dragIndex = null;
-                      widget.onInteractionChanged?.call(false);
-                      setState(() {});
-                    },
-                    onPointerCancel: (_) {
-                      _cancelLongPress();
-                      _dragKind = _DragKind.none;
-                      _dragIndex = null;
-                      widget.onInteractionChanged?.call(false);
-                      setState(() {});
-                    },
-                    child: _buildGestures(size),
-                  ),
-                ),
+                          widget.onInteractionChanged?.call(false);
+                          setState(() {});
+                        },
+                        onPointerCancel: (_) {
+                          _cancelLongPress();
+                          _dragKind = _DragKind.none;
+                          _dragIndex = null;
+                          widget.onInteractionChanged?.call(false);
+                          setState(() {});
+                        },
+                        child: _buildGestures(graphSize),
+                      ),
+                    ),
+                  );
+                },
               ),
             ),
           ],
@@ -186,7 +297,6 @@ class _LfoVisualEditorState extends State<LfoVisualEditor> {
     _lpStartLocal = local;
     _lpSeg = seg;
 
-    // capture starting value so we adjust relative
     if (seg >= 0 && seg < _nodes.length - 1) {
       _lpStartBulge = _nodes[seg].bulgeAmt;
       _lpStartBendY = _nodes[seg].bendY;
@@ -197,10 +307,9 @@ class _LfoVisualEditorState extends State<LfoVisualEditor> {
 
     _lpTimer = Timer(_longPressDelay, () {
       if (!_lpArmed) return;
-      // trigger curve drag mode
       _lpActive = true;
       setState(() {
-        _dragKind = _DragKind.handleCurve; // ✅ switch mode
+        _dragKind = _DragKind.handleCurve;
         _dragIndex = _lpSeg;
       });
     });
@@ -226,6 +335,7 @@ class _LfoVisualEditorState extends State<LfoVisualEditor> {
       onDoubleTapDown: (d) {
         final hit = _hitTest(d.localPosition, size);
 
+        // remove node
         if (hit != null && hit.isNode) {
           final idx = hit.index;
           if (idx == 0 || idx == _nodes.length - 1) return;
@@ -237,9 +347,11 @@ class _LfoVisualEditorState extends State<LfoVisualEditor> {
             _dragIndex = null;
             _ensureSortedAndSafe();
           });
+          _emitCurve();
           return;
         }
 
+        // add node
         final n = _toNorm(d.localPosition, size);
         final p = Offset(_clamp01(n.dx), _clamp01(n.dy));
         if (p.dx < 0.02 || p.dx > 0.98) return;
@@ -249,6 +361,7 @@ class _LfoVisualEditorState extends State<LfoVisualEditor> {
           _ensureSortedAndSafe();
           _selectedIndex = _closestNodeIndex(p);
         });
+        _emitCurve();
       },
 
       onPanStart: (d) {
@@ -283,33 +396,55 @@ class _LfoVisualEditorState extends State<LfoVisualEditor> {
           }
         }
 
-        // -----------------------
         // NODE DRAG
-        // -----------------------
         if (_dragKind == _DragKind.node) {
           final n = _toNorm(d.localPosition, size);
-          var next = Offset(_clamp01(n.dx), _clamp01(n.dy));
+          final next = Offset(_clamp01(n.dx), _clamp01(n.dy));
 
-          // endpoints: lock X but free Y
-          if (idx == 0) next = Offset(0.0, next.dy);
-          if (idx == _nodes.length - 1) next = Offset(1.0, next.dy);
-
-          _nodes[idx].p = next;
-
-          if (idx != 0 && idx != _nodes.length - 1) {
-            _ensureSortedAndSafe();
-            final newIdx = _closestNodeIndex(next);
-            _dragIndex = newIdx;
-            _selectedIndex = newIdx;
+          // start endpoint
+          if (idx == 0) {
+            final dy = _clampNodeY(next.dy);
+            _nodes[0].p = Offset(0.0, dy);
+            if (_linkEndpoints) _nodes.last.p = Offset(1.0, dy);
+            setState(() {});
+            _emitCurve();
+            return;
           }
 
+          // end endpoint
+          if (idx == _nodes.length - 1) {
+            final dy = _clampNodeY(next.dy);
+            _nodes.last.p = Offset(1.0, dy);
+            if (_linkEndpoints) _nodes[0].p = Offset(0.0, dy);
+            setState(() {});
+            _emitCurve();
+            return;
+          }
+
+          // locked order
+          if (_lockedOrder) {
+            final leftX = _nodes[idx - 1].p.dx;
+            final rightX = _nodes[idx + 1].p.dx;
+            final clampedX = next.dx.clamp(leftX, rightX);
+            _nodes[idx].p = Offset(clampedX, next.dy);
+            setState(() {});
+            _emitCurve();
+            return;
+          }
+
+          // free order
+          _nodes[idx].p = next;
+          _ensureSortedAndSafe();
+          final newIdx = _closestNodeIndex(next);
+          _dragIndex = newIdx;
+          _selectedIndex = newIdx;
+
           setState(() {});
+          _emitCurve();
           return;
         }
 
-        // -----------------------
         // LONG PRESS CURVE DRAG
-        // -----------------------
         if (_dragKind == _DragKind.handleCurve) {
           final seg = idx;
           if (seg < 0 || seg >= _nodes.length - 1) return;
@@ -318,8 +453,6 @@ class _LfoVisualEditorState extends State<LfoVisualEditor> {
           if (start == null) return;
 
           final dyPx = d.localPosition.dy - start.dy;
-
-          // Drag up => more curve (Vital-ish)
           final delta = (-dyPx / (size.height <= 0 ? 1.0 : size.height)) *
               _curveDragSensitivity;
 
@@ -330,7 +463,6 @@ class _LfoVisualEditorState extends State<LfoVisualEditor> {
               _nodes[seg].bulgeAmt = nextAmt;
             });
           } else {
-            // Bend mode: adjust bendY within endpoints
             final a = _nodes[seg];
             final b = _nodes[seg + 1];
             final minY = math.min(a.p.dy, b.p.dy);
@@ -343,12 +475,12 @@ class _LfoVisualEditorState extends State<LfoVisualEditor> {
               a.bendY = nextY;
             });
           }
+
+          _emitCurve();
           return;
         }
 
-        // -----------------------
         // NORMAL HANDLE DRAG (bias + amt/bendY)
-        // -----------------------
         if (_dragKind == _DragKind.handleAmt) {
           final seg = idx;
           if (seg < 0 || seg >= _nodes.length - 1) return;
@@ -362,15 +494,13 @@ class _LfoVisualEditorState extends State<LfoVisualEditor> {
           final x1 = b.p.dx;
           final spanX = (x1 - x0).abs() < 1e-9 ? 1e-9 : (x1 - x0);
 
-          // ✅ THIS is the “padding between parent nodes” you meant:
-          // allow the handle to actually reach the segment endpoints.
           const edge = 0.0;
-
           final xClamped =
               n.dx.clamp(math.min(x0, x1) + edge, math.max(x0, x1) - edge);
 
-          // ✅ allow near-0 / near-1 so it can visually line up with parent node X
-          final bias = ((xClamped - x0) / spanX).clamp(0.001, 0.999).toDouble();
+          final rawBias =
+              ((xClamped - x0) / spanX).clamp(0.001, 0.999).toDouble();
+          final bias = _clampBiasPxSafe(seg, size, rawBias);
 
           if (_mode == CurveMode.bend) {
             final minY = math.min(a.p.dy, b.p.dy);
@@ -391,6 +521,8 @@ class _LfoVisualEditorState extends State<LfoVisualEditor> {
               a.bulgeAmt = amt.clamp(-2.5, 2.5).toDouble();
             });
           }
+
+          _emitCurve();
           return;
         }
       },
@@ -418,35 +550,59 @@ class _LfoVisualEditorState extends State<LfoVisualEditor> {
     );
   }
 
-  // ----------------------------
   // hit testing
-  // ----------------------------
 
   _Hit? _hitTest(Offset local, Size size) {
+    // 0) If you're actually on a node, the node wins.
     for (int i = 0; i < _nodes.length; i++) {
-      final hp = _toLocal(_nodes[i].p, size);
-      if ((hp - local).distance <= _nodeHitRadiusPx) return _Hit.node(i);
+      final np = _toLocal(_nodes[i].p, size);
+      final r = (i == 0 || i == _nodes.length - 1) ? 18.0 : 16.0;
+      if ((np - local).distance <= r) return _Hit.node(i);
     }
 
+    // 1) Handles first
     for (int i = 0; i < _nodes.length - 1; i++) {
+      const epsX = 0.0005;
+      if ((_nodes[i].p.dx - _nodes[i + 1].p.dx).abs() <= epsX) continue;
+
       final hp = _handleLocalForSegment(i, size);
-      if ((hp - local).distance <= _handleHitRadiusPx) return _Hit.handle(i);
+      var r = _handleHitRadiusPx;
+
+      if ((size.height - hp.dy) <= _bottomAssistZonePx) {
+        r += _bottomAssistBoostPx;
+      }
+
+      if ((hp - local).distance <= r) return _Hit.handle(i);
     }
+
+    // 2) Nodes fallback (bigger hit for endpoints)
+    for (int i = 0; i < _nodes.length; i++) {
+      final hp = _toLocal(_nodes[i].p, size);
+
+      double r = (i == 0 || i == _nodes.length - 1)
+          ? _endNodeHitRadiusPx
+          : _nodeHitRadiusPx;
+
+      if ((size.height - hp.dy) <= _bottomAssistZonePx) {
+        r += _bottomAssistBoostPx;
+      }
+
+      if ((hp - local).distance <= r) return _Hit.node(i);
+    }
+
     return null;
   }
 
   Offset _handleLocalForSegment(int seg, Size size) {
     final h = _handleNormForSegment(seg);
-    return Offset(h.dx * size.width, h.dy * size.height);
+    return _toLocal(h, size);
   }
 
   Offset _handleNormForSegment(int seg) {
     final a = _nodes[seg];
     final b = _nodes[seg + 1];
 
-    // ✅ render handle exactly where math says it is
     final bias = a.bias.clamp(0.001, 0.999);
-
     final xH = lerpDouble(a.p.dx, b.p.dx, bias)!.clamp(0.0, 1.0);
 
     if (_mode == CurveMode.bend) {
@@ -483,7 +639,6 @@ class _LfoVisualEditorState extends State<LfoVisualEditor> {
     _nodes.first.p = Offset(0.0, _nodes.first.p.dy);
     _nodes.last.p = Offset(1.0, _nodes.last.p.dy);
 
-    // keep internal x ordered (still stable)
     for (int i = 1; i < _nodes.length - 1; i++) {
       final prevX = _nodes[i - 1].p.dx;
       final nextX = _nodes[i + 1].p.dx;
@@ -494,7 +649,6 @@ class _LfoVisualEditorState extends State<LfoVisualEditor> {
     }
 
     for (int i = 0; i < _nodes.length - 1; i++) {
-      // ✅ keep consistent with the new “can reach endpoints” behaviour
       _nodes[i].bias = _nodes[i].bias.clamp(0.001, 0.999);
       _nodes[i].bulgeAmt = _nodes[i].bulgeAmt.clamp(-2.5, 2.5);
 
@@ -506,20 +660,41 @@ class _LfoVisualEditorState extends State<LfoVisualEditor> {
     }
   }
 
-  // ----------------------------
   // coordinate helpers
-  // ----------------------------
 
   Offset _toNorm(Offset local, Size size) {
-    final w = size.width <= 0 ? 1.0 : size.width;
-    final h = size.height <= 0 ? 1.0 : size.height;
-    return Offset(local.dx / w, local.dy / h);
+    final r = _graphRect(size);
+
+    final dx = (local.dx - r.left) / (r.width <= 0 ? 1.0 : r.width);
+    final dy = (local.dy - r.top) / (r.height <= 0 ? 1.0 : r.height);
+
+    return Offset(dx, dy);
   }
 
-  Offset _toLocal(Offset norm, Size size) =>
-      Offset(norm.dx * size.width, norm.dy * size.height);
+  Offset _toLocal(Offset norm, Size size) {
+    final r = _graphRect(size);
+    return Offset(
+      r.left + norm.dx * r.width,
+      r.top + norm.dy * r.height,
+    );
+  }
 
   double _clamp01(double v) => v.clamp(0.0, 1.0);
+  double _clampNodeY(double y) => y.clamp(0.0, 1.0);
+
+  double _clampBiasPxSafe(int seg, Size size, double bias) {
+    final aPx = _toLocal(_nodes[seg].p, size);
+    final bPx = _toLocal(_nodes[seg + 1].p, size);
+    final segLen = (bPx - aPx).distance;
+
+    const gap = 6.0;
+    final minDistPx = _nodeRadius + _handleRadius + gap;
+
+    if (segLen <= 1.0) return 0.5;
+
+    final minT = (minDistPx / segLen).clamp(0.001, 0.45).toDouble();
+    return bias.clamp(minT, 1.0 - minT).toDouble();
+  }
 
   double _tanh(double x) {
     final ex = math.exp(x);
@@ -542,9 +717,7 @@ class _LfoVisualEditorState extends State<LfoVisualEditor> {
     return mid + t * half;
   }
 
-  // ----------------------------
-  // Bulge sampling (segment-local)
-  // ----------------------------
+  // Bulge sampling
 
   double _segmentSampleYBulge(int seg, double t) {
     final a = _nodes[seg];
@@ -595,31 +768,34 @@ class _LfoEditorPainter extends CustomPainter {
 
   @override
   void paint(Canvas canvas, Size size) {
+    final r = _LfoVisualEditorState._graphRectFor(size);
+
+    Offset toPx(Offset n) => Offset(
+          r.left + n.dx * r.width,
+          r.top + n.dy * r.height,
+        );
+
     final gridPaint = Paint()
       ..color = Colors.white.withValues(alpha: 0.06)
       ..strokeWidth = 1;
 
     for (int i = 1; i < 8; i++) {
-      final x = size.width * (i / 8);
-      canvas.drawLine(Offset(x, 0), Offset(x, size.height), gridPaint);
+      final x = r.left + r.width * (i / 8);
+      canvas.drawLine(Offset(x, r.top), Offset(x, r.bottom), gridPaint);
     }
     for (int i = 1; i < 4; i++) {
-      final y = size.height * (i / 4);
-      canvas.drawLine(Offset(0, y), Offset(size.width, y), gridPaint);
+      final y = r.top + r.height * (i / 4);
+      canvas.drawLine(Offset(r.left, y), Offset(r.right, y), gridPaint);
     }
 
-    final epsXNorm = 0.9 / (size.width <= 0 ? 1.0 : size.width);
-    final epsYNorm = 0.9 / (size.height <= 0 ? 1.0 : size.height);
+    final epsXNorm = 0.9 / (r.width <= 0 ? 1.0 : r.width);
+    final epsYNorm = 0.9 / (r.height <= 0 ? 1.0 : r.height);
 
     if (nodes.isEmpty) return;
 
     final curvePath = Path();
-    Offset toPx(Offset n) => Offset(n.dx * size.width, n.dy * size.height);
-
-    curvePath.moveTo(
-      nodes.first.p.dx * size.width,
-      nodes.first.p.dy * size.height,
-    );
+    final firstPx = toPx(nodes.first.p);
+    curvePath.moveTo(firstPx.dx, firstPx.dy);
 
     for (int seg = 0; seg < nodes.length - 1; seg++) {
       final a = nodes[seg];
@@ -659,12 +835,11 @@ class _LfoEditorPainter extends CustomPainter {
           final x = lerpDouble(ax, bx, t)!;
           final linY = lerpDouble(ay, by, t)!;
           final y = (linY - (amt * 0.45) * bulge01(t)).clamp(0.0, 1.0);
-          curvePath.lineTo(x * size.width, y * size.height);
+          curvePath.lineTo(r.left + x * r.width, r.top + y * r.height);
         }
         continue;
       }
 
-      // ✅ Bend mode: allow handle to reach very close to endpoints too
       final bias = a.bias.clamp(0.001, 0.999);
       final xH = lerpDouble(ax, bx, bias)!;
 
@@ -723,25 +898,23 @@ class _LfoEditorPainter extends CustomPainter {
       );
       final cB2 = Offset(
         lerpDouble(pH.dx, pB.dx, 0.65)!,
-        lerpDouble(pH.dy, pB.dy, 0.65)!,
+        lerpDouble(pH.dy, b.p.dy, 0.65)!,
       );
-
-      final A = toPx(pA);
-      final H = toPx(pH);
-      final B = toPx(pB);
 
       final A1 = toPx(cA1);
       final A2 = toPx(cA2);
+      final H = toPx(pH);
       final B1 = toPx(cB1);
       final B2 = toPx(cB2);
+      final B = toPx(pB);
 
       curvePath.cubicTo(A1.dx, A1.dy, A2.dx, A2.dy, H.dx, H.dy);
       curvePath.cubicTo(B1.dx, B1.dy, B2.dx, B2.dy, B.dx, B.dy);
     }
 
     final fillPath = Path.from(curvePath)
-      ..lineTo(size.width, size.height)
-      ..lineTo(0, size.height)
+      ..lineTo(r.right, r.bottom)
+      ..lineTo(r.left, r.bottom)
       ..close();
 
     final fillPaint = Paint()
@@ -759,35 +932,9 @@ class _LfoEditorPainter extends CustomPainter {
 
     canvas.drawPath(curvePath, curvePaint);
 
-    for (int seg = 0; seg < nodes.length - 1; seg++) {
-      final a = nodes[seg];
-      final b = nodes[seg + 1];
-
-      // ✅ draw handle using the same near-endpoint clamp
-      final bias = a.bias.clamp(0.001, 0.999);
-      final xH = lerpDouble(a.p.dx, b.p.dx, bias)!;
-
-      final yH = (mode == CurveMode.bend)
-          ? a.bendY.clamp(math.min(a.p.dy, b.p.dy), math.max(a.p.dy, b.p.dy))
-          : _handleYOnBulge(a: a, b: b, t: bias);
-
-      final hp = Offset(xH * size.width, yH * size.height);
-
-      final handleOuter = Paint()
-        ..color = const Color(0xFF66FFB3).withValues(alpha: 0.85)
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 2;
-
-      final handleInner = Paint()
-        ..color = const Color(0xFF0F0F18)
-        ..style = PaintingStyle.fill;
-
-      canvas.drawCircle(hp, handleRadius, handleInner);
-      canvas.drawCircle(hp, handleRadius, handleOuter);
-    }
-
+    // Nodes
     for (int i = 0; i < nodes.length; i++) {
-      final p = Offset(nodes[i].p.dx * size.width, nodes[i].p.dy * size.height);
+      final p = toPx(nodes[i].p);
       final isSelected = (selectedIndex != null && selectedIndex == i);
 
       final outer = Paint()
@@ -808,6 +955,42 @@ class _LfoEditorPainter extends CustomPainter {
           ..style = PaintingStyle.fill;
         canvas.drawCircle(p, nodeRadius + 6, glow);
       }
+    }
+
+    // Handles
+    for (int seg = 0; seg < nodes.length - 1; seg++) {
+      final a = nodes[seg];
+      final b = nodes[seg + 1];
+
+      const epsX = 0.0005;
+      if ((a.p.dx - b.p.dx).abs() <= epsX) continue;
+
+      final bias = a.bias.clamp(0.001, 0.999);
+      final xH = lerpDouble(a.p.dx, b.p.dx, bias)!;
+
+      final yH = (mode == CurveMode.bend)
+          ? a.bendY.clamp(
+              math.min(a.p.dy, b.p.dy),
+              math.max(a.p.dy, b.p.dy),
+            )
+          : _handleYOnBulge(a: a, b: b, t: bias);
+
+      final hp = Offset(
+        r.left + xH * r.width,
+        r.top + yH * r.height,
+      );
+
+      final handleFill = Paint()
+        ..color = const Color(0xFF66FFB3)
+        ..style = PaintingStyle.fill;
+
+      final handleOutline = Paint()
+        ..color = Colors.black.withValues(alpha: 0.35)
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1.5;
+
+      canvas.drawCircle(hp, handleRadius, handleFill);
+      canvas.drawCircle(hp, handleRadius, handleOutline);
     }
   }
 
@@ -838,15 +1021,23 @@ class _LfoEditorPainter extends CustomPainter {
   bool shouldRepaint(covariant _LfoEditorPainter oldDelegate) => true;
 }
 
-/// Small bar above graph (ready for more buttons)
 class _TopBar extends StatelessWidget {
   const _TopBar({
     required this.mode,
+    required this.lockedOrder,
+    required this.linkEndpoints,
     required this.onToggleMode,
+    required this.onToggleLockedOrder,
+    required this.onToggleLinkEndpoints,
   });
 
   final CurveMode mode;
+  final bool lockedOrder;
+  final bool linkEndpoints;
+
   final VoidCallback onToggleMode;
+  final VoidCallback onToggleLockedOrder;
+  final VoidCallback onToggleLinkEndpoints;
 
   @override
   Widget build(BuildContext context) {
@@ -876,11 +1067,30 @@ class _TopBar extends StatelessWidget {
           ),
           const SizedBox(width: 8),
           _IconToggleButton(
-            tooltip: 'Coming soon',
-            selected: false,
-            onPressed: () {},
-            child:
-                const Icon(Icons.more_horiz, size: 18, color: Colors.white38),
+            tooltip: lockedOrder ? 'Node order: locked' : 'Node order: free',
+            selected: lockedOrder,
+            onPressed: onToggleLockedOrder,
+            child: Text(
+              lockedOrder ? '⇄̸' : '⇄',
+              style: const TextStyle(
+                color: Colors.white70,
+                fontSize: 16,
+                fontWeight: FontWeight.w700,
+                height: 1,
+              ),
+            ),
+          ),
+          const SizedBox(width: 8),
+          _IconToggleButton(
+            tooltip:
+                linkEndpoints ? 'Endpoints: linked' : 'Endpoints: independent',
+            selected: linkEndpoints,
+            onPressed: onToggleLinkEndpoints,
+            child: Icon(
+              linkEndpoints ? Icons.link : Icons.link_off,
+              size: 18,
+              color: Colors.white70,
+            ),
           ),
           const Spacer(),
           Text(
@@ -937,7 +1147,6 @@ class _IconToggleButton extends StatelessWidget {
   }
 }
 
-/// Tiny sideways “S curve” icon painter (like a curve glyph)
 class _SideSCurveIconPainter extends CustomPainter {
   _SideSCurveIconPainter({required this.isBend});
   final bool isBend;
