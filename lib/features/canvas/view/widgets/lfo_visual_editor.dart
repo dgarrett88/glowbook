@@ -4,10 +4,14 @@ import 'dart:ui' show lerpDouble;
 
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../state/canvas_controller.dart' as canvas_state;
 import '../../state/lfo_editor_types.dart';
+import 'package:glowbook/core/models/lfo_curve_math.dart';
+import 'package:glowbook/core/models/lfo.dart'; // if you need LfoCurveMode/LfoNode
 
-class LfoVisualEditor extends StatefulWidget {
+class LfoVisualEditor extends ConsumerStatefulWidget {
   const LfoVisualEditor({
     super.key,
     required this.lfoId,
@@ -33,7 +37,7 @@ class LfoVisualEditor extends StatefulWidget {
   final ValueChanged<LfoEditorCurve>? onCurveChanged;
 
   @override
-  State<LfoVisualEditor> createState() => _LfoVisualEditorState();
+  ConsumerState<LfoVisualEditor> createState() => _LfoVisualEditorState();
 }
 
 class _LfoNode {
@@ -60,7 +64,7 @@ class _Hit {
   const _Hit.handle(this.index) : isNode = false;
 }
 
-class _LfoVisualEditorState extends State<LfoVisualEditor> {
+class _LfoVisualEditorState extends ConsumerState<LfoVisualEditor> {
   late CurveMode _mode;
   bool _lockedOrder = true; // default ON
   bool _linkEndpoints = false; // endpoints move independently by default
@@ -133,10 +137,22 @@ class _LfoVisualEditorState extends State<LfoVisualEditor> {
 
     // Emit once on load so controller can “adopt” the curve if needed.
     _emitCurve();
+
+    // ✅ NEW: tell controller LFO editor is open (start ticker preview)
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      ref
+          .read(canvas_state.canvasControllerProvider)
+          .setLfoEditorPreviewActive(true);
+    });
   }
 
   @override
   void dispose() {
+    // ✅ NEW: tell controller LFO editor is closing (allow ticker to stop)
+    ref
+        .read(canvas_state.canvasControllerProvider)
+        .setLfoEditorPreviewActive(false);
+
     _lpTimer?.cancel();
     super.dispose();
   }
@@ -327,6 +343,10 @@ class _LfoVisualEditorState extends State<LfoVisualEditor> {
   }
 
   Widget _buildGestures(Size size) {
+    // ✅ watch inside the method body
+    final controller = ref.watch(canvas_state.canvasControllerProvider);
+    final playhead01 = controller.lfoPlayhead01(widget.lfoId);
+
     return GestureDetector(
       behavior: HitTestBehavior.opaque,
       dragStartBehavior: DragStartBehavior.down,
@@ -535,8 +555,10 @@ class _LfoVisualEditorState extends State<LfoVisualEditor> {
         });
       },
 
+      // ✅ paint as the child
       child: CustomPaint(
         painter: _LfoEditorPainter(
+          repaint: controller, // ✅ ADD THIS
           nodes: _nodes,
           selectedIndex: _selectedIndex,
           mode: _mode,
@@ -544,6 +566,7 @@ class _LfoVisualEditorState extends State<LfoVisualEditor> {
           nodeRadius: _nodeRadius,
           handleRadius: _handleRadius,
           strokeWidth: _strokeWidth,
+          playhead01: playhead01,
         ),
         child: const SizedBox.expand(),
       ),
@@ -551,7 +574,6 @@ class _LfoVisualEditorState extends State<LfoVisualEditor> {
   }
 
   // hit testing
-
   _Hit? _hitTest(Offset local, Size size) {
     // 0) If you're actually on a node, the node wins.
     for (int i = 0; i < _nodes.length; i++) {
@@ -661,7 +683,6 @@ class _LfoVisualEditorState extends State<LfoVisualEditor> {
   }
 
   // coordinate helpers
-
   Offset _toNorm(Offset local, Size size) {
     final r = _graphRect(size);
 
@@ -718,7 +739,6 @@ class _LfoVisualEditorState extends State<LfoVisualEditor> {
   }
 
   // Bulge sampling
-
   double _segmentSampleYBulge(int seg, double t) {
     final a = _nodes[seg];
     final b = _nodes[seg + 1];
@@ -748,6 +768,7 @@ class _LfoVisualEditorState extends State<LfoVisualEditor> {
 
 class _LfoEditorPainter extends CustomPainter {
   _LfoEditorPainter({
+    required Listenable repaint, // ✅ NEW: drives paint when ticker updates
     required this.nodes,
     required this.selectedIndex,
     required this.mode,
@@ -755,7 +776,8 @@ class _LfoEditorPainter extends CustomPainter {
     required this.nodeRadius,
     required this.handleRadius,
     required this.strokeWidth,
-  });
+    required this.playhead01,
+  }) : super(repaint: repaint); // ✅ NEW
 
   final List<_LfoNode> nodes;
   final int? selectedIndex;
@@ -765,6 +787,8 @@ class _LfoEditorPainter extends CustomPainter {
   final double nodeRadius;
   final double handleRadius;
   final double strokeWidth;
+
+  final double playhead01;
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -787,6 +811,21 @@ class _LfoEditorPainter extends CustomPainter {
       final y = r.top + r.height * (i / 4);
       canvas.drawLine(Offset(r.left, y), Offset(r.right, y), gridPaint);
     }
+
+    // --- playhead line (0..1) ---
+    final ph = playhead01.clamp(0.0, 1.0);
+    final phX = r.left + (ph * r.width);
+
+    final playheadPaint = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.0
+      ..color = Colors.white.withValues(alpha: 0.18);
+
+    canvas.drawLine(
+      Offset(phX, r.top),
+      Offset(phX, r.bottom),
+      playheadPaint,
+    );
 
     final epsXNorm = 0.9 / (r.width <= 0 ? 1.0 : r.width);
     final epsYNorm = 0.9 / (r.height <= 0 ? 1.0 : r.height);
@@ -901,15 +940,15 @@ class _LfoEditorPainter extends CustomPainter {
         lerpDouble(pH.dy, b.p.dy, 0.65)!,
       );
 
-      final A1 = toPx(cA1);
-      final A2 = toPx(cA2);
-      final H = toPx(pH);
-      final B1 = toPx(cB1);
-      final B2 = toPx(cB2);
-      final B = toPx(pB);
+      final a1Px = toPx(cA1);
+      final a2Px = toPx(cA2);
+      final hPx = toPx(pH);
+      final b1Px = toPx(cB1);
+      final b2Px = toPx(cB2);
+      final bPx2 = toPx(pB);
 
-      curvePath.cubicTo(A1.dx, A1.dy, A2.dx, A2.dy, H.dx, H.dy);
-      curvePath.cubicTo(B1.dx, B1.dy, B2.dx, B2.dy, B.dx, B.dy);
+      curvePath.cubicTo(a1Px.dx, a1Px.dy, a2Px.dx, a2Px.dy, hPx.dx, hPx.dy);
+      curvePath.cubicTo(b1Px.dx, b1Px.dy, b2Px.dx, b2Px.dy, bPx2.dx, bPx2.dy);
     }
 
     final fillPath = Path.from(curvePath)
@@ -1018,7 +1057,17 @@ class _LfoEditorPainter extends CustomPainter {
   }
 
   @override
-  bool shouldRepaint(covariant _LfoEditorPainter oldDelegate) => true;
+  bool shouldRepaint(covariant _LfoEditorPainter oldDelegate) {
+    // repaint is already driven by the Listenable, but keep sensible checks too
+    return oldDelegate.playhead01 != playhead01 ||
+        oldDelegate.selectedIndex != selectedIndex ||
+        oldDelegate.mode != mode ||
+        oldDelegate.resolution != resolution ||
+        oldDelegate.nodeRadius != nodeRadius ||
+        oldDelegate.handleRadius != handleRadius ||
+        oldDelegate.strokeWidth != strokeWidth ||
+        oldDelegate.nodes.length != nodes.length;
+  }
 }
 
 class _TopBar extends StatelessWidget {

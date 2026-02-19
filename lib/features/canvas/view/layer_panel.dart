@@ -334,7 +334,7 @@ class _LayerTileState extends State<_LayerTile> {
     final t = widget.layer.transform;
     _values = _LayerTransformValues(
       x: t.position.dx,
-      y: t.position.dy,
+      y: -t.position.dy,
       rotationDegrees: t.rotation * 180.0 / math.pi,
       scale: t.scale,
       opacity: t.opacity,
@@ -352,7 +352,7 @@ class _LayerTileState extends State<_LayerTile> {
       final t = widget.layer.transform;
       _values = _LayerTransformValues(
         x: t.position.dx,
-        y: t.position.dy,
+        y: -t.position.dy,
         rotationDegrees: t.rotation * 180.0 / math.pi,
         scale: t.scale,
         opacity: t.opacity,
@@ -1794,7 +1794,7 @@ class _StrokeTileState extends State<_StrokeTile> {
     final base = _basePts;
     if (base == null) return;
 
-    final localDelta = _worldToLocalDelta(Offset(_tx, _ty));
+    final localDelta = _worldToLocalDelta(Offset(_tx, -_ty));
 
     final newPts = _applyTxRot(
       base: base,
@@ -1817,7 +1817,7 @@ class _StrokeTileState extends State<_StrokeTile> {
     final base = _basePts;
     if (base == null) return;
 
-    final localDelta = _worldToLocalDelta(Offset(_tx, _ty));
+    final localDelta = _worldToLocalDelta(Offset(_tx, -_ty));
 
     final afterPts = _applyTxRot(
       base: base,

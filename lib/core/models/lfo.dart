@@ -1,6 +1,8 @@
 // lib/core/models/lfo.dart
 import 'dart:math' as math;
 
+import 'lfo_curve_math.dart';
+
 /// Waveform types.
 /// Note: the visual editor can still be curve-mode while the "wave" enum is kept for quick presets.
 enum LfoWave { sine, triangle, sawUp, sawDown, square, random, curve }
@@ -172,9 +174,18 @@ class Lfo {
 
     double out;
 
-    // If user is using the curve editor, prefer it.
-    if (shapeMode == LfoShapeMode.curve || wave == LfoWave.curve) {
-      out = _evalCurve(frac);
+    final wantsCurve =
+        (shapeMode == LfoShapeMode.curve || wave == LfoWave.curve);
+
+    // ✅ CRITICAL FIX:
+    // If we're in curve mode but nodes are empty (can happen on load/seed timing),
+    // fall back to wave evaluation so the LFO still moves.
+    if (wantsCurve) {
+      if (nodes.isEmpty) {
+        out = _evalWave(frac, (wave == LfoWave.curve) ? LfoWave.sine : wave);
+      } else {
+        out = _evalCurve(frac);
+      }
     } else {
       out = _evalWave(frac, wave);
     }
@@ -205,61 +216,46 @@ class Lfo {
         final r = s - s.floorToDouble(); // 0..1
         return (r * 2.0) - 1.0;
       case LfoWave.curve:
-        return _evalCurve(x);
+        // If someone calls this directly, keep behaviour: curve if possible, else 0.
+        return nodes.isEmpty ? 0.0 : _evalCurve(x);
     }
   }
 
   double _evalCurve(double x01) {
+    // nodes are guaranteed non-empty by eval() fallback,
+    // but keep this guard anyway.
     if (nodes.isEmpty) return 0.0;
 
-    // Ensure sorted by x
-    final pts = nodes;
-    final x = x01.clamp(0.0, 1.0).toDouble();
+    // Ensure nodes sorted (they should already be sorted on load)
+    // but do a cheap check if you want:
+    // final pts = [...nodes]..sort((a,b)=>a.x.compareTo(b.x));
 
-    if (x <= pts.first.x) return pts.first.y.clamp(-1.0, 1.0).toDouble();
-    if (x >= pts.last.x) return pts.last.y.clamp(-1.0, 1.0).toDouble();
-
-    int hi = 1;
-    while (hi < pts.length && pts[hi].x < x) {
-      hi++;
-    }
-    final lo = (hi - 1).clamp(0, pts.length - 2);
-
-    final a = pts[lo];
-    final b = pts[lo + 1];
-
-    final ax = a.x;
-    final bx = b.x;
-    final span = (bx - ax).abs() < 1e-9 ? 1e-9 : (bx - ax);
-
-    final t = ((x - ax) / span).clamp(0.0, 1.0).toDouble();
-
-    // Basic linear baseline
-    final yLin = _lerp(a.y, b.y, t);
-
-    // Apply curve mode shaping using persisted handle params
-    switch (curveMode) {
-      case LfoCurveMode.bulge:
-        return _bulge(a, b, t, yLin);
-      case LfoCurveMode.bend:
-        return _bend(a, b, t, yLin);
-    }
+    return LfoCurveMath.eval01(
+      x01: x01,
+      nodes: nodes,
+      curveMode: curveMode,
+    );
   }
 
   double _bulge(LfoNode a, LfoNode b, double t, double yLin) {
-    // bulgeAmt in [-2.5..2.5]
+    final bias = a.bias.clamp(0.05, 0.95).toDouble();
     final amt = a.bulgeAmt.clamp(-2.5, 2.5).toDouble();
     if (amt.abs() < 1e-6) return yLin.clamp(-1.0, 1.0).toDouble();
 
-    // bias in [0..1] controls where the bulge peaks in the segment
-    final bias = a.bias.clamp(0.0, 1.0).toDouble();
+    double bulge01(double tt) {
+      tt = tt.clamp(0.0, 1.0);
+      if (tt <= bias) {
+        final u = tt / bias;
+        return math.sin(u * math.pi * 0.5);
+      } else {
+        final u = (1.0 - tt) / (1.0 - bias);
+        return math.sin(u * math.pi * 0.5);
+      }
+    }
 
-    // A smooth "bump" centered around bias
-    // peak at bias; 0 at ends.
-    final bump = _bump(t, bias);
-
-    // scale bulge: amt is fairly strong, keep it sane
-    final y = yLin + (bump * (amt / 2.5));
+    // editor math, BUT in shared y-space (-1..1)
+    // yLin is already in -1..1, so subtract in that same scale.
+    final y = yLin - (amt * 0.45) * bulge01(t);
     return y.clamp(-1.0, 1.0).toDouble();
   }
 

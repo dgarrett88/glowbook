@@ -180,6 +180,18 @@ class CanvasController extends ChangeNotifier {
   double _timeSec = 0.0;
   bool _tickerRunning = false;
 
+  // --- LFO editor preview keeps ticker running while panel is open ---
+  bool _lfoEditorPreviewActive = false;
+
+  void setLfoEditorPreviewActive(bool active) {
+    if (_lfoEditorPreviewActive == active) return;
+    _lfoEditorPreviewActive = active;
+    _ensureTickerState(); // start/stop ticker based on panel visibility
+    notifyListeners(); // repaint UI
+  }
+
+  // --- LFO editor preview keeps ticker running while panel is open ---
+
   late bool _maybeDevEnableSpin;
 
   final Map<String, LayerRotationAnim> _layerRotation = {};
@@ -199,14 +211,19 @@ class CanvasController extends ChangeNotifier {
 
   void _onTick(Duration elapsed) {
     _timeSec = elapsed.inMicroseconds / 1000000.0;
-    _tick();
+
+    _tick(); // your existing repaint notifier
+
+    // If the LFO editor is open, force widget rebuilds so the playhead/curve animates
+    if (_lfoEditorPreviewActive) {
+      notifyListeners();
+    }
   }
 
   void _ensureTickerState() {
     final anyConstant = _layerRotation.values.any((a) => a.isActive);
 
     bool anyLfoActive = false;
-    // If you don't have LFO in your controller yet, you can delete this whole block.
     if (_routes.isNotEmpty && _lfos.isNotEmpty) {
       for (final r in _routes) {
         if (!r.enabled) continue;
@@ -218,9 +235,9 @@ class CanvasController extends ChangeNotifier {
       }
     }
 
-    final anyActive = anyConstant || anyLfoActive;
+    // ✅ keep ticker alive if panel is open
+    final anyActive = anyConstant || anyLfoActive || _lfoEditorPreviewActive;
 
-    // ✅ FIX #2: ticker start/stop must be side-effect free (NO pivot writes, NO rebuilds)
     if (anyActive && !_tickerRunning) {
       _ticker.start();
       _tickerRunning = true;
@@ -246,6 +263,19 @@ class CanvasController extends ChangeNotifier {
 
   String _newLfoId() => 'lfo-${DateTime.now().microsecondsSinceEpoch}';
   String _newRouteId() => 'route-${DateTime.now().microsecondsSinceEpoch}';
+
+  double lfoPlayhead01(String lfoId) {
+    final i = _lfos.indexWhere((l) => l.id == lfoId);
+    if (i < 0) return 0.0;
+
+    final lfo = _lfos[i];
+
+    // Match lfo.eval(_timeSec): rate + phase
+    final t = (_timeSec * lfo.rateHz) + lfo.phase;
+
+    // 0..1 loop
+    return t - t.floorToDouble();
+  }
 
   // ---------------------------------------------------------------------------
   // PIVOT / TRANSFORM POLICY (REFACTOR CORE)
@@ -570,7 +600,7 @@ class CanvasController extends ChangeNotifier {
   }
 
   double _layerExtraY(String layerId) {
-    return _sumRoutes(layerId: layerId, param: LfoParam.layerY);
+    return -_sumRoutes(layerId: layerId, param: LfoParam.layerY); // ✅ flip Y
   }
 
   double _layerExtraScale(String layerId) {
@@ -626,8 +656,10 @@ class CanvasController extends ChangeNotifier {
   double _strokeExtraX(String layerId, String strokeId) =>
       _sumRoutes(layerId: layerId, strokeId: strokeId, param: LfoParam.strokeX);
 
-  double _strokeExtraY(String layerId, String strokeId) =>
-      _sumRoutes(layerId: layerId, strokeId: strokeId, param: LfoParam.strokeY);
+  double _strokeExtraY(String layerId, String strokeId) => -_sumRoutes(
+      layerId: layerId,
+      strokeId: strokeId,
+      param: LfoParam.strokeY); // ✅ flip Y
 
   double _strokeExtraRotationRad(String layerId, String strokeId) {
     final deg = _sumRoutes(
@@ -1459,7 +1491,7 @@ class CanvasController extends ChangeNotifier {
 
     final layer = _state.layers[idx];
     final pos = layer.transform.position;
-    final tr = layer.transform.copyWith(position: Offset(pos.dx, y));
+    final tr = layer.transform.copyWith(position: Offset(pos.dx, -y)); // ✅ flip
 
     _applyLayerTransformNoHistory(layerId, tr, knobKey: 'layerKnob:$layerId');
   }
@@ -3210,7 +3242,7 @@ class CanvasController extends ChangeNotifier {
     final layer = layers[idx];
 
     layers[idx] = layer.copyWith(
-      transform: layer.transform.copyWith(position: Offset(x, y)),
+      transform: layer.transform.copyWith(position: Offset(x, -y)), // ✅ flip
     );
     _state = _state.copyWith(layers: layers);
 

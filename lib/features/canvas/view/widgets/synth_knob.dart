@@ -304,7 +304,7 @@ class _SynthKnobState extends State<SynthKnob> {
                       if (start == null) return;
 
                       final dy = d.localPosition.dy - start.dy;
-                      final deltaNorm = (-dy) * widget.sensitivity;
+                      final deltaNorm = (-dy) * widget.sensitivity; // ✅ flipped
 
                       final newNorm =
                           (_norm(_startValue) + deltaNorm).clamp(0.0, 1.0);
