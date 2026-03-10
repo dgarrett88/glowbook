@@ -336,7 +336,7 @@ class Lfo {
       enabled: _asBool(j['enabled'], true),
       wave: _enumByName(
           LfoWave.values, _asString(j['wave'], 'sine'), LfoWave.sine),
-      rateHz: _asDouble(j['rateHz'], 0.25),
+      rateHz: _asDouble(j['rateHz'], 1.0),
       phase: _asDouble(j['phase'], 0.0).clamp(0.0, 1.0).toDouble(),
       offset: _asDouble(j['offset'], 0.0).clamp(-1.0, 1.0).toDouble(),
       shapeMode: _enumByName(

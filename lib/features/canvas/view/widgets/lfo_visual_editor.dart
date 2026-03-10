@@ -8,14 +8,21 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../state/canvas_controller.dart' as canvas_state;
 import '../../state/lfo_editor_types.dart';
+
 import 'package:glowbook/core/models/lfo_curve_math.dart';
 import 'package:glowbook/core/models/lfo.dart'; // if you need LfoCurveMode/LfoNode
+
+import 'package:glowbook/features/canvas/view/widgets/synth_knob.dart';
 
 class LfoVisualEditor extends ConsumerStatefulWidget {
   const LfoVisualEditor({
     super.key,
     required this.lfoId,
     this.onInteractionChanged,
+
+    // ✅ NEW: rate in/out
+    this.initialRateHz = 1.0,
+    this.onRateChanged,
 
     // persisted curve
     this.initialMode = CurveMode.bulge,
@@ -27,6 +34,10 @@ class LfoVisualEditor extends ConsumerStatefulWidget {
 
   final String lfoId;
   final ValueChanged<bool>? onInteractionChanged;
+
+  // ✅ NEW
+  final double initialRateHz;
+  final ValueChanged<double>? onRateChanged;
 
   /// Shared types:
   /// - x 0..1
@@ -72,6 +83,27 @@ class _LfoVisualEditorState extends ConsumerState<LfoVisualEditor> {
   late List<_LfoNode> _nodes;
 
   int? _selectedIndex;
+
+  // ✅ Rate
+  late double _rateHz;
+  late double _rateNorm; // 0..1 knob
+
+  static const double _minRateHz = 0.05;
+  static const double _maxRateHz = 20.0;
+
+  double _hzToNorm(double hz) {
+    final h = hz.clamp(_minRateHz, _maxRateHz).toDouble();
+    final a = math.log(_minRateHz);
+    final b = math.log(_maxRateHz);
+    return ((math.log(h) - a) / (b - a)).clamp(0.0, 1.0).toDouble();
+  }
+
+  double _normToHz(double t) {
+    final tt = t.clamp(0.0, 1.0).toDouble();
+    final a = math.log(_minRateHz);
+    final b = math.log(_maxRateHz);
+    return math.exp(a + (b - a) * tt).toDouble();
+  }
 
   _DragKind _dragKind = _DragKind.none;
   int? _dragIndex; // node index OR segment index
@@ -135,10 +167,14 @@ class _LfoVisualEditorState extends ConsumerState<LfoVisualEditor> {
 
     _ensureSortedAndSafe();
 
+    // ✅ Rate init
+    _rateHz = widget.initialRateHz;
+    _rateNorm = _hzToNorm(_rateHz);
+
     // Emit once on load so controller can “adopt” the curve if needed.
     _emitCurve();
 
-    // ✅ NEW: tell controller LFO editor is open (start ticker preview)
+    // ✅ tell controller LFO editor is open (start ticker preview)
     WidgetsBinding.instance.addPostFrameCallback((_) {
       ref
           .read(canvas_state.canvasControllerProvider)
@@ -147,8 +183,17 @@ class _LfoVisualEditorState extends ConsumerState<LfoVisualEditor> {
   }
 
   @override
+  void didUpdateWidget(covariant LfoVisualEditor oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.initialRateHz != oldWidget.initialRateHz) {
+      _rateHz = widget.initialRateHz;
+      _rateNorm = _hzToNorm(_rateHz);
+    }
+  }
+
+  @override
   void dispose() {
-    // ✅ NEW: tell controller LFO editor is closing (allow ticker to stop)
+    // ✅ tell controller LFO editor is closing (allow ticker to stop)
     ref
         .read(canvas_state.canvasControllerProvider)
         .setLfoEditorPreviewActive(false);
@@ -231,6 +276,19 @@ class _LfoVisualEditorState extends ConsumerState<LfoVisualEditor> {
                   }
                 });
                 _emitCurve();
+              },
+
+              // ✅ NEW: rate props
+              rateNorm: _rateNorm,
+              rateHz: _rateHz,
+              onInteractionChanged: widget.onInteractionChanged,
+              onRateNormChanged: (t) {
+                final hz = _normToHz(t);
+                setState(() {
+                  _rateNorm = t.clamp(0.0, 1.0).toDouble();
+                  _rateHz = hz;
+                });
+                widget.onRateChanged?.call(_rateHz);
               },
             ),
             Expanded(
@@ -343,15 +401,12 @@ class _LfoVisualEditorState extends ConsumerState<LfoVisualEditor> {
   }
 
   Widget _buildGestures(Size size) {
-    // ✅ watch inside the method body
     final controller = ref.watch(canvas_state.canvasControllerProvider);
     final playhead01 = controller.lfoPlayhead01(widget.lfoId);
 
     return GestureDetector(
       behavior: HitTestBehavior.opaque,
       dragStartBehavior: DragStartBehavior.down,
-
-      // Double tap add/remove node
       onDoubleTapDown: (d) {
         final hit = _hitTest(d.localPosition, size);
 
@@ -383,7 +438,6 @@ class _LfoVisualEditorState extends ConsumerState<LfoVisualEditor> {
         });
         _emitCurve();
       },
-
       onPanStart: (d) {
         final hit = _hitTest(d.localPosition, size);
         if (hit == null) return;
@@ -400,7 +454,6 @@ class _LfoVisualEditorState extends ConsumerState<LfoVisualEditor> {
           }
         });
       },
-
       onPanUpdate: (d) {
         final idx = _dragIndex;
         if (idx == null) return;
@@ -546,7 +599,6 @@ class _LfoVisualEditorState extends ConsumerState<LfoVisualEditor> {
           return;
         }
       },
-
       onPanEnd: (_) {
         _cancelLongPress();
         setState(() {
@@ -554,11 +606,9 @@ class _LfoVisualEditorState extends ConsumerState<LfoVisualEditor> {
           _dragIndex = null;
         });
       },
-
-      // ✅ paint as the child
       child: CustomPaint(
         painter: _LfoEditorPainter(
-          repaint: controller, // ✅ ADD THIS
+          repaint: controller,
           nodes: _nodes,
           selectedIndex: _selectedIndex,
           mode: _mode,
@@ -768,7 +818,7 @@ class _LfoVisualEditorState extends ConsumerState<LfoVisualEditor> {
 
 class _LfoEditorPainter extends CustomPainter {
   _LfoEditorPainter({
-    required Listenable repaint, // ✅ NEW: drives paint when ticker updates
+    required Listenable repaint,
     required this.nodes,
     required this.selectedIndex,
     required this.mode,
@@ -777,7 +827,7 @@ class _LfoEditorPainter extends CustomPainter {
     required this.handleRadius,
     required this.strokeWidth,
     required this.playhead01,
-  }) : super(repaint: repaint); // ✅ NEW
+  }) : super(repaint: repaint);
 
   final List<_LfoNode> nodes;
   final int? selectedIndex;
@@ -1058,7 +1108,6 @@ class _LfoEditorPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant _LfoEditorPainter oldDelegate) {
-    // repaint is already driven by the Listenable, but keep sensible checks too
     return oldDelegate.playhead01 != playhead01 ||
         oldDelegate.selectedIndex != selectedIndex ||
         oldDelegate.mode != mode ||
@@ -1078,6 +1127,12 @@ class _TopBar extends StatelessWidget {
     required this.onToggleMode,
     required this.onToggleLockedOrder,
     required this.onToggleLinkEndpoints,
+
+    // ✅ NEW
+    required this.rateNorm,
+    required this.rateHz,
+    required this.onRateNormChanged,
+    this.onInteractionChanged,
   });
 
   final CurveMode mode;
@@ -1087,6 +1142,12 @@ class _TopBar extends StatelessWidget {
   final VoidCallback onToggleMode;
   final VoidCallback onToggleLockedOrder;
   final VoidCallback onToggleLinkEndpoints;
+
+  // ✅ NEW
+  final double rateNorm; // 0..1
+  final double rateHz; // display
+  final ValueChanged<double> onRateNormChanged;
+  final ValueChanged<bool>? onInteractionChanged;
 
   @override
   Widget build(BuildContext context) {
@@ -1141,7 +1202,26 @@ class _TopBar extends StatelessWidget {
               color: Colors.white70,
             ),
           ),
+
           const Spacer(),
+
+          // ✅ NEW: Rate knob
+          SynthKnob(
+            value: rateNorm,
+            onChanged: onRateNormChanged,
+            min: 0.0,
+            max: 1.0,
+            size: 34,
+            label: 'Rate',
+            showValueText: true,
+            valueFormatter: (_) =>
+                '${rateHz.toStringAsFixed(rateHz < 1 ? 2 : 1)}Hz',
+            onInteractionChanged: onInteractionChanged,
+            sensitivity: 0.010,
+          ),
+
+          const SizedBox(width: 10),
+
           Text(
             mode == CurveMode.bulge ? 'Bulge' : 'Bend',
             style: const TextStyle(

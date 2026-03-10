@@ -178,6 +178,7 @@ class CanvasController extends ChangeNotifier {
 
   late final Ticker _ticker;
   double _timeSec = 0.0;
+  Duration? _lastTickElapsed;
   bool _tickerRunning = false;
 
   // --- LFO editor preview keeps ticker running while panel is open ---
@@ -210,11 +211,17 @@ class CanvasController extends ChangeNotifier {
       _routes.where((r) => r.lfoId == lfoId).toList();
 
   void _onTick(Duration elapsed) {
-    _timeSec = elapsed.inMicroseconds / 1000000.0;
+    final last = _lastTickElapsed;
+    _lastTickElapsed = elapsed;
 
-    _tick(); // your existing repaint notifier
+    // First tick after start: no dt yet
+    if (last != null) {
+      final dtSec = (elapsed - last).inMicroseconds / 1000000.0;
+      if (dtSec > 0) _timeSec += dtSec;
+    }
 
-    // If the LFO editor is open, force widget rebuilds so the playhead/curve animates
+    _tick();
+
     if (_lfoEditorPreviewActive) {
       notifyListeners();
     }
@@ -244,7 +251,11 @@ class CanvasController extends ChangeNotifier {
     } else if (!anyActive && _tickerRunning) {
       _ticker.stop();
       _tickerRunning = false;
-      _timeSec = 0.0;
+
+      // reset dt baseline so next start doesn't jump
+      _lastTickElapsed = null;
+
+      // DO NOT reset _timeSec (keeps LFO continuous)
       _tick();
     }
   }
@@ -275,6 +286,15 @@ class CanvasController extends ChangeNotifier {
 
     // 0..1 loop
     return t - t.floorToDouble();
+  }
+
+  void setLfoRateHz(String lfoId, double rateHz) {
+    final hz = rateHz.clamp(0.0, 9999.0).toDouble(); // keep simple & safe
+    final i = _lfos.indexWhere((l) => l.id == lfoId);
+    if (i < 0) return;
+
+    _lfos[i] = _lfos[i].copyWith(rateHz: hz);
+    notifyListeners();
   }
 
   // ---------------------------------------------------------------------------

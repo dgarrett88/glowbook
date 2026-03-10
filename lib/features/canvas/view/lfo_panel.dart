@@ -403,6 +403,12 @@ class _LfoTile extends ConsumerWidget {
                   lfoId: lfo.id,
                   onInteractionChanged: onAnyKnobInteraction,
 
+                  // ✅ RATE (load + persist)
+                  initialRateHz: lfo.rateHz,
+                  onRateChanged: (hz) {
+                    controller.setLfoRateHz(lfo.id, hz);
+                  },
+
                   // LOAD persisted curve
                   initialMode: initialMode,
                   initialNodes: _toEditorNodes(lfo),
