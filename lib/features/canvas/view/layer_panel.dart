@@ -610,7 +610,11 @@ class _LayerTransformEditor extends ConsumerWidget {
               Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  _LayerModLight(layerId: layerId, param: LfoParam.layerX),
+                  _LayerModLight(
+                    layerId: layerId,
+                    param: LfoParam.layerX,
+                    onInteractionChanged: onAnyKnobInteraction,
+                  ),
                   const SizedBox(height: 6),
                   SynthKnob(
                     label: 'X',
@@ -643,7 +647,11 @@ class _LayerTransformEditor extends ConsumerWidget {
               Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  _LayerModLight(layerId: layerId, param: LfoParam.layerY),
+                  _LayerModLight(
+                    layerId: layerId,
+                    param: LfoParam.layerY,
+                    onInteractionChanged: onAnyKnobInteraction,
+                  ),
                   const SizedBox(height: 6),
                   SynthKnob(
                     label: 'Y',
@@ -669,7 +677,11 @@ class _LayerTransformEditor extends ConsumerWidget {
               Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  _LayerModLight(layerId: layerId, param: LfoParam.layerScale),
+                  _LayerModLight(
+                    layerId: layerId,
+                    param: LfoParam.layerScale,
+                    onInteractionChanged: onAnyKnobInteraction,
+                  ),
                   const SizedBox(height: 6),
                   SynthKnob(
                     label: 'Scale',
@@ -696,7 +708,10 @@ class _LayerTransformEditor extends ConsumerWidget {
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   _LayerModLight(
-                      layerId: layerId, param: LfoParam.layerRotationDeg),
+                    layerId: layerId,
+                    param: LfoParam.layerRotationDeg,
+                    onInteractionChanged: onAnyKnobInteraction,
+                  ),
                   const SizedBox(height: 6),
                   SynthKnob(
                     label: 'Rot',
@@ -723,7 +738,10 @@ class _LayerTransformEditor extends ConsumerWidget {
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   _LayerModLight(
-                      layerId: layerId, param: LfoParam.layerOpacity),
+                    layerId: layerId,
+                    param: LfoParam.layerOpacity,
+                    onInteractionChanged: onAnyKnobInteraction,
+                  ),
                   const SizedBox(height: 6),
                   SynthKnob(
                     label: 'Opacity',
@@ -763,36 +781,171 @@ class _LayerTransformEditor extends ConsumerWidget {
 /// ----------------------------------------------------------------------------------
 
 /// Shared light renderer (just visuals). Big hit area, tiny dot.
-class _ModLightDot extends StatelessWidget {
-  const _ModLightDot({required this.isOn});
+class _ModLightControl extends StatefulWidget {
+  const _ModLightControl({
+    required this.isOn,
+    required this.value,
+    required this.min,
+    required this.max,
+    required this.onTapLight,
+    required this.onChanged,
+    this.onInteractionChanged,
+  });
 
   final bool isOn;
+  final double value;
+  final double min;
+  final double max;
+  final VoidCallback onTapLight;
+  final ValueChanged<double> onChanged;
+  final ValueChanged<bool>? onInteractionChanged;
+
+  @override
+  State<_ModLightControl> createState() => _ModLightControlState();
+}
+
+class _ModLightControlState extends State<_ModLightControl> {
+  double _startValue = 0.0;
+  Offset? _dragStart;
+  bool _active = false;
+
+  void _setActive(bool v) {
+    if (_active == v) return;
+    _active = v;
+    widget.onInteractionChanged?.call(v);
+  }
+
+  double _normBipolar(double v) {
+    if (widget.max <= widget.min) return 0.5;
+    final t = ((v - widget.min) / (widget.max - widget.min)).clamp(0.0, 1.0);
+    return t;
+  }
+
+  double _denorm(double t) {
+    return widget.min + ((widget.max - widget.min) * t.clamp(0.0, 1.0));
+  }
+
+  @override
+  void dispose() {
+    if (_active) {
+      widget.onInteractionChanged?.call(false);
+    }
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
-    return SizedBox(
-      width: 28,
-      height: 28,
-      child: Center(
-        child: Container(
-          width: 10,
-          height: 10,
-          decoration: BoxDecoration(
-            shape: BoxShape.circle,
-            color: isOn ? Colors.greenAccent : Colors.white24,
-            boxShadow: isOn
-                ? [
-                    BoxShadow(
-                      color: Colors.greenAccent.withValues(alpha: 0.35),
-                      blurRadius: 8,
-                      spreadRadius: 1,
-                    )
-                  ]
-                : null,
+    final t = _normBipolar(widget.value);
+
+    return Listener(
+      behavior: HitTestBehavior.opaque,
+      onPointerDown: (_) => _setActive(true),
+      onPointerUp: (_) => _setActive(false),
+      onPointerCancel: (_) => _setActive(false),
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: widget.onTapLight,
+        onPanStart: widget.isOn
+            ? (d) {
+                _setActive(true);
+                _startValue = widget.value.clamp(widget.min, widget.max);
+                _dragStart = d.localPosition;
+              }
+            : null,
+        onPanUpdate: widget.isOn
+            ? (d) {
+                final start = _dragStart;
+                if (start == null) return;
+
+                final dy = d.localPosition.dy - start.dy;
+
+                // drag up = positive, drag down = negative
+                const sensitivity = 0.008;
+                final deltaNorm = (-dy) * sensitivity;
+
+                final newNorm = (_normBipolar(_startValue) + deltaNorm)
+                    .clamp(0.0, 1.0)
+                    .toDouble();
+
+                final newValue = _denorm(newNorm);
+                widget.onChanged(newValue);
+              }
+            : null,
+        onPanEnd: (_) => _setActive(false),
+        onPanCancel: () => _setActive(false),
+        child: SizedBox(
+          width: 28,
+          height: 28,
+          child: CustomPaint(
+            painter: _ModLightPainter(
+              isOn: widget.isOn,
+              t: t,
+            ),
           ),
         ),
       ),
     );
+  }
+}
+
+class _ModLightPainter extends CustomPainter {
+  _ModLightPainter({
+    required this.isOn,
+    required this.t,
+  });
+
+  final bool isOn;
+  final double t;
+
+  static const double _startAngle = math.pi * 0.75;
+  static const double _sweep = math.pi * 1.5;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final c = Offset(size.width / 2, size.height / 2);
+
+    // Outer ring track
+    final ringRect = Rect.fromCircle(center: c, radius: 11.0);
+
+    final trackPaint = Paint()
+      ..color = Colors.white.withValues(alpha: isOn ? 0.16 : 0.08)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 2.0
+      ..strokeCap = StrokeCap.round;
+
+    canvas.drawArc(ringRect, _startAngle, _sweep, false, trackPaint);
+
+    // Value arc
+    if (isOn) {
+      final valuePaint = Paint()
+        ..color = Colors.greenAccent.withValues(alpha: 0.95)
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 2.2
+        ..strokeCap = StrokeCap.round;
+
+      canvas.drawArc(ringRect, _startAngle, _sweep * t, false, valuePaint);
+    }
+
+    // Center light
+    final dotPaint = Paint()
+      ..color = isOn ? Colors.greenAccent : Colors.white24
+      ..style = PaintingStyle.fill;
+
+    canvas.drawCircle(c, 5.0, dotPaint);
+
+    if (isOn) {
+      final glowPaint = Paint()
+        ..color = Colors.greenAccent.withValues(alpha: 0.22)
+        ..style = PaintingStyle.fill;
+
+      canvas.drawCircle(c, 7.5, glowPaint);
+      canvas.drawCircle(c, 5.0, dotPaint);
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _ModLightPainter oldDelegate) {
+    return oldDelegate.isOn != isOn || oldDelegate.t != t;
   }
 }
 
@@ -801,10 +954,12 @@ class _LayerModLight extends ConsumerWidget {
   const _LayerModLight({
     required this.layerId,
     required this.param,
+    this.onInteractionChanged,
   });
 
   final String layerId;
   final LfoParam param;
+  final ValueChanged<bool>? onInteractionChanged;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -816,10 +971,15 @@ class _LayerModLight extends ConsumerWidget {
     //   - upsertRouteForLayerParam(layerId:..., param:..., lfoId:...)
     final route = controller.findRouteForLayerParam(layerId, param);
     final isOn = route != null;
+    final spec = _lfoAmountSpec(param);
 
-    return GestureDetector(
-      behavior: HitTestBehavior.translucent,
-      onTap: () async {
+    return _ModLightControl(
+      isOn: isOn,
+      value: route?.amount ?? 0.0,
+      min: spec.min,
+      max: spec.max,
+      onInteractionChanged: onInteractionChanged,
+      onTapLight: () async {
         final lfos = controller.lfos;
 
         final String? chosen = await showDialog<String?>(
@@ -868,7 +1028,11 @@ class _LayerModLight extends ConsumerWidget {
           );
         }
       },
-      child: _ModLightDot(isOn: isOn),
+      onChanged: (v) {
+        final r = route;
+        if (r == null) return;
+        controller.setRouteAmount(r.id, v);
+      },
     );
   }
 }
@@ -885,24 +1049,35 @@ class _StrokeModLight extends ConsumerWidget {
     required this.groupIndex,
     required this.strokeId,
     required this.param,
+    this.onInteractionChanged,
   });
 
   final String layerId;
   final int groupIndex;
   final String strokeId;
   final LfoParam param;
+  final ValueChanged<bool>? onInteractionChanged;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final controller = ref.watch(canvas_state.canvasControllerProvider);
 
     final route = controller.findRouteForStrokeParam(
-        layerId, groupIndex, strokeId, param);
+      layerId,
+      groupIndex,
+      strokeId,
+      param,
+    );
     final isOn = route != null;
+    final spec = _lfoAmountSpec(param);
 
-    return GestureDetector(
-      behavior: HitTestBehavior.translucent,
-      onTap: () async {
+    return _ModLightControl(
+      isOn: isOn,
+      value: route?.amount ?? 0.0,
+      min: spec.min,
+      max: spec.max,
+      onInteractionChanged: onInteractionChanged,
+      onTapLight: () async {
         final lfos = controller.lfos;
 
         final String? chosen = await showDialog<String?>(
@@ -910,27 +1085,35 @@ class _StrokeModLight extends ConsumerWidget {
           builder: (ctx) {
             return AlertDialog(
               backgroundColor: const Color(0xFF1C1C24),
-              title: const Text('Assign LFO',
-                  style: TextStyle(color: Colors.white)),
+              title: const Text(
+                'Assign LFO',
+                style: TextStyle(color: Colors.white),
+              ),
               content: SizedBox(
                 width: double.maxFinite,
                 child: ListView(
                   shrinkWrap: true,
                   children: [
                     ListTile(
-                      title: const Text('None',
-                          style: TextStyle(color: Colors.white70)),
+                      title: const Text(
+                        'None',
+                        style: TextStyle(color: Colors.white70),
+                      ),
                       onTap: () => Navigator.of(ctx).pop(null),
                     ),
                     const Divider(color: Colors.white12),
                     for (final l in lfos)
                       ListTile(
-                        title: Text(l.name,
-                            style: const TextStyle(color: Colors.white)),
+                        title: Text(
+                          l.name,
+                          style: const TextStyle(color: Colors.white),
+                        ),
                         subtitle: Text(
                           '${l.wave.label} • ${l.rateHz.toStringAsFixed(2)} Hz',
                           style: const TextStyle(
-                              color: Colors.white54, fontSize: 12),
+                            color: Colors.white54,
+                            fontSize: 12,
+                          ),
                         ),
                         onTap: () => Navigator.of(ctx).pop(l.id),
                       ),
@@ -943,7 +1126,11 @@ class _StrokeModLight extends ConsumerWidget {
 
         if (chosen == null) {
           controller.clearRouteForStrokeParam(
-              layerId, groupIndex, strokeId, param);
+            layerId,
+            groupIndex,
+            strokeId,
+            param,
+          );
         } else {
           controller.upsertRouteForStrokeParam(
             layerId: layerId,
@@ -954,7 +1141,11 @@ class _StrokeModLight extends ConsumerWidget {
           );
         }
       },
-      child: _ModLightDot(isOn: isOn),
+      onChanged: (v) {
+        final r = route;
+        if (r == null) return;
+        controller.setRouteAmount(r.id, v);
+      },
     );
   }
 }
@@ -1472,6 +1663,7 @@ class _StrokeTileState extends State<_StrokeTile> {
                             groupIndex: widget.groupIndex,
                             strokeId: s.id,
                             param: LfoParam.strokeSize,
+                            onInteractionChanged: widget.onAnyKnobInteraction,
                           ),
                           SynthKnob(
                             label: 'Size',
@@ -1515,6 +1707,7 @@ class _StrokeTileState extends State<_StrokeTile> {
                             groupIndex: widget.groupIndex,
                             strokeId: s.id,
                             param: LfoParam.strokeX,
+                            onInteractionChanged: widget.onAnyKnobInteraction,
                           ),
                           SynthKnob(
                             label: 'X',
@@ -1545,6 +1738,7 @@ class _StrokeTileState extends State<_StrokeTile> {
                             groupIndex: widget.groupIndex,
                             strokeId: s.id,
                             param: LfoParam.strokeY,
+                            onInteractionChanged: widget.onAnyKnobInteraction,
                           ),
                           SynthKnob(
                             label: 'Y',
@@ -1575,6 +1769,7 @@ class _StrokeTileState extends State<_StrokeTile> {
                             groupIndex: widget.groupIndex,
                             strokeId: s.id,
                             param: LfoParam.strokeRotationDeg,
+                            onInteractionChanged: widget.onAnyKnobInteraction,
                           ),
                           SynthKnob(
                             label: 'Rot',
@@ -1605,6 +1800,7 @@ class _StrokeTileState extends State<_StrokeTile> {
                             groupIndex: widget.groupIndex,
                             strokeId: s.id,
                             param: LfoParam.strokeCoreOpacity,
+                            onInteractionChanged: widget.onAnyKnobInteraction,
                           ),
                           SynthKnob(
                             label: 'Core',
@@ -1648,6 +1844,7 @@ class _StrokeTileState extends State<_StrokeTile> {
                             groupIndex: widget.groupIndex,
                             strokeId: s.id,
                             param: LfoParam.strokeGlowRadius,
+                            onInteractionChanged: widget.onAnyKnobInteraction,
                           ),
                           SynthKnob(
                             label: 'Radius',
@@ -1691,6 +1888,7 @@ class _StrokeTileState extends State<_StrokeTile> {
                             groupIndex: widget.groupIndex,
                             strokeId: s.id,
                             param: LfoParam.strokeGlowOpacity,
+                            onInteractionChanged: widget.onAnyKnobInteraction,
                           ),
                           SynthKnob(
                             label: 'G Op',
@@ -1734,6 +1932,7 @@ class _StrokeTileState extends State<_StrokeTile> {
                             groupIndex: widget.groupIndex,
                             strokeId: s.id,
                             param: LfoParam.strokeGlowBrightness,
+                            onInteractionChanged: widget.onAnyKnobInteraction,
                           ),
                           SynthKnob(
                             label: 'Bright',
@@ -2195,7 +2394,7 @@ class _RouteTile extends StatelessWidget {
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
 
-    final spec = _amountSpec(route.param);
+    final spec = _lfoAmountSpec(route.param);
     final double uiValue = route.amount.clamp(spec.min, spec.max);
 
     return Container(
@@ -2245,7 +2444,7 @@ class _RouteTile extends StatelessWidget {
                 items: LfoParam.values
                     .map((p) => DropdownMenuItem(
                           value: p,
-                          child: Text(_paramLabel(p)),
+                          child: Text(_lfoParamLabel(p)),
                         ))
                     .toList(),
                 onChanged: (p) {
@@ -2253,7 +2452,7 @@ class _RouteTile extends StatelessWidget {
                   controller.setRouteParam(route.id, p);
 
                   // Optional: if you want to “snap” amount into a sane range when param changes
-                  final ns = _amountSpec(p);
+                  final ns = _lfoAmountSpec(p);
                   final snapped = route.amount.clamp(ns.min, ns.max);
                   if (snapped != route.amount) {
                     controller.setRouteAmount(route.id, snapped);
@@ -2304,115 +2503,109 @@ class _RouteTile extends StatelessWidget {
       ),
     );
   }
+}
 
-  // ------------------------------
-  // Param label (what shows in dropdown)
-  // ------------------------------
-  static String _paramLabel(LfoParam p) {
-    switch (p) {
-      // Layer
-      case LfoParam.layerX:
-        return 'Layer X';
-      case LfoParam.layerY:
-        return 'Layer Y';
-      case LfoParam.layerScale:
-        return 'Layer Scale';
-      case LfoParam.layerRotationDeg:
-        return 'Layer Rot';
-      case LfoParam.layerOpacity:
-        return 'Layer Opacity';
+String _lfoParamLabel(LfoParam p) {
+  switch (p) {
+    // Layer
+    case LfoParam.layerX:
+      return 'Layer X';
+    case LfoParam.layerY:
+      return 'Layer Y';
+    case LfoParam.layerScale:
+      return 'Layer Scale';
+    case LfoParam.layerRotationDeg:
+      return 'Layer Rot';
+    case LfoParam.layerOpacity:
+      return 'Layer Opacity';
 
-      // Stroke
-      case LfoParam.strokeSize:
-        return 'Stroke Size';
-      case LfoParam.strokeX:
-        return 'Stroke X';
-      case LfoParam.strokeY:
-        return 'Stroke Y';
-      case LfoParam.strokeRotationDeg:
-        return 'Stroke Rot';
-      case LfoParam.strokeCoreOpacity:
-        return 'Stroke Core';
-      case LfoParam.strokeGlowRadius:
-        return 'Stroke Radius';
-      case LfoParam.strokeGlowOpacity:
-        return 'Stroke Glow Op';
-      case LfoParam.strokeGlowBrightness:
-        return 'Stroke Bright';
-    }
+    // Stroke
+    case LfoParam.strokeSize:
+      return 'Stroke Size';
+    case LfoParam.strokeX:
+      return 'Stroke X';
+    case LfoParam.strokeY:
+      return 'Stroke Y';
+    case LfoParam.strokeRotationDeg:
+      return 'Stroke Rot';
+    case LfoParam.strokeCoreOpacity:
+      return 'Stroke Core';
+    case LfoParam.strokeGlowRadius:
+      return 'Stroke Radius';
+    case LfoParam.strokeGlowOpacity:
+      return 'Stroke Glow Op';
+    case LfoParam.strokeGlowBrightness:
+      return 'Stroke Bright';
   }
+}
 
-  // ------------------------------
-  // Amount “spec” per param (min/max/format)
-  // ------------------------------
-  static _AmtSpec _amountSpec(LfoParam p) {
-    switch (p) {
-      // Positions in px
-      case LfoParam.layerX:
-      case LfoParam.layerY:
-      case LfoParam.strokeX:
-      case LfoParam.strokeY:
-        return _AmtSpec(
-          label: 'Amt',
-          min: -500,
-          max: 500,
-          def: 50,
-          formatter: (v) => v.toStringAsFixed(0),
-        );
+_AmtSpec _lfoAmountSpec(LfoParam p) {
+  switch (p) {
+    // Positions in px
+    case LfoParam.layerX:
+    case LfoParam.layerY:
+    case LfoParam.strokeX:
+    case LfoParam.strokeY:
+      return _AmtSpec(
+        label: 'Amt',
+        min: -500,
+        max: 500,
+        def: 50,
+        formatter: (v) => v.toStringAsFixed(0),
+      );
 
-      // Rotation in degrees
-      case LfoParam.layerRotationDeg:
-      case LfoParam.strokeRotationDeg:
-        return _AmtSpec(
-          label: 'Amt',
-          min: -360,
-          max: 360,
-          def: 25,
-          formatter: (v) => '${v.toStringAsFixed(0)}°',
-        );
+    // Rotation in degrees
+    case LfoParam.layerRotationDeg:
+    case LfoParam.strokeRotationDeg:
+      return _AmtSpec(
+        label: 'Amt',
+        min: -360,
+        max: 360,
+        def: 25,
+        formatter: (v) => '${v.toStringAsFixed(0)}°',
+      );
 
-      // Scale delta
-      case LfoParam.layerScale:
-        return _AmtSpec(
-          label: 'Amt',
-          min: -3.0,
-          max: 3.0,
-          def: 0.25,
-          formatter: (v) => v.toStringAsFixed(2),
-        );
+    // Scale
+    case LfoParam.layerScale:
+      return _AmtSpec(
+        label: 'Amt',
+        min: -3.0,
+        max: 3.0,
+        def: 0.25,
+        formatter: (v) => v.toStringAsFixed(2),
+      );
 
-      // Stroke size delta
-      case LfoParam.strokeSize:
-        return _AmtSpec(
-          label: 'Amt',
-          min: -100.0,
-          max: 100.0,
-          def: 10.0,
-          formatter: (v) => v.toStringAsFixed(1),
-        );
+    // Stroke size
+    case LfoParam.strokeSize:
+      return _AmtSpec(
+        label: 'Amt',
+        min: -100.0,
+        max: 100.0,
+        def: 10.0,
+        formatter: (v) => v.toStringAsFixed(1),
+      );
 
-      // Opacities / brightness / radius (normalized deltas)
-      case LfoParam.layerOpacity:
-      case LfoParam.strokeCoreOpacity:
-      case LfoParam.strokeGlowOpacity:
-      case LfoParam.strokeGlowBrightness:
-        return _AmtSpec(
-          label: 'Amt',
-          min: -1.0,
-          max: 1.0,
-          def: 0.25,
-          formatter: (v) => v.toStringAsFixed(2),
-        );
+    // Vital-style bounded params
+    case LfoParam.layerOpacity:
+    case LfoParam.strokeCoreOpacity:
+    case LfoParam.strokeGlowOpacity:
+    case LfoParam.strokeGlowBrightness:
+      return _AmtSpec(
+        label: 'Amt',
+        min: -1.0,
+        max: 1.0,
+        def: 0.25,
+        formatter: (v) => v.toStringAsFixed(2),
+      );
 
-      case LfoParam.strokeGlowRadius:
-        return _AmtSpec(
-          label: 'Amt',
-          min: -1.0,
-          max: 1.0,
-          def: 0.25,
-          formatter: (v) => v.toStringAsFixed(2),
-        );
-    }
+    case LfoParam.strokeGlowRadius:
+      return _AmtSpec(
+        label: 'Amt',
+        min: -1.0,
+        max: 1.0,
+        def: 0.25,
+        formatter: (v) => v.toStringAsFixed(2),
+      );
   }
 }
 

@@ -2802,32 +2802,33 @@ class CanvasController extends ChangeNotifier {
 
     final r = _routes[i];
 
-    // Rotation is degrees; X/Y are pixels (v1 uses amount as generic amount).
     final double v;
     switch (r.param) {
+      // Rotation in degrees
       case LfoParam.layerRotationDeg:
       case LfoParam.strokeRotationDeg:
-        v = amount.clamp(0.0, 360.0).toDouble();
+        v = amount.clamp(-360.0, 360.0).toDouble();
         break;
 
+      // Positions in px
       case LfoParam.layerX:
       case LfoParam.layerY:
       case LfoParam.strokeX:
       case LfoParam.strokeY:
-        v = amount.clamp(0.0, 4000.0).toDouble();
+        v = amount.clamp(-500.0, 500.0).toDouble();
         break;
 
+      // Scale depth
       case LfoParam.layerScale:
-        v = amount
-            .clamp(-0.99, 5.0)
-            .toDouble(); // avoid negative/zero scale multipliers
+        v = amount.clamp(-3.0, 3.0).toDouble();
         break;
 
+      // Stroke size depth
       case LfoParam.strokeSize:
-        v = amount.clamp(-200.0, 200.0).toDouble();
+        v = amount.clamp(-100.0, 100.0).toDouble();
         break;
 
-      // ✅ VISUAL PARAMS: treat "amount" as DEPTH above base (0..1)
+      // Vital-style bounded params
       case LfoParam.layerOpacity:
       case LfoParam.strokeCoreOpacity:
       case LfoParam.strokeGlowRadius:
@@ -2835,11 +2836,9 @@ class CanvasController extends ChangeNotifier {
       case LfoParam.strokeGlowBrightness:
         v = amount.clamp(-1.0, 1.0).toDouble();
         break;
-
-      default:
-        v = amount.toDouble();
-        break;
     }
+
+    if ((_routes[i].amount - v).abs() < 0.000001) return;
 
     _routes[i] = r.copyWith(amount: v);
 
