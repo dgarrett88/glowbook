@@ -601,18 +601,53 @@ class CanvasController extends ChangeNotifier {
   }
 
   double _layerExtraRotationRadians(String layerId) {
-    double degTotal = 0.0;
+    final li = _state.layers.indexWhere((l) => l.id == layerId);
+    if (li < 0) return 0.0;
 
-    // A) constant rotation (deg)
+    final layer = _state.layers[li];
+    final baseDeg =
+        (layer.transform.rotation * 180.0 / math.pi).clamp(-360.0, 360.0);
+
+    double finalDeg = baseDeg.toDouble();
+
+    // Constant rotation can stay additive for now
     final anim = _layerRotation[layerId];
     if (anim != null && anim.isActive) {
-      degTotal += (anim.constantDegPerSec * _timeSec) % 360.0;
+      finalDeg += (anim.constantDegPerSec * _timeSec) % 360.0;
     }
 
-    // B) LFO routes (deg)
-    degTotal -= _sumRoutes(layerId: layerId, param: LfoParam.layerRotationDeg);
+    for (final r in _routes) {
+      if (!r.enabled) continue;
+      if (r.layerId != layerId) continue;
+      if (r.strokeId != null) continue;
+      if (r.param != LfoParam.layerRotationDeg) continue;
 
-    return degTotal * math.pi / 180.0;
+      final i = _lfos.indexWhere((l) => l.id == r.lfoId);
+      if (i < 0) continue;
+
+      final lfo = _lfos[i];
+      if (!lfo.enabled) continue;
+
+      final raw = lfo.eval(_timeSec); // [-1..1]
+      final lfo01 = ((raw + 1.0) * 0.5).clamp(0.0, 1.0).toDouble();
+
+      // amount is stored as -360..360, but for bounded rotation
+      // we interpret it as signed % of available travel
+      final depthPct = (r.amount / 360.0).clamp(-1.0, 1.0).toDouble();
+
+      finalDeg = _applyBoundedRouteMod(
+        base: finalDeg,
+        min: -360.0,
+        max: 360.0,
+        lfo01: lfo01,
+        depthPct: depthPct,
+      );
+    }
+
+    // return EXTRA rotation relative to base transform,
+    // because renderer adds this on top of base rotation
+    final extraDeg = finalDeg - baseDeg;
+    return extraDeg * math.pi / 180.0;
   }
 
   double _layerExtraX(String layerId) {
@@ -668,6 +703,28 @@ class CanvasController extends ChangeNotifier {
     }
   }
 
+  double _applyBoundedRouteMod({
+    required double base,
+    required double min,
+    required double max,
+    required double lfo01, // 0..1
+    required double depthPct, // -1..1
+  }) {
+    base = base.clamp(min, max).toDouble();
+    lfo01 = lfo01.clamp(0.0, 1.0).toDouble();
+    depthPct = depthPct.clamp(-1.0, 1.0).toDouble();
+
+    if (depthPct == 0.0) return base;
+
+    if (depthPct > 0.0) {
+      final available = max - base;
+      return (base + (available * depthPct * lfo01)).clamp(min, max).toDouble();
+    } else {
+      final available = base - min;
+      return (base + (available * depthPct * lfo01)).clamp(min, max).toDouble();
+    }
+  }
+
   double _currentLfoShapedValueForRoute(LfoRoute r) {
     final i = _lfos.indexWhere((x) => x.id == r.lfoId);
     if (i < 0) return 0.0;
@@ -711,17 +768,35 @@ class CanvasController extends ChangeNotifier {
       case LfoParam.layerRotationDeg:
         {
           final lfo01 = ((shaped + 1.0) * 0.5).clamp(0.0, 1.0).toDouble();
-          return (baseValue + (route.amount * lfo01))
-              .clamp(-360.0, 360.0)
-              .toDouble();
+
+          // route.amount is stored in degrees (-360..360),
+          // but for bounded knob modulation we treat that as signed depth percent.
+          final depthPct = (route.amount / 360.0).clamp(-1.0, 1.0).toDouble();
+
+          return _applyVitalMod(
+            base: baseValue,
+            min: -360.0,
+            max: 360.0,
+            lfo01: lfo01,
+            depth: depthPct,
+          );
         }
 
       case LfoParam.layerScale:
         {
           final lfo01 = ((shaped + 1.0) * 0.5).clamp(0.0, 1.0).toDouble();
-          return (baseValue + (route.amount * lfo01))
-              .clamp(0.1, 5.0)
-              .toDouble();
+
+          // route.amount is stored as -3..3 for scale depth,
+          // convert to signed percent of available headroom.
+          final depthPct = (route.amount / 3.0).clamp(-1.0, 1.0).toDouble();
+
+          return _applyVitalMod(
+            base: baseValue,
+            min: 0.1,
+            max: 5.0,
+            lfo01: lfo01,
+            depth: depthPct,
+          );
         }
 
       case LfoParam.layerOpacity:
@@ -792,7 +867,7 @@ class CanvasController extends ChangeNotifier {
       strokeId: strokeId,
       param: LfoParam.strokeRotationDeg,
     );
-    return -deg * math.pi / 180.0;
+    return deg * math.pi / 180.0;
   }
 
 // ─────────────────────────────────────────────────────────────

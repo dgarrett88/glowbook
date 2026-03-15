@@ -459,10 +459,15 @@ class _KnobPainter extends CustomPainter {
       final b = math.max(lo, hi).clamp(0.0, 1.0);
 
       if ((b - a) > 0.0001) {
+        final trackColor = modDirection > 0
+            ? Colors.greenAccent.withValues(alpha: enabled ? 0.22 : 0.12)
+            : modDirection < 0
+                ? const Color(0xFFF60F66)
+                    .withValues(alpha: enabled ? 0.28 : 0.14)
+                : Colors.white.withValues(alpha: enabled ? 0.22 : 0.12);
+
         final modPaint = Paint()
-          ..color = enabled
-              ? Colors.white.withValues(alpha: 0.22)
-              : Colors.white.withValues(alpha: 0.12)
+          ..color = trackColor
           ..style = PaintingStyle.stroke
           ..strokeCap = StrokeCap.round
           ..strokeWidth = 5.6;

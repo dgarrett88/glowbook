@@ -726,13 +726,24 @@ class _LayerTransformEditor extends ConsumerWidget {
                       );
                       if (route == null) return null;
 
-                      final base = values.rotationDegrees.clamp(-360.0, 360.0);
-                      final depth = route.amount.clamp(-360.0, 360.0);
+                      final base = values.rotationDegrees
+                          .clamp(-360.0, 360.0)
+                          .toDouble();
 
-                      final a = base;
-                      final b = (base + depth).clamp(-360.0, 360.0);
+                      // treat amount as signed depth % of available travel
+                      final depthPct =
+                          (route.amount / 360.0).clamp(-1.0, 1.0).toDouble();
 
-                      return math.min(a, b).toDouble();
+                      if (depthPct >= 0.0) {
+                        return base;
+                      }
+
+                      final availableToMin = base - (-360.0);
+                      final end = (base + (availableToMin * depthPct))
+                          .clamp(-360.0, 360.0)
+                          .toDouble();
+
+                      return math.min(base, end).toDouble();
                     }(),
                     modMaxValue: () {
                       final route = controller.findRouteForLayerParam(
@@ -741,13 +752,24 @@ class _LayerTransformEditor extends ConsumerWidget {
                       );
                       if (route == null) return null;
 
-                      final base = values.rotationDegrees.clamp(-360.0, 360.0);
-                      final depth = route.amount.clamp(-360.0, 360.0);
+                      final base = values.rotationDegrees
+                          .clamp(-360.0, 360.0)
+                          .toDouble();
 
-                      final a = base;
-                      final b = (base + depth).clamp(-360.0, 360.0);
+                      // treat amount as signed depth % of available travel
+                      final depthPct =
+                          (route.amount / 360.0).clamp(-1.0, 1.0).toDouble();
 
-                      return math.max(a, b).toDouble();
+                      if (depthPct <= 0.0) {
+                        return base;
+                      }
+
+                      final availableToMax = 360.0 - base;
+                      final end = (base + (availableToMax * depthPct))
+                          .clamp(-360.0, 360.0)
+                          .toDouble();
+
+                      return math.max(base, end).toDouble();
                     }(),
                     modValue: controller.previewLayerParamValue(
                       layerId,
@@ -869,6 +891,7 @@ class _ModLightControlState extends State<_ModLightControl> {
   double _startValue = 0.0;
   Offset? _dragStart;
   bool _active = false;
+  bool _showBubble = false;
 
   void _setActive(bool v) {
     if (_active == v) return;
@@ -884,6 +907,63 @@ class _ModLightControlState extends State<_ModLightControl> {
 
   double _denorm(double t) {
     return widget.min + ((widget.max - widget.min) * t.clamp(0.0, 1.0));
+  }
+
+  double _percentValue() {
+    final maxAbs = math.max(widget.min.abs(), widget.max.abs());
+    if (maxAbs <= 0.000001) return 0.0;
+    return ((widget.value / maxAbs) * 100.0).clamp(-100.0, 100.0).toDouble();
+  }
+
+  Future<void> _promptExactPercent() async {
+    final ctrl = TextEditingController(
+      text: _percentValue().toStringAsFixed(0),
+    );
+
+    final res = await showDialog<double?>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF171720),
+        title: const Text(
+          'Set modulation depth',
+          style: TextStyle(color: Colors.white),
+        ),
+        content: TextField(
+          controller: ctrl,
+          autofocus: true,
+          keyboardType: const TextInputType.numberWithOptions(
+            decimal: true,
+            signed: true,
+          ),
+          style: const TextStyle(color: Colors.white),
+          decoration: const InputDecoration(
+            hintText: 'Enter percent (-100 to 100)',
+            hintStyle: TextStyle(color: Colors.white54),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, null),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () {
+              final parsed = double.tryParse(ctrl.text.trim());
+              Navigator.pop(ctx, parsed);
+            },
+            child: const Text('OK'),
+          ),
+        ],
+      ),
+    );
+
+    if (res == null) return;
+
+    final clampedPct = res.clamp(-100.0, 100.0).toDouble();
+    final maxAbs = math.max(widget.min.abs(), widget.max.abs());
+    final newValue = (clampedPct / 100.0) * maxAbs;
+
+    widget.onChanged(newValue.clamp(widget.min, widget.max).toDouble());
   }
 
   @override
@@ -907,9 +987,11 @@ class _ModLightControlState extends State<_ModLightControl> {
       child: GestureDetector(
         behavior: HitTestBehavior.opaque,
         onTap: widget.onTapLight,
+        onLongPress: _promptExactPercent,
         onPanStart: widget.isOn
             ? (d) {
                 _setActive(true);
+                setState(() => _showBubble = true);
                 _startValue = widget.value.clamp(widget.min, widget.max);
                 _dragStart = d.localPosition;
               }
@@ -933,16 +1015,65 @@ class _ModLightControlState extends State<_ModLightControl> {
                 widget.onChanged(newValue);
               }
             : null,
-        onPanEnd: (_) => _setActive(false),
-        onPanCancel: () => _setActive(false),
+        onPanEnd: (_) {
+          _setActive(false);
+          if (mounted) {
+            setState(() => _showBubble = false);
+          }
+        },
+        onPanCancel: () {
+          _setActive(false);
+          if (mounted) {
+            setState(() => _showBubble = false);
+          }
+        },
         child: SizedBox(
-          width: 28,
-          height: 28,
-          child: CustomPaint(
-            painter: _ModLightPainter(
-              isOn: widget.isOn,
-              signedT: signedT,
-            ),
+          width: 40,
+          height: 46,
+          child: Stack(
+            clipBehavior: Clip.none,
+            alignment: Alignment.center,
+            children: [
+              Positioned(
+                bottom: 0,
+                child: SizedBox(
+                  width: 28,
+                  height: 28,
+                  child: CustomPaint(
+                    painter: _ModLightPainter(
+                      isOn: widget.isOn,
+                      signedT: signedT,
+                    ),
+                  ),
+                ),
+              ),
+              if (_showBubble)
+                Positioned(
+                  top: -2,
+                  child: Container(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF11111C),
+                      borderRadius: BorderRadius.circular(999),
+                      border: Border.all(color: Colors.white12),
+                    ),
+                    child: Text(
+                      '${_percentValue() >= 0 ? '+' : ''}${_percentValue().toStringAsFixed(0)}%',
+                      style: TextStyle(
+                        fontSize: 10,
+                        fontWeight: FontWeight.w700,
+                        color: _percentValue() > 0
+                            ? const Color(0xFF69F0AE)
+                            : _percentValue() < 0
+                                ? const Color(0xFFF60F66)
+                                : Colors.white70,
+                        height: 1.0,
+                      ),
+                    ),
+                  ),
+                ),
+            ],
           ),
         ),
       ),
