@@ -610,7 +610,7 @@ class CanvasController extends ChangeNotifier {
     }
 
     // B) LFO routes (deg)
-    degTotal += _sumRoutes(layerId: layerId, param: LfoParam.layerRotationDeg);
+    degTotal -= _sumRoutes(layerId: layerId, param: LfoParam.layerRotationDeg);
 
     return degTotal * math.pi / 180.0;
   }
@@ -668,9 +668,114 @@ class CanvasController extends ChangeNotifier {
     }
   }
 
+  double _currentLfoShapedValueForRoute(LfoRoute r) {
+    final i = _lfos.indexWhere((x) => x.id == r.lfoId);
+    if (i < 0) return 0.0;
+
+    final lfo = _lfos[i];
+    if (!lfo.enabled) return 0.0;
+
+    final raw = lfo.eval(_timeSec); // [-1..1]
+
+    final bool forceUnipolar = (r.param == LfoParam.layerOpacity ||
+        r.param == LfoParam.strokeCoreOpacity ||
+        r.param == LfoParam.strokeGlowRadius ||
+        r.param == LfoParam.strokeGlowOpacity ||
+        r.param == LfoParam.strokeGlowBrightness);
+
+    if (forceUnipolar) {
+      return ((raw + 1.0) * 0.5); // [0..1]
+    }
+
+    return r.bipolar ? raw : ((raw + 1.0) * 0.5);
+  }
+
+  double? previewLayerParamValue(
+    String layerId,
+    LfoParam param,
+    double baseValue,
+  ) {
+    final route = findRouteForLayerParam(layerId, param);
+    if (route == null || !route.enabled) return null;
+
+    final shaped = _currentLfoShapedValueForRoute(route);
+
+    switch (param) {
+      case LfoParam.layerX:
+      case LfoParam.layerY:
+        {
+          final lfo01 = ((shaped + 1.0) * 0.5).clamp(0.0, 1.0).toDouble();
+          return (baseValue + (route.amount * lfo01)).toDouble();
+        }
+
+      case LfoParam.layerRotationDeg:
+        {
+          final lfo01 = ((shaped + 1.0) * 0.5).clamp(0.0, 1.0).toDouble();
+          return (baseValue + (route.amount * lfo01))
+              .clamp(-360.0, 360.0)
+              .toDouble();
+        }
+
+      case LfoParam.layerScale:
+        {
+          final lfo01 = ((shaped + 1.0) * 0.5).clamp(0.0, 1.0).toDouble();
+          return (baseValue + (route.amount * lfo01))
+              .clamp(0.1, 5.0)
+              .toDouble();
+        }
+
+      case LfoParam.layerOpacity:
+        final depth = route.amount.clamp(-1.0, 1.0).toDouble();
+        final lfo01 = shaped.clamp(0.0, 1.0).toDouble();
+        return _applyVitalMod(
+          base: baseValue,
+          min: 0.0,
+          max: 1.0,
+          lfo01: lfo01,
+          depth: depth,
+        );
+
+      default:
+        return null;
+    }
+  }
+
   // NOTE: this returns an ADDITIVE delta; renderer will clamp final opacity.
   double _layerExtraOpacity(String layerId) {
-    return _sumRoutes(layerId: layerId, param: LfoParam.layerOpacity);
+    final li = _state.layers.indexWhere((l) => l.id == layerId);
+    if (li < 0) return 0.0;
+
+    final base = _state.layers[li].transform.opacity.clamp(0.0, 1.0).toDouble();
+
+    double out = base;
+
+    for (final r in _routes) {
+      if (!r.enabled) continue;
+      if (r.layerId != layerId) continue;
+      if (r.strokeId != null) continue;
+      if (r.param != LfoParam.layerOpacity) continue;
+
+      final i = _lfos.indexWhere((l) => l.id == r.lfoId);
+      if (i < 0) continue;
+
+      final lfo = _lfos[i];
+      if (!lfo.enabled) continue;
+
+      final raw = lfo.eval(_timeSec); // [-1..1]
+      final lfo01 = (raw + 1.0) * 0.5; // [0..1]
+      final depth = r.amount.clamp(-1.0, 1.0).toDouble();
+
+      out = _applyVitalMod(
+        base: base,
+        min: 0.0,
+        max: 1.0,
+        lfo01: lfo01,
+        depth: depth,
+      );
+    }
+
+    // renderer expects additive extra opacity, not final opacity
+    return (out - base).clamp(-1.0, 1.0).toDouble();
   }
 
   double _strokeExtraX(String layerId, String strokeId) =>
@@ -687,7 +792,7 @@ class CanvasController extends ChangeNotifier {
       strokeId: strokeId,
       param: LfoParam.strokeRotationDeg,
     );
-    return deg * math.pi / 180.0;
+    return -deg * math.pi / 180.0;
   }
 
 // ─────────────────────────────────────────────────────────────

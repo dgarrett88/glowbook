@@ -254,6 +254,20 @@ class Renderer extends CustomPainter {
         t.opacity == 1.0;
   }
 
+  bool _layerHasLiveExtrasNow(String layerId) {
+    final extraRot = _layerExtraRotationRadians(layerId);
+    final extraX = _layerExtraX?.call(layerId) ?? 0.0;
+    final extraY = _layerExtraY?.call(layerId) ?? 0.0;
+    final extraScale = _layerExtraScale?.call(layerId) ?? 0.0;
+    final extraOpacity = _layerExtraOpacity?.call(layerId) ?? 0.0;
+
+    return extraRot.abs() > 0.000001 ||
+        extraX.abs() > 0.000001 ||
+        extraY.abs() > 0.000001 ||
+        extraScale.abs() > 0.000001 ||
+        extraOpacity.abs() > 0.000001;
+  }
+
   Offset _strokeBoundsCenterLocal(Stroke sLocal) {
     double? minX, maxX, minY, maxY;
     for (final pt in sLocal.points) {
@@ -496,9 +510,13 @@ class Renderer extends CustomPainter {
       final freezeExtras = isSelected;
 
       // If stroke-extras enabled, never use baked pictures.
+      // Also skip baked pictures whenever this layer currently has live extras
+      // (rotation / x / y / scale / opacity), otherwise animation gets frozen.
       if (!_strokeExtrasEnabled) {
         final baked = _bakedByStrokeId[e.strokeLocal.id];
-        if (!freezeExtras && baked != null) {
+        final hasLiveLayerExtras = _layerHasLiveExtrasNow(e.layerId);
+
+        if (!freezeExtras && !hasLiveLayerExtras && baked != null) {
           canvas.drawPicture(baked);
           continue;
         }

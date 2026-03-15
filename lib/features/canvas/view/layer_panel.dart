@@ -719,6 +719,49 @@ class _LayerTransformEditor extends ConsumerWidget {
                     min: -360,
                     max: 360,
                     defaultValue: 0.0,
+                    modMinValue: () {
+                      final route = controller.findRouteForLayerParam(
+                        layerId,
+                        LfoParam.layerRotationDeg,
+                      );
+                      if (route == null) return null;
+
+                      final base = values.rotationDegrees.clamp(-360.0, 360.0);
+                      final depth = route.amount.clamp(-360.0, 360.0);
+
+                      final a = base;
+                      final b = (base + depth).clamp(-360.0, 360.0);
+
+                      return math.min(a, b).toDouble();
+                    }(),
+                    modMaxValue: () {
+                      final route = controller.findRouteForLayerParam(
+                        layerId,
+                        LfoParam.layerRotationDeg,
+                      );
+                      if (route == null) return null;
+
+                      final base = values.rotationDegrees.clamp(-360.0, 360.0);
+                      final depth = route.amount.clamp(-360.0, 360.0);
+
+                      final a = base;
+                      final b = (base + depth).clamp(-360.0, 360.0);
+
+                      return math.max(a, b).toDouble();
+                    }(),
+                    modValue: controller.previewLayerParamValue(
+                      layerId,
+                      LfoParam.layerRotationDeg,
+                      values.rotationDegrees.clamp(-360.0, 360.0).toDouble(),
+                    ),
+                    modDirection: () {
+                      final route = controller.findRouteForLayerParam(
+                        layerId,
+                        LfoParam.layerRotationDeg,
+                      );
+                      if (route == null) return 0.0;
+                      return route.amount;
+                    }(),
                     valueFormatter: (v) => '${v.toStringAsFixed(0)}°',
                     onInteractionChanged: onAnyKnobInteraction,
                     onChangeStart: () =>
@@ -749,6 +792,24 @@ class _LayerTransformEditor extends ConsumerWidget {
                     min: 0.0,
                     max: 1.0,
                     defaultValue: 1.0,
+                    modMinValue: () {
+                      final route = controller.findRouteForLayerParam(
+                          layerId, LfoParam.layerOpacity);
+                      if (route == null) return null;
+                      final base = values.opacity.clamp(0.0, 1.0);
+                      final depth = route.amount.clamp(-1.0, 1.0);
+                      if (depth >= 0.0) return base;
+                      return (base + (base * depth)).clamp(0.0, 1.0);
+                    }(),
+                    modMaxValue: () {
+                      final route = controller.findRouteForLayerParam(
+                          layerId, LfoParam.layerOpacity);
+                      if (route == null) return null;
+                      final base = values.opacity.clamp(0.0, 1.0);
+                      final depth = route.amount.clamp(-1.0, 1.0);
+                      if (depth <= 0.0) return base;
+                      return (base + ((1.0 - base) * depth)).clamp(0.0, 1.0);
+                    }(),
                     valueFormatter: (v) => '${(v * 100).round()}%',
                     onInteractionChanged: onAnyKnobInteraction,
                     onChangeStart: () => controller.beginLayerKnob(layerId,
@@ -836,6 +897,7 @@ class _ModLightControlState extends State<_ModLightControl> {
   @override
   Widget build(BuildContext context) {
     final t = _normBipolar(widget.value);
+    final signedT = ((t - 0.5) * 2.0).clamp(-1.0, 1.0).toDouble();
 
     return Listener(
       behavior: HitTestBehavior.opaque,
@@ -879,7 +941,7 @@ class _ModLightControlState extends State<_ModLightControl> {
           child: CustomPaint(
             painter: _ModLightPainter(
               isOn: widget.isOn,
-              t: t,
+              signedT: signedT,
             ),
           ),
         ),
@@ -891,42 +953,60 @@ class _ModLightControlState extends State<_ModLightControl> {
 class _ModLightPainter extends CustomPainter {
   _ModLightPainter({
     required this.isOn,
-    required this.t,
+    required this.signedT,
   });
 
   final bool isOn;
-  final double t;
-
-  static const double _startAngle = math.pi * 0.75;
-  static const double _sweep = math.pi * 1.5;
+  final double signedT; // -1..1
 
   @override
   void paint(Canvas canvas, Size size) {
     final c = Offset(size.width / 2, size.height / 2);
 
-    // Outer ring track
+    // top-center zero point
+    const startAngle = -math.pi / 2.0;
+
     final ringRect = Rect.fromCircle(center: c, radius: 11.0);
 
+    // full faint track
     final trackPaint = Paint()
       ..color = Colors.white.withValues(alpha: isOn ? 0.16 : 0.08)
       ..style = PaintingStyle.stroke
       ..strokeWidth = 2.0
       ..strokeCap = StrokeCap.round;
 
-    canvas.drawArc(ringRect, _startAngle, _sweep, false, trackPaint);
+    canvas.drawArc(
+      ringRect,
+      startAngle,
+      math.pi * 2.0,
+      false,
+      trackPaint,
+    );
 
-    // Value arc
-    if (isOn) {
+    // signed active arc
+    if (isOn && signedT.abs() > 0.0001) {
+      final bool positive = signedT > 0.0;
+      final double mag = signedT.abs().clamp(0.0, 1.0);
+      final double sweep = (math.pi * 2.0) * mag;
+
       final valuePaint = Paint()
-        ..color = Colors.greenAccent.withValues(alpha: 0.95)
+        ..color = positive
+            ? const Color(0xFF69F0AE).withValues(alpha: 0.95)
+            : const Color(0xFFF60F66).withValues(alpha: 0.95)
         ..style = PaintingStyle.stroke
-        ..strokeWidth = 2.2
+        ..strokeWidth = 2.4
         ..strokeCap = StrokeCap.round;
 
-      canvas.drawArc(ringRect, _startAngle, _sweep * t, false, valuePaint);
+      canvas.drawArc(
+        ringRect,
+        startAngle,
+        positive ? sweep : -sweep,
+        false,
+        valuePaint,
+      );
     }
 
-    // Center light
+    // center light
     final dotPaint = Paint()
       ..color = isOn ? Colors.greenAccent : Colors.white24
       ..style = PaintingStyle.fill;
@@ -945,7 +1025,7 @@ class _ModLightPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant _ModLightPainter oldDelegate) {
-    return oldDelegate.isOn != isOn || oldDelegate.t != t;
+    return oldDelegate.isOn != isOn || oldDelegate.signedT != signedT;
   }
 }
 

@@ -25,6 +25,10 @@ class SynthKnob extends StatefulWidget {
     this.valueFormatter,
     this.sensitivity = 0.006,
     this.showValueText = true,
+    this.modMinValue,
+    this.modMaxValue,
+    this.modValue,
+    this.modDirection = 0,
     this.modTag,
     this.onTapModTag,
     this.enabled = true,
@@ -58,6 +62,18 @@ class SynthKnob extends StatefulWidget {
 
   final double sensitivity;
   final bool showValueText;
+
+  /// Optional modulation display range in real value space.
+  /// These do NOT move the knob; they only draw overlays.
+  final double? modMinValue;
+  final double? modMaxValue;
+
+  /// Current live modulation value in real value space.
+  final double? modValue;
+
+  /// Signed modulation direction:
+  /// > 0 = positive/forward, < 0 = negative/backward, 0 = none
+  final double modDirection;
 
   final String? modTag;
   final VoidCallback? onTapModTag;
@@ -268,6 +284,12 @@ class _SynthKnobState extends State<SynthKnob> {
           t: t,
           enabled: _enabled,
           accent: cs.primary,
+          modMinT:
+              widget.modMinValue == null ? null : _norm(widget.modMinValue!),
+          modMaxT:
+              widget.modMaxValue == null ? null : _norm(widget.modMaxValue!),
+          modValueT: widget.modValue == null ? null : _norm(widget.modValue!),
+          modDirection: widget.modDirection,
         ),
       ),
     );
@@ -374,11 +396,19 @@ class _KnobPainter extends CustomPainter {
     required this.t,
     required this.enabled,
     required this.accent,
+    this.modMinT,
+    this.modMaxT,
+    this.modValueT,
+    this.modDirection = 0,
   });
 
   final double t; // 0..1
   final bool enabled;
   final Color accent;
+  final double? modMinT; // 0..1
+  final double? modMaxT; // 0..1
+  final double? modValueT; // 0..1
+  final double modDirection;
 
   static const double _startAngle = math.pi * 0.75; // 135°
   static const double _sweep = math.pi * 1.5; // 270°
@@ -419,6 +449,63 @@ class _KnobPainter extends CustomPainter {
 
     canvas.drawArc(rect, _startAngle, _sweep * t, false, valuePaint);
 
+    // Optional modulation overlay arc
+    final lo = modMinT;
+    final hi = modMaxT;
+    final mv = modValueT;
+
+    if (lo != null && hi != null) {
+      final a = math.min(lo, hi).clamp(0.0, 1.0);
+      final b = math.max(lo, hi).clamp(0.0, 1.0);
+
+      if ((b - a) > 0.0001) {
+        final modPaint = Paint()
+          ..color = enabled
+              ? Colors.white.withValues(alpha: 0.22)
+              : Colors.white.withValues(alpha: 0.12)
+          ..style = PaintingStyle.stroke
+          ..strokeCap = StrokeCap.round
+          ..strokeWidth = 5.6;
+
+        canvas.drawArc(
+          rect,
+          _startAngle + (_sweep * a),
+          _sweep * (b - a),
+          false,
+          modPaint,
+        );
+      }
+    }
+
+    // Live modulation fill: draw only from the user's base knob position
+    // toward the current modulated value, and color it by the ROUTE direction,
+    // not by whether the current value happens to be above/below base.
+    if (mv != null && (mv - t).abs() > 0.0001 && modDirection.abs() > 0.0001) {
+      final baseT = t.clamp(0.0, 1.0);
+      final liveT = mv.clamp(0.0, 1.0);
+
+      final start = math.min(baseT, liveT);
+      final end = math.max(baseT, liveT);
+
+      final liveFillPaint = Paint()
+        ..color = enabled
+            ? (modDirection > 0
+                ? Colors.greenAccent.withValues(alpha: 0.92)
+                : const Color(0xFFFF4FD8).withValues(alpha: 0.92))
+            : Colors.white.withValues(alpha: 0.20)
+        ..style = PaintingStyle.stroke
+        ..strokeCap = StrokeCap.round
+        ..strokeWidth = 5.8;
+
+      canvas.drawArc(
+        rect,
+        _startAngle + (_sweep * start),
+        _sweep * (end - start),
+        false,
+        liveFillPaint,
+      );
+    }
+
     final ang = _startAngle + (_sweep * t);
     final p1 = c + Offset(math.cos(ang), math.sin(ang)) * (r - 10);
     final p2 = c + Offset(math.cos(ang), math.sin(ang)) * (r - 18);
@@ -442,6 +529,10 @@ class _KnobPainter extends CustomPainter {
   bool shouldRepaint(covariant _KnobPainter oldDelegate) {
     return oldDelegate.t != t ||
         oldDelegate.enabled != enabled ||
-        oldDelegate.accent != accent;
+        oldDelegate.accent != accent ||
+        oldDelegate.modMinT != modMinT ||
+        oldDelegate.modMaxT != modMaxT ||
+        oldDelegate.modValueT != modValueT ||
+        oldDelegate.modDirection != modDirection;
   }
 }
