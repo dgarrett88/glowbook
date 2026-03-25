@@ -651,15 +651,121 @@ class CanvasController extends ChangeNotifier {
   }
 
   double _layerExtraX(String layerId) {
-    return _sumRoutes(layerId: layerId, param: LfoParam.layerX);
+    final li = _state.layers.indexWhere((l) => l.id == layerId);
+    if (li < 0) return 0.0;
+
+    final layer = _state.layers[li];
+    final base = layer.transform.position.dx.clamp(-500.0, 500.0).toDouble();
+
+    double out = base;
+
+    for (final r in _routes) {
+      if (!r.enabled) continue;
+      if (r.layerId != layerId) continue;
+      if (r.strokeId != null) continue;
+      if (r.param != LfoParam.layerX) continue;
+
+      final i = _lfos.indexWhere((l) => l.id == r.lfoId);
+      if (i < 0) continue;
+
+      final lfo = _lfos[i];
+      if (!lfo.enabled) continue;
+
+      final raw = lfo.eval(_timeSec);
+      final lfo01 = ((raw + 1.0) * 0.5).clamp(0.0, 1.0).toDouble();
+      final depthPct = (r.amount / 500.0).clamp(-1.0, 1.0).toDouble();
+
+      out = _applyVitalMod(
+        base: base,
+        min: -500.0,
+        max: 500.0,
+        lfo01: lfo01,
+        depth: depthPct,
+      );
+    }
+
+    return out - base;
   }
 
   double _layerExtraY(String layerId) {
-    return -_sumRoutes(layerId: layerId, param: LfoParam.layerY); // ✅ flip Y
+    final li = _state.layers.indexWhere((l) => l.id == layerId);
+    if (li < 0) return 0.0;
+
+    final layer = _state.layers[li];
+    final baseUi =
+        (-layer.transform.position.dy).clamp(-500.0, 500.0).toDouble();
+
+    double outUi = baseUi;
+
+    for (final r in _routes) {
+      if (!r.enabled) continue;
+      if (r.layerId != layerId) continue;
+      if (r.strokeId != null) continue;
+      if (r.param != LfoParam.layerY) continue;
+
+      final i = _lfos.indexWhere((l) => l.id == r.lfoId);
+      if (i < 0) continue;
+
+      final lfo = _lfos[i];
+      if (!lfo.enabled) continue;
+
+      final raw = lfo.eval(_timeSec);
+      final lfo01 = ((raw + 1.0) * 0.5).clamp(0.0, 1.0).toDouble();
+      final depthPct = (r.amount / 500.0).clamp(-1.0, 1.0).toDouble();
+
+      outUi = _applyVitalMod(
+        base: baseUi,
+        min: -500.0,
+        max: 500.0,
+        lfo01: lfo01,
+        depth: depthPct,
+      );
+    }
+
+    final finalWorldY = -outUi;
+    final baseWorldY = layer.transform.position.dy;
+    return finalWorldY - baseWorldY;
   }
 
   double _layerExtraScale(String layerId) {
-    return _sumRoutes(layerId: layerId, param: LfoParam.layerScale);
+    final li = _state.layers.indexWhere((l) => l.id == layerId);
+    if (li < 0) return 0.0;
+
+    final layer = _state.layers[li];
+    final baseScale = layer.transform.scale.clamp(0.1, 5.0).toDouble();
+
+    double finalScale = baseScale;
+
+    for (final r in _routes) {
+      if (!r.enabled) continue;
+      if (r.layerId != layerId) continue;
+      if (r.strokeId != null) continue;
+      if (r.param != LfoParam.layerScale) continue;
+
+      final i = _lfos.indexWhere((l) => l.id == r.lfoId);
+      if (i < 0) continue;
+
+      final lfo = _lfos[i];
+      if (!lfo.enabled) continue;
+
+      final raw = lfo.eval(_timeSec); // [-1..1]
+      final lfo01 = ((raw + 1.0) * 0.5).clamp(0.0, 1.0).toDouble();
+
+      // amount is stored as -3..3, but for bounded scale
+      // we interpret it as signed % of available travel
+      final depthPct = (r.amount / 3.0).clamp(-1.0, 1.0).toDouble();
+
+      finalScale = _applyBoundedRouteMod(
+        base: finalScale,
+        min: 0.1,
+        max: 5.0,
+        lfo01: lfo01,
+        depthPct: depthPct,
+      );
+    }
+
+    // renderer expects EXTRA scale, not final scale
+    return finalScale - baseScale;
   }
 
   LayerTransform _effectiveLayerTransformForInput(
@@ -671,8 +777,8 @@ class CanvasController extends ChangeNotifier {
     final extraRot = _layerExtraRotationRadians(layerId);
     final extraScale = _layerExtraScale(layerId);
 
-    final scaleMul = (1.0 + extraScale).clamp(0.01, 100.0).toDouble();
-    final effScale = (base.scale * scaleMul).clamp(0.01, 100.0).toDouble();
+// extraScale now means: finalScale - base.scale
+    final effScale = (base.scale + extraScale).clamp(0.1, 5.0).toDouble();
 
     return base.copyWith(
       position: base.position + Offset(dx, dy),
@@ -762,15 +868,20 @@ class CanvasController extends ChangeNotifier {
       case LfoParam.layerY:
         {
           final lfo01 = ((shaped + 1.0) * 0.5).clamp(0.0, 1.0).toDouble();
-          return (baseValue + (route.amount * lfo01)).toDouble();
+          final depthPct = (route.amount / 500.0).clamp(-1.0, 1.0).toDouble();
+
+          return _applyVitalMod(
+            base: baseValue,
+            min: -500.0,
+            max: 500.0,
+            lfo01: lfo01,
+            depth: depthPct,
+          );
         }
 
       case LfoParam.layerRotationDeg:
         {
           final lfo01 = ((shaped + 1.0) * 0.5).clamp(0.0, 1.0).toDouble();
-
-          // route.amount is stored in degrees (-360..360),
-          // but for bounded knob modulation we treat that as signed depth percent.
           final depthPct = (route.amount / 360.0).clamp(-1.0, 1.0).toDouble();
 
           return _applyVitalMod(
@@ -784,19 +895,25 @@ class CanvasController extends ChangeNotifier {
 
       case LfoParam.layerScale:
         {
-          final lfo01 = ((shaped + 1.0) * 0.5).clamp(0.0, 1.0).toDouble();
-
-          // route.amount is stored as -3..3 for scale depth,
-          // convert to signed percent of available headroom.
+          final raw =
+              _currentLfoShapedValueForRoute(route).clamp(-1.0, 1.0).toDouble();
+          final lfo01 = ((raw + 1.0) * 0.5).clamp(0.0, 1.0).toDouble();
           final depthPct = (route.amount / 3.0).clamp(-1.0, 1.0).toDouble();
+          final base = baseValue.clamp(0.1, 5.0).toDouble();
 
-          return _applyVitalMod(
-            base: baseValue,
-            min: 0.1,
-            max: 5.0,
-            lfo01: lfo01,
-            depth: depthPct,
-          );
+          if (depthPct == 0.0) return base;
+
+          if (depthPct > 0.0) {
+            final available = 5.0 - base;
+            return (base + (available * depthPct * lfo01))
+                .clamp(0.1, 5.0)
+                .toDouble();
+          } else {
+            final available = base - 0.1;
+            return (base + (available * depthPct * lfo01))
+                .clamp(0.1, 5.0)
+                .toDouble();
+          }
         }
 
       case LfoParam.layerOpacity:
@@ -809,6 +926,92 @@ class CanvasController extends ChangeNotifier {
           lfo01: lfo01,
           depth: depth,
         );
+
+      default:
+        return null;
+    }
+  }
+
+  double? previewStrokeParamValue(
+    String layerId,
+    String strokeId,
+    LfoParam param,
+    double baseValue,
+  ) {
+    LfoRoute? route;
+
+    for (final r in _routes) {
+      if (r.layerId != layerId) continue;
+      if (r.strokeId != strokeId) continue;
+      if (r.param != param) continue;
+      route = r;
+      break;
+    }
+
+    if (route == null || !route.enabled) return null;
+
+    final shaped = _currentLfoShapedValueForRoute(route);
+
+    switch (param) {
+      case LfoParam.strokeRotationDeg:
+        {
+          final lfo01 = ((shaped + 1.0) * 0.5).clamp(0.0, 1.0).toDouble();
+          final depthPct = (route.amount / 360.0).clamp(-1.0, 1.0).toDouble();
+
+          return _applyVitalMod(
+            base: baseValue,
+            min: -360.0,
+            max: 360.0,
+            lfo01: lfo01,
+            depth: depthPct,
+          );
+        }
+
+      case LfoParam.strokeX:
+      case LfoParam.strokeY:
+        {
+          final lfo01 = ((shaped + 1.0) * 0.5).clamp(0.0, 1.0).toDouble();
+          final depthPct = (route.amount / 500.0).clamp(-1.0, 1.0).toDouble();
+
+          return _applyVitalMod(
+            base: baseValue,
+            min: -500.0,
+            max: 500.0,
+            lfo01: lfo01,
+            depth: depthPct,
+          );
+        }
+
+      case LfoParam.strokeSize:
+        {
+          final lfo01 = ((shaped + 1.0) * 0.5).clamp(0.0, 1.0).toDouble();
+          final depthPct = (route.amount / 100.0).clamp(-1.0, 1.0).toDouble();
+
+          return _applyVitalMod(
+            base: baseValue,
+            min: 0.5,
+            max: 200.0,
+            lfo01: lfo01,
+            depth: depthPct,
+          );
+        }
+
+      case LfoParam.strokeCoreOpacity:
+      case LfoParam.strokeGlowRadius:
+      case LfoParam.strokeGlowOpacity:
+      case LfoParam.strokeGlowBrightness:
+        {
+          final depth = route.amount.clamp(-1.0, 1.0).toDouble();
+          final lfo01 = shaped.clamp(0.0, 1.0).toDouble();
+
+          return _applyVitalMod(
+            base: baseValue,
+            min: 0.0,
+            max: 1.0,
+            lfo01: lfo01,
+            depth: depth,
+          );
+        }
 
       default:
         return null;
@@ -853,13 +1056,69 @@ class CanvasController extends ChangeNotifier {
     return (out - base).clamp(-1.0, 1.0).toDouble();
   }
 
-  double _strokeExtraX(String layerId, String strokeId) =>
-      _sumRoutes(layerId: layerId, strokeId: strokeId, param: LfoParam.strokeX);
+  double _strokeExtraX(String layerId, String strokeId) {
+    final base = 0.0;
+    double out = base;
 
-  double _strokeExtraY(String layerId, String strokeId) => -_sumRoutes(
-      layerId: layerId,
-      strokeId: strokeId,
-      param: LfoParam.strokeY); // ✅ flip Y
+    for (final r in _routes) {
+      if (!r.enabled) continue;
+      if (r.layerId != layerId) continue;
+      if (r.strokeId != strokeId) continue;
+      if (r.param != LfoParam.strokeX) continue;
+
+      final i = _lfos.indexWhere((l) => l.id == r.lfoId);
+      if (i < 0) continue;
+
+      final lfo = _lfos[i];
+      if (!lfo.enabled) continue;
+
+      final raw = lfo.eval(_timeSec);
+      final lfo01 = ((raw + 1.0) * 0.5).clamp(0.0, 1.0).toDouble();
+      final depthPct = (r.amount / 500.0).clamp(-1.0, 1.0).toDouble();
+
+      out = _applyVitalMod(
+        base: base,
+        min: -500.0,
+        max: 500.0,
+        lfo01: lfo01,
+        depth: depthPct,
+      );
+    }
+
+    return out - base;
+  }
+
+  double _strokeExtraY(String layerId, String strokeId) {
+    final baseUi = 0.0;
+    double outUi = baseUi;
+
+    for (final r in _routes) {
+      if (!r.enabled) continue;
+      if (r.layerId != layerId) continue;
+      if (r.strokeId != strokeId) continue;
+      if (r.param != LfoParam.strokeY) continue;
+
+      final i = _lfos.indexWhere((l) => l.id == r.lfoId);
+      if (i < 0) continue;
+
+      final lfo = _lfos[i];
+      if (!lfo.enabled) continue;
+
+      final raw = lfo.eval(_timeSec);
+      final lfo01 = ((raw + 1.0) * 0.5).clamp(0.0, 1.0).toDouble();
+      final depthPct = (r.amount / 500.0).clamp(-1.0, 1.0).toDouble();
+
+      outUi = _applyVitalMod(
+        base: baseUi,
+        min: -500.0,
+        max: 500.0,
+        lfo01: lfo01,
+        depth: depthPct,
+      );
+    }
+
+    return -outUi;
+  }
 
   double _strokeExtraRotationRad(String layerId, String strokeId) {
     final deg = _sumRoutes(
@@ -874,11 +1133,38 @@ class CanvasController extends ChangeNotifier {
 // Stroke SIZE (unbounded, delta-based → keep old behavior)
 // ─────────────────────────────────────────────────────────────
   double strokeExtraSize(String layerId, String strokeId) {
-    return _sumRoutes(
-      layerId: layerId,
-      strokeId: strokeId,
-      param: LfoParam.strokeSize,
-    );
+    final base = _findStrokeBaseValue(layerId, strokeId, (s) => s.size, 10.0)
+        .clamp(0.5, 200.0)
+        .toDouble();
+
+    double out = base;
+
+    for (final r in _routes) {
+      if (!r.enabled) continue;
+      if (r.layerId != layerId) continue;
+      if (r.strokeId != strokeId) continue;
+      if (r.param != LfoParam.strokeSize) continue;
+
+      final i = _lfos.indexWhere((l) => l.id == r.lfoId);
+      if (i < 0) continue;
+
+      final lfo = _lfos[i];
+      if (!lfo.enabled) continue;
+
+      final raw = lfo.eval(_timeSec);
+      final lfo01 = ((raw + 1.0) * 0.5).clamp(0.0, 1.0).toDouble();
+      final depthPct = (r.amount / 100.0).clamp(-1.0, 1.0).toDouble();
+
+      out = _applyVitalMod(
+        base: base,
+        min: 0.5,
+        max: 200.0,
+        lfo01: lfo01,
+        depth: depthPct,
+      );
+    }
+
+    return out - base;
   }
 
 // ─────────────────────────────────────────────────────────────

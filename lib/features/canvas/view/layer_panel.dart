@@ -622,21 +622,71 @@ class _LayerTransformEditor extends ConsumerWidget {
                     min: -500,
                     max: 500,
                     defaultValue: 0,
+                    modMinValue: () {
+                      final route = controller.findRouteForLayerParam(
+                        layerId,
+                        LfoParam.layerX,
+                      );
+                      if (route == null) return null;
+
+                      final base = values.x.clamp(-500.0, 500.0).toDouble();
+                      final depthPct =
+                          (route.amount / 500.0).clamp(-1.0, 1.0).toDouble();
+
+                      if (depthPct >= 0.0) {
+                        return base;
+                      }
+
+                      final availableToMin = base - (-500.0);
+                      final end = (base + (availableToMin * depthPct))
+                          .clamp(-500.0, 500.0)
+                          .toDouble();
+
+                      return math.min(base, end).toDouble();
+                    }(),
+                    modMaxValue: () {
+                      final route = controller.findRouteForLayerParam(
+                        layerId,
+                        LfoParam.layerX,
+                      );
+                      if (route == null) return null;
+
+                      final base = values.x.clamp(-500.0, 500.0).toDouble();
+                      final depthPct =
+                          (route.amount / 500.0).clamp(-1.0, 1.0).toDouble();
+
+                      if (depthPct <= 0.0) {
+                        return base;
+                      }
+
+                      final availableToMax = 500.0 - base;
+                      final end = (base + (availableToMax * depthPct))
+                          .clamp(-500.0, 500.0)
+                          .toDouble();
+
+                      return math.max(base, end).toDouble();
+                    }(),
+                    modValue: controller.previewLayerParamValue(
+                      layerId,
+                      LfoParam.layerX,
+                      values.x.clamp(-500.0, 500.0).toDouble(),
+                    ),
+                    modDirection: () {
+                      final route = controller.findRouteForLayerParam(
+                        layerId,
+                        LfoParam.layerX,
+                      );
+                      if (route == null) return 0.0;
+                      return route.amount;
+                    }(),
                     valueFormatter: (v) => v.toStringAsFixed(0),
                     onInteractionChanged: onAnyKnobInteraction,
-
-                    // ✅ history transaction
                     onChangeStart: () =>
                         controller.beginLayerKnob(layerId, label: 'Layer X'),
                     onChangeEnd: () => controller.endLayerKnob(layerId),
-
                     onChanged: (v) {
                       onAnyKnobValueChanged();
-
-                      // ✅ live apply NO HISTORY
                       controller.setLayerXRef(layerId, v);
-
-                      // ✅ keep local UI state in sync (so knobs show the value)
                       onChanged(values.copyWith(x: v));
                     },
                   ),
@@ -659,6 +709,63 @@ class _LayerTransformEditor extends ConsumerWidget {
                     min: -500,
                     max: 500,
                     defaultValue: 0,
+                    modMinValue: () {
+                      final route = controller.findRouteForLayerParam(
+                        layerId,
+                        LfoParam.layerY,
+                      );
+                      if (route == null) return null;
+
+                      final base = values.y.clamp(-500.0, 500.0).toDouble();
+                      final depthPct =
+                          (route.amount / 500.0).clamp(-1.0, 1.0).toDouble();
+
+                      if (depthPct >= 0.0) {
+                        return base;
+                      }
+
+                      final availableToMin = base - (-500.0);
+                      final end = (base + (availableToMin * depthPct))
+                          .clamp(-500.0, 500.0)
+                          .toDouble();
+
+                      return math.min(base, end).toDouble();
+                    }(),
+                    modMaxValue: () {
+                      final route = controller.findRouteForLayerParam(
+                        layerId,
+                        LfoParam.layerY,
+                      );
+                      if (route == null) return null;
+
+                      final base = values.y.clamp(-500.0, 500.0).toDouble();
+                      final depthPct =
+                          (route.amount / 500.0).clamp(-1.0, 1.0).toDouble();
+
+                      if (depthPct <= 0.0) {
+                        return base;
+                      }
+
+                      final availableToMax = 500.0 - base;
+                      final end = (base + (availableToMax * depthPct))
+                          .clamp(-500.0, 500.0)
+                          .toDouble();
+
+                      return math.max(base, end).toDouble();
+                    }(),
+                    modValue: controller.previewLayerParamValue(
+                      layerId,
+                      LfoParam.layerY,
+                      values.y.clamp(-500.0, 500.0).toDouble(),
+                    ),
+                    modDirection: () {
+                      final route = controller.findRouteForLayerParam(
+                        layerId,
+                        LfoParam.layerY,
+                      );
+                      if (route == null) return 0.0;
+                      return route.amount;
+                    }(),
                     valueFormatter: (v) => v.toStringAsFixed(0),
                     onInteractionChanged: onAnyKnobInteraction,
                     onChangeStart: () =>
@@ -689,6 +796,63 @@ class _LayerTransformEditor extends ConsumerWidget {
                     min: 0.1,
                     max: 5.0,
                     defaultValue: 1.0,
+                    modMinValue: () {
+                      final route = controller.findRouteForLayerParam(
+                        layerId,
+                        LfoParam.layerScale,
+                      );
+                      if (route == null) return null;
+
+                      final base = values.scale.clamp(0.1, 5.0).toDouble();
+                      final depthPct =
+                          (route.amount / 3.0).clamp(-1.0, 1.0).toDouble();
+
+                      if (depthPct >= 0.0) {
+                        return base;
+                      }
+
+                      final availableToMin = base - 0.1;
+                      final end = (base + (availableToMin * depthPct))
+                          .clamp(0.1, 5.0)
+                          .toDouble();
+
+                      return math.min(base, end).toDouble();
+                    }(),
+                    modMaxValue: () {
+                      final route = controller.findRouteForLayerParam(
+                        layerId,
+                        LfoParam.layerScale,
+                      );
+                      if (route == null) return null;
+
+                      final base = values.scale.clamp(0.1, 5.0).toDouble();
+                      final depthPct =
+                          (route.amount / 3.0).clamp(-1.0, 1.0).toDouble();
+
+                      if (depthPct <= 0.0) {
+                        return base;
+                      }
+
+                      final availableToMax = 5.0 - base;
+                      final end = (base + (availableToMax * depthPct))
+                          .clamp(0.1, 5.0)
+                          .toDouble();
+
+                      return math.max(base, end).toDouble();
+                    }(),
+                    modValue: controller.previewLayerParamValue(
+                      layerId,
+                      LfoParam.layerScale,
+                      values.scale.clamp(0.1, 5.0).toDouble(),
+                    ),
+                    modDirection: () {
+                      final route = controller.findRouteForLayerParam(
+                        layerId,
+                        LfoParam.layerScale,
+                      );
+                      if (route == null) return 0.0;
+                      return route.amount;
+                    }(),
                     valueFormatter: (v) => v.toStringAsFixed(2),
                     onInteractionChanged: onAnyKnobInteraction,
                     onChangeStart: () => controller.beginLayerKnob(layerId,
@@ -816,21 +980,58 @@ class _LayerTransformEditor extends ConsumerWidget {
                     defaultValue: 1.0,
                     modMinValue: () {
                       final route = controller.findRouteForLayerParam(
-                          layerId, LfoParam.layerOpacity);
+                        layerId,
+                        LfoParam.layerOpacity,
+                      );
                       if (route == null) return null;
-                      final base = values.opacity.clamp(0.0, 1.0);
-                      final depth = route.amount.clamp(-1.0, 1.0);
-                      if (depth >= 0.0) return base;
-                      return (base + (base * depth)).clamp(0.0, 1.0);
+
+                      final base = values.opacity.clamp(0.0, 1.0).toDouble();
+                      final depthPct = route.amount.clamp(-1.0, 1.0).toDouble();
+
+                      if (depthPct >= 0.0) {
+                        return base;
+                      }
+
+                      final availableToMin = base - 0.0;
+                      final end = (base + (availableToMin * depthPct))
+                          .clamp(0.0, 1.0)
+                          .toDouble();
+
+                      return math.min(base, end).toDouble();
                     }(),
                     modMaxValue: () {
                       final route = controller.findRouteForLayerParam(
-                          layerId, LfoParam.layerOpacity);
+                        layerId,
+                        LfoParam.layerOpacity,
+                      );
                       if (route == null) return null;
-                      final base = values.opacity.clamp(0.0, 1.0);
-                      final depth = route.amount.clamp(-1.0, 1.0);
-                      if (depth <= 0.0) return base;
-                      return (base + ((1.0 - base) * depth)).clamp(0.0, 1.0);
+
+                      final base = values.opacity.clamp(0.0, 1.0).toDouble();
+                      final depthPct = route.amount.clamp(-1.0, 1.0).toDouble();
+
+                      if (depthPct <= 0.0) {
+                        return base;
+                      }
+
+                      final availableToMax = 1.0 - base;
+                      final end = (base + (availableToMax * depthPct))
+                          .clamp(0.0, 1.0)
+                          .toDouble();
+
+                      return math.max(base, end).toDouble();
+                    }(),
+                    modValue: controller.previewLayerParamValue(
+                      layerId,
+                      LfoParam.layerOpacity,
+                      values.opacity.clamp(0.0, 1.0).toDouble(),
+                    ),
+                    modDirection: () {
+                      final route = controller.findRouteForLayerParam(
+                        layerId,
+                        LfoParam.layerOpacity,
+                      );
+                      if (route == null) return 0.0;
+                      return route.amount;
                     }(),
                     valueFormatter: (v) => '${(v * 100).round()}%',
                     onInteractionChanged: onAnyKnobInteraction,
@@ -1882,11 +2083,73 @@ class _StrokeTileState extends State<_StrokeTile> {
                             min: 0.5,
                             max: 200.0,
                             defaultValue: 10.0,
+                            modMinValue: () {
+                              final route =
+                                  widget.controller.findRouteForStrokeParam(
+                                widget.layerId,
+                                widget.groupIndex,
+                                s.id,
+                                LfoParam.strokeSize,
+                              );
+                              if (route == null) return null;
+
+                              final base = s.size.clamp(0.5, 200.0).toDouble();
+                              final depthPct = (route.amount / 100.0)
+                                  .clamp(-1.0, 1.0)
+                                  .toDouble();
+
+                              if (depthPct >= 0.0) return base;
+
+                              final availableToMin = base - 0.5;
+                              final end = (base + (availableToMin * depthPct))
+                                  .clamp(0.5, 200.0)
+                                  .toDouble();
+
+                              return math.min(base, end).toDouble();
+                            }(),
+                            modMaxValue: () {
+                              final route =
+                                  widget.controller.findRouteForStrokeParam(
+                                widget.layerId,
+                                widget.groupIndex,
+                                s.id,
+                                LfoParam.strokeSize,
+                              );
+                              if (route == null) return null;
+
+                              final base = s.size.clamp(0.5, 200.0).toDouble();
+                              final depthPct = (route.amount / 100.0)
+                                  .clamp(-1.0, 1.0)
+                                  .toDouble();
+
+                              if (depthPct <= 0.0) return base;
+
+                              final availableToMax = 200.0 - base;
+                              final end = (base + (availableToMax * depthPct))
+                                  .clamp(0.5, 200.0)
+                                  .toDouble();
+
+                              return math.max(base, end).toDouble();
+                            }(),
+                            modValue: widget.controller.previewStrokeParamValue(
+                              widget.layerId,
+                              s.id,
+                              LfoParam.strokeSize,
+                              s.size.clamp(0.5, 200.0).toDouble(),
+                            ),
+                            modDirection: () {
+                              final route =
+                                  widget.controller.findRouteForStrokeParam(
+                                widget.layerId,
+                                widget.groupIndex,
+                                s.id,
+                                LfoParam.strokeSize,
+                              );
+                              if (route == null) return 0.0;
+                              return route.amount;
+                            }(),
                             valueFormatter: (v) => v.toStringAsFixed(1),
-
-                            // ✅ keep your existing scroll/fade behaviour
                             onInteractionChanged: widget.onAnyKnobInteraction,
-
                             onChangeStart: () =>
                                 widget.controller.beginStrokeSizeKnob(
                               widget.layerId,
@@ -1899,11 +2162,9 @@ class _StrokeTileState extends State<_StrokeTile> {
                               widget.groupIndex,
                               s.id,
                             ),
-
                             onChanged: (v) {
                               widget.onAnyKnobValueChanged();
-                              widget.onSizeChanged(
-                                  v); // still calls setStrokeSizeRef(...)
+                              widget.onSizeChanged(v);
                             },
                           ),
                         ],
@@ -1926,6 +2187,75 @@ class _StrokeTileState extends State<_StrokeTile> {
                             min: -500,
                             max: 500,
                             defaultValue: 0,
+                            modMinValue: () {
+                              final route =
+                                  widget.controller.findRouteForStrokeParam(
+                                widget.layerId,
+                                widget.groupIndex,
+                                s.id,
+                                LfoParam.strokeX,
+                              );
+                              if (route == null) return null;
+
+                              final base = _tx.clamp(-500.0, 500.0).toDouble();
+                              final depthPct = (route.amount / 500.0)
+                                  .clamp(-1.0, 1.0)
+                                  .toDouble();
+
+                              if (depthPct >= 0.0) {
+                                return base;
+                              }
+
+                              final availableToMin = base - (-500.0);
+                              final end = (base + (availableToMin * depthPct))
+                                  .clamp(-500.0, 500.0)
+                                  .toDouble();
+
+                              return math.min(base, end).toDouble();
+                            }(),
+                            modMaxValue: () {
+                              final route =
+                                  widget.controller.findRouteForStrokeParam(
+                                widget.layerId,
+                                widget.groupIndex,
+                                s.id,
+                                LfoParam.strokeX,
+                              );
+                              if (route == null) return null;
+
+                              final base = _tx.clamp(-500.0, 500.0).toDouble();
+                              final depthPct = (route.amount / 500.0)
+                                  .clamp(-1.0, 1.0)
+                                  .toDouble();
+
+                              if (depthPct <= 0.0) {
+                                return base;
+                              }
+
+                              final availableToMax = 500.0 - base;
+                              final end = (base + (availableToMax * depthPct))
+                                  .clamp(-500.0, 500.0)
+                                  .toDouble();
+
+                              return math.max(base, end).toDouble();
+                            }(),
+                            modValue: widget.controller.previewStrokeParamValue(
+                              widget.layerId,
+                              s.id,
+                              LfoParam.strokeX,
+                              _tx.clamp(-500.0, 500.0).toDouble(),
+                            ),
+                            modDirection: () {
+                              final route =
+                                  widget.controller.findRouteForStrokeParam(
+                                widget.layerId,
+                                widget.groupIndex,
+                                s.id,
+                                LfoParam.strokeX,
+                              );
+                              if (route == null) return 0.0;
+                              return route.amount;
+                            }(),
                             valueFormatter: (v) => v.toStringAsFixed(0),
                             onInteractionChanged: widget.onAnyKnobInteraction,
                             onChangeStart: () =>
@@ -1957,6 +2287,75 @@ class _StrokeTileState extends State<_StrokeTile> {
                             min: -500,
                             max: 500,
                             defaultValue: 0,
+                            modMinValue: () {
+                              final route =
+                                  widget.controller.findRouteForStrokeParam(
+                                widget.layerId,
+                                widget.groupIndex,
+                                s.id,
+                                LfoParam.strokeY,
+                              );
+                              if (route == null) return null;
+
+                              final base = _ty.clamp(-500.0, 500.0).toDouble();
+                              final depthPct = (route.amount / 500.0)
+                                  .clamp(-1.0, 1.0)
+                                  .toDouble();
+
+                              if (depthPct >= 0.0) {
+                                return base;
+                              }
+
+                              final availableToMin = base - (-500.0);
+                              final end = (base + (availableToMin * depthPct))
+                                  .clamp(-500.0, 500.0)
+                                  .toDouble();
+
+                              return math.min(base, end).toDouble();
+                            }(),
+                            modMaxValue: () {
+                              final route =
+                                  widget.controller.findRouteForStrokeParam(
+                                widget.layerId,
+                                widget.groupIndex,
+                                s.id,
+                                LfoParam.strokeY,
+                              );
+                              if (route == null) return null;
+
+                              final base = _ty.clamp(-500.0, 500.0).toDouble();
+                              final depthPct = (route.amount / 500.0)
+                                  .clamp(-1.0, 1.0)
+                                  .toDouble();
+
+                              if (depthPct <= 0.0) {
+                                return base;
+                              }
+
+                              final availableToMax = 500.0 - base;
+                              final end = (base + (availableToMax * depthPct))
+                                  .clamp(-500.0, 500.0)
+                                  .toDouble();
+
+                              return math.max(base, end).toDouble();
+                            }(),
+                            modValue: widget.controller.previewStrokeParamValue(
+                              widget.layerId,
+                              s.id,
+                              LfoParam.strokeY,
+                              _ty.clamp(-500.0, 500.0).toDouble(),
+                            ),
+                            modDirection: () {
+                              final route =
+                                  widget.controller.findRouteForStrokeParam(
+                                widget.layerId,
+                                widget.groupIndex,
+                                s.id,
+                                LfoParam.strokeY,
+                              );
+                              if (route == null) return 0.0;
+                              return route.amount;
+                            }(),
                             valueFormatter: (v) => v.toStringAsFixed(0),
                             onInteractionChanged: widget.onAnyKnobInteraction,
                             onChangeStart: () =>
@@ -1988,6 +2387,77 @@ class _StrokeTileState extends State<_StrokeTile> {
                             min: -360,
                             max: 360,
                             defaultValue: 0,
+                            modMinValue: () {
+                              final route =
+                                  widget.controller.findRouteForStrokeParam(
+                                widget.layerId,
+                                widget.groupIndex,
+                                s.id,
+                                LfoParam.strokeRotationDeg,
+                              );
+                              if (route == null) return null;
+
+                              final base =
+                                  _rotDeg.clamp(-360.0, 360.0).toDouble();
+                              final depthPct = (route.amount / 360.0)
+                                  .clamp(-1.0, 1.0)
+                                  .toDouble();
+
+                              if (depthPct >= 0.0) {
+                                return base;
+                              }
+
+                              final availableToMin = base - (-360.0);
+                              final end = (base + (availableToMin * depthPct))
+                                  .clamp(-360.0, 360.0)
+                                  .toDouble();
+
+                              return math.min(base, end).toDouble();
+                            }(),
+                            modMaxValue: () {
+                              final route =
+                                  widget.controller.findRouteForStrokeParam(
+                                widget.layerId,
+                                widget.groupIndex,
+                                s.id,
+                                LfoParam.strokeRotationDeg,
+                              );
+                              if (route == null) return null;
+
+                              final base =
+                                  _rotDeg.clamp(-360.0, 360.0).toDouble();
+                              final depthPct = (route.amount / 360.0)
+                                  .clamp(-1.0, 1.0)
+                                  .toDouble();
+
+                              if (depthPct <= 0.0) {
+                                return base;
+                              }
+
+                              final availableToMax = 360.0 - base;
+                              final end = (base + (availableToMax * depthPct))
+                                  .clamp(-360.0, 360.0)
+                                  .toDouble();
+
+                              return math.max(base, end).toDouble();
+                            }(),
+                            modValue: widget.controller.previewStrokeParamValue(
+                              widget.layerId,
+                              s.id,
+                              LfoParam.strokeRotationDeg,
+                              _rotDeg.clamp(-360.0, 360.0).toDouble(),
+                            ),
+                            modDirection: () {
+                              final route =
+                                  widget.controller.findRouteForStrokeParam(
+                                widget.layerId,
+                                widget.groupIndex,
+                                s.id,
+                                LfoParam.strokeRotationDeg,
+                              );
+                              if (route == null) return 0.0;
+                              return route.amount;
+                            }(),
                             valueFormatter: (v) => '${v.toStringAsFixed(0)}°',
                             onInteractionChanged: widget.onAnyKnobInteraction,
                             onChangeStart: () =>
@@ -2019,6 +2489,78 @@ class _StrokeTileState extends State<_StrokeTile> {
                             min: 0.0,
                             max: 100.0,
                             defaultValue: 86.0,
+                            modMinValue: () {
+                              final route =
+                                  widget.controller.findRouteForStrokeParam(
+                                widget.layerId,
+                                widget.groupIndex,
+                                s.id,
+                                LfoParam.strokeCoreOpacity,
+                              );
+                              if (route == null) return null;
+
+                              final base = coreUi.clamp(0.0, 100.0).toDouble();
+                              final depthPct =
+                                  route.amount.clamp(-1.0, 1.0).toDouble();
+
+                              if (depthPct >= 0.0) {
+                                return base;
+                              }
+
+                              final availableToMin = base - 0.0;
+                              final end = (base + (availableToMin * depthPct))
+                                  .clamp(0.0, 100.0)
+                                  .toDouble();
+
+                              return math.min(base, end).toDouble();
+                            }(),
+                            modMaxValue: () {
+                              final route =
+                                  widget.controller.findRouteForStrokeParam(
+                                widget.layerId,
+                                widget.groupIndex,
+                                s.id,
+                                LfoParam.strokeCoreOpacity,
+                              );
+                              if (route == null) return null;
+
+                              final base = coreUi.clamp(0.0, 100.0).toDouble();
+                              final depthPct =
+                                  route.amount.clamp(-1.0, 1.0).toDouble();
+
+                              if (depthPct <= 0.0) {
+                                return base;
+                              }
+
+                              final availableToMax = 100.0 - base;
+                              final end = (base + (availableToMax * depthPct))
+                                  .clamp(0.0, 100.0)
+                                  .toDouble();
+
+                              return math.max(base, end).toDouble();
+                            }(),
+                            modValue: () {
+                              final v =
+                                  widget.controller.previewStrokeParamValue(
+                                widget.layerId,
+                                s.id,
+                                LfoParam.strokeCoreOpacity,
+                                s.coreOpacity.clamp(0.0, 1.0).toDouble(),
+                              );
+                              if (v == null) return null;
+                              return (v * 100.0).clamp(0.0, 100.0).toDouble();
+                            }(),
+                            modDirection: () {
+                              final route =
+                                  widget.controller.findRouteForStrokeParam(
+                                widget.layerId,
+                                widget.groupIndex,
+                                s.id,
+                                LfoParam.strokeCoreOpacity,
+                              );
+                              if (route == null) return 0.0;
+                              return route.amount;
+                            }(),
                             valueFormatter: (v) => '${v.toStringAsFixed(0)}%',
                             onInteractionChanged: widget.onAnyKnobInteraction,
                             onChangeStart: () =>
@@ -2040,7 +2582,11 @@ class _StrokeTileState extends State<_StrokeTile> {
                               widget.onAnyKnobValueChanged();
                               final nv = (ui / 100.0).clamp(0.0, 1.0);
                               widget.controller.setStrokeCoreOpacityRef(
-                                  widget.layerId, widget.groupIndex, s.id, nv);
+                                widget.layerId,
+                                widget.groupIndex,
+                                s.id,
+                                nv,
+                              );
                             },
                           ),
                         ],
@@ -2063,6 +2609,80 @@ class _StrokeTileState extends State<_StrokeTile> {
                             min: 0.0,
                             max: 300.0,
                             defaultValue: 15.0,
+                            modMinValue: () {
+                              final route =
+                                  widget.controller.findRouteForStrokeParam(
+                                widget.layerId,
+                                widget.groupIndex,
+                                s.id,
+                                LfoParam.strokeGlowRadius,
+                              );
+                              if (route == null) return null;
+
+                              final base =
+                                  radiusUi.clamp(0.0, 300.0).toDouble();
+                              final depthPct =
+                                  route.amount.clamp(-1.0, 1.0).toDouble();
+
+                              if (depthPct >= 0.0) {
+                                return base;
+                              }
+
+                              final availableToMin = base - 0.0;
+                              final end = (base + (availableToMin * depthPct))
+                                  .clamp(0.0, 300.0)
+                                  .toDouble();
+
+                              return math.min(base, end).toDouble();
+                            }(),
+                            modMaxValue: () {
+                              final route =
+                                  widget.controller.findRouteForStrokeParam(
+                                widget.layerId,
+                                widget.groupIndex,
+                                s.id,
+                                LfoParam.strokeGlowRadius,
+                              );
+                              if (route == null) return null;
+
+                              final base =
+                                  radiusUi.clamp(0.0, 300.0).toDouble();
+                              final depthPct =
+                                  route.amount.clamp(-1.0, 1.0).toDouble();
+
+                              if (depthPct <= 0.0) {
+                                return base;
+                              }
+
+                              final availableToMax = 300.0 - base;
+                              final end = (base + (availableToMax * depthPct))
+                                  .clamp(0.0, 300.0)
+                                  .toDouble();
+
+                              return math.max(base, end).toDouble();
+                            }(),
+                            modValue: () {
+                              final v =
+                                  widget.controller.previewStrokeParamValue(
+                                widget.layerId,
+                                s.id,
+                                LfoParam.strokeGlowRadius,
+                                s.glowRadius.clamp(0.0, 1.0).toDouble(),
+                              );
+                              if (v == null) return null;
+                              return (v * 300.0).clamp(0.0, 300.0).toDouble();
+                            }(),
+                            modDirection: () {
+                              final route =
+                                  widget.controller.findRouteForStrokeParam(
+                                widget.layerId,
+                                widget.groupIndex,
+                                s.id,
+                                LfoParam.strokeGlowRadius,
+                              );
+                              if (route == null) return 0.0;
+                              return route.amount;
+                            }(),
                             valueFormatter: (v) => v.toStringAsFixed(0),
                             onInteractionChanged: widget.onAnyKnobInteraction,
                             onChangeStart: () =>
@@ -2084,7 +2704,11 @@ class _StrokeTileState extends State<_StrokeTile> {
                               widget.onAnyKnobValueChanged();
                               final nv = (ui / 300.0).clamp(0.0, 1.0);
                               widget.controller.setStrokeGlowRadiusRef(
-                                  widget.layerId, widget.groupIndex, s.id, nv);
+                                widget.layerId,
+                                widget.groupIndex,
+                                s.id,
+                                nv,
+                              );
                             },
                           ),
                         ],
@@ -2107,6 +2731,80 @@ class _StrokeTileState extends State<_StrokeTile> {
                             min: 0.0,
                             max: 100.0,
                             defaultValue: 100.0,
+                            modMinValue: () {
+                              final route =
+                                  widget.controller.findRouteForStrokeParam(
+                                widget.layerId,
+                                widget.groupIndex,
+                                s.id,
+                                LfoParam.strokeGlowOpacity,
+                              );
+                              if (route == null) return null;
+
+                              final base =
+                                  glowOpUi.clamp(0.0, 100.0).toDouble();
+                              final depthPct =
+                                  route.amount.clamp(-1.0, 1.0).toDouble();
+
+                              if (depthPct >= 0.0) {
+                                return base;
+                              }
+
+                              final availableToMin = base - 0.0;
+                              final end = (base + (availableToMin * depthPct))
+                                  .clamp(0.0, 100.0)
+                                  .toDouble();
+
+                              return math.min(base, end).toDouble();
+                            }(),
+                            modMaxValue: () {
+                              final route =
+                                  widget.controller.findRouteForStrokeParam(
+                                widget.layerId,
+                                widget.groupIndex,
+                                s.id,
+                                LfoParam.strokeGlowOpacity,
+                              );
+                              if (route == null) return null;
+
+                              final base =
+                                  glowOpUi.clamp(0.0, 100.0).toDouble();
+                              final depthPct =
+                                  route.amount.clamp(-1.0, 1.0).toDouble();
+
+                              if (depthPct <= 0.0) {
+                                return base;
+                              }
+
+                              final availableToMax = 100.0 - base;
+                              final end = (base + (availableToMax * depthPct))
+                                  .clamp(0.0, 100.0)
+                                  .toDouble();
+
+                              return math.max(base, end).toDouble();
+                            }(),
+                            modValue: () {
+                              final v =
+                                  widget.controller.previewStrokeParamValue(
+                                widget.layerId,
+                                s.id,
+                                LfoParam.strokeGlowOpacity,
+                                s.glowOpacity.clamp(0.0, 1.0).toDouble(),
+                              );
+                              if (v == null) return null;
+                              return (v * 100.0).clamp(0.0, 100.0).toDouble();
+                            }(),
+                            modDirection: () {
+                              final route =
+                                  widget.controller.findRouteForStrokeParam(
+                                widget.layerId,
+                                widget.groupIndex,
+                                s.id,
+                                LfoParam.strokeGlowOpacity,
+                              );
+                              if (route == null) return 0.0;
+                              return route.amount;
+                            }(),
                             valueFormatter: (v) => '${v.toStringAsFixed(0)}%',
                             onInteractionChanged: widget.onAnyKnobInteraction,
                             onChangeStart: () =>
@@ -2128,7 +2826,11 @@ class _StrokeTileState extends State<_StrokeTile> {
                               widget.onAnyKnobValueChanged();
                               final nv = (ui / 100.0).clamp(0.0, 1.0);
                               widget.controller.setStrokeGlowOpacityRef(
-                                  widget.layerId, widget.groupIndex, s.id, nv);
+                                widget.layerId,
+                                widget.groupIndex,
+                                s.id,
+                                nv,
+                              );
                             },
                           ),
                         ],
@@ -2151,6 +2853,80 @@ class _StrokeTileState extends State<_StrokeTile> {
                             min: 0.0,
                             max: 100.0,
                             defaultValue: 50.0,
+                            modMinValue: () {
+                              final route =
+                                  widget.controller.findRouteForStrokeParam(
+                                widget.layerId,
+                                widget.groupIndex,
+                                s.id,
+                                LfoParam.strokeGlowBrightness,
+                              );
+                              if (route == null) return null;
+
+                              final base =
+                                  brightUi.clamp(0.0, 100.0).toDouble();
+                              final depthPct =
+                                  route.amount.clamp(-1.0, 1.0).toDouble();
+
+                              if (depthPct >= 0.0) {
+                                return base;
+                              }
+
+                              final availableToMin = base - 0.0;
+                              final end = (base + (availableToMin * depthPct))
+                                  .clamp(0.0, 100.0)
+                                  .toDouble();
+
+                              return math.min(base, end).toDouble();
+                            }(),
+                            modMaxValue: () {
+                              final route =
+                                  widget.controller.findRouteForStrokeParam(
+                                widget.layerId,
+                                widget.groupIndex,
+                                s.id,
+                                LfoParam.strokeGlowBrightness,
+                              );
+                              if (route == null) return null;
+
+                              final base =
+                                  brightUi.clamp(0.0, 100.0).toDouble();
+                              final depthPct =
+                                  route.amount.clamp(-1.0, 1.0).toDouble();
+
+                              if (depthPct <= 0.0) {
+                                return base;
+                              }
+
+                              final availableToMax = 100.0 - base;
+                              final end = (base + (availableToMax * depthPct))
+                                  .clamp(0.0, 100.0)
+                                  .toDouble();
+
+                              return math.max(base, end).toDouble();
+                            }(),
+                            modValue: () {
+                              final v =
+                                  widget.controller.previewStrokeParamValue(
+                                widget.layerId,
+                                s.id,
+                                LfoParam.strokeGlowBrightness,
+                                s.glowBrightness.clamp(0.0, 1.0).toDouble(),
+                              );
+                              if (v == null) return null;
+                              return (v * 100.0).clamp(0.0, 100.0).toDouble();
+                            }(),
+                            modDirection: () {
+                              final route =
+                                  widget.controller.findRouteForStrokeParam(
+                                widget.layerId,
+                                widget.groupIndex,
+                                s.id,
+                                LfoParam.strokeGlowBrightness,
+                              );
+                              if (route == null) return 0.0;
+                              return route.amount;
+                            }(),
                             valueFormatter: (v) => v.toStringAsFixed(0),
                             onInteractionChanged: widget.onAnyKnobInteraction,
                             onChangeStart: () =>
@@ -2172,7 +2948,11 @@ class _StrokeTileState extends State<_StrokeTile> {
                               widget.onAnyKnobValueChanged();
                               final nv = (ui / 100.0).clamp(0.0, 1.0);
                               widget.controller.setStrokeGlowBrightnessRef(
-                                  widget.layerId, widget.groupIndex, s.id, nv);
+                                widget.layerId,
+                                widget.groupIndex,
+                                s.id,
+                                nv,
+                              );
                             },
                           ),
                         ],

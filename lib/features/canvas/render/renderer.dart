@@ -84,8 +84,9 @@ class Renderer extends CustomPainter {
   final double Function(String layerId)? _layerExtraX;
   final double Function(String layerId)? _layerExtraY;
 
-  /// Returns extra scale delta for a layer (interpreted as multiplier delta).
-  /// Effective scale = baseScale * (1 + extraScale)
+  /// Returns extra scale delta for a layer as:
+  /// finalScale - baseScale
+  /// Effective scale = baseScale + extraScale
   final double Function(String layerId)? _layerExtraScale;
 
   /// Returns extra opacity delta for a layer (additive).
@@ -314,8 +315,8 @@ class Renderer extends CustomPainter {
     final extraScale = _layerExtraScale?.call(layerId) ?? 0.0;
     final extraOpacity = _layerExtraOpacity?.call(layerId) ?? 0.0;
 
-    final scaleMul = (1.0 + extraScale).clamp(0.01, 100.0).toDouble();
-    final effScale = (base.scale * scaleMul).clamp(0.01, 100.0).toDouble();
+    // extraScale now means: finalScale - base.scale
+    final effScale = (base.scale + extraScale).clamp(0.1, 5.0).toDouble();
     final effOpacity = (base.opacity + extraOpacity).clamp(0.0, 1.0).toDouble();
 
     return base.copyWith(
@@ -345,8 +346,6 @@ class Renderer extends CustomPainter {
     // Prefer layer pivot; fallback to stroke bounds center (local).
     final pivotLocal = t.pivot ?? _strokeBoundsCenterLocal(sLocal);
 
-    final opacityMul = t.opacity.clamp(0.0, 1.0);
-
     final out = <PointSample>[];
     for (final p in sLocal.points) {
       final w = _forward(Offset(p.x, p.y), t, pivotLocal);
@@ -355,8 +354,6 @@ class Renderer extends CustomPainter {
 
     return sLocal.copyWith(
       points: out,
-      coreOpacity: (sLocal.coreOpacity * opacityMul).clamp(0.0, 1.0),
-      glowOpacity: (sLocal.glowOpacity * opacityMul).clamp(0.0, 1.0),
     );
   }
 
@@ -444,7 +441,13 @@ class Renderer extends CustomPainter {
     final newSize = (outStroke.size + dSize).clamp(0.5, 500.0).toDouble();
 
     // ✅ VISUAL PARAMS: controller now returns FINAL values (Vital-style)
-    final coreOpacity = _strokeExtraCoreOpacity != null
+    final baseLayerOpacity =
+        _layerTransformFn(layerId).opacity.clamp(0.0, 1.0).toDouble();
+    final extraLayerOpacity = _layerExtraOpacity?.call(layerId) ?? 0.0;
+    final layerOpacityMul =
+        (baseLayerOpacity + extraLayerOpacity).clamp(0.0, 1.0).toDouble();
+
+    final coreOpacityBase = _strokeExtraCoreOpacity != null
         ? _strokeExtraCoreOpacity!(layerId, strokeId)
         : outStroke.coreOpacity;
 
@@ -452,13 +455,16 @@ class Renderer extends CustomPainter {
         ? _strokeExtraGlowRadius!(layerId, strokeId)
         : outStroke.glowRadius;
 
-    final glowOpacity = _strokeExtraGlowOpacity != null
+    final glowOpacityBase = _strokeExtraGlowOpacity != null
         ? _strokeExtraGlowOpacity!(layerId, strokeId)
         : outStroke.glowOpacity;
 
     final glowBrightness = _strokeExtraGlowBrightness != null
         ? _strokeExtraGlowBrightness!(layerId, strokeId)
         : outStroke.glowBrightness;
+
+    final coreOpacity = (coreOpacityBase * layerOpacityMul).clamp(0.0, 1.0);
+    final glowOpacity = (glowOpacityBase * layerOpacityMul).clamp(0.0, 1.0);
 
     return outStroke.copyWith(
       size: newSize,
@@ -507,7 +513,10 @@ class Renderer extends CustomPainter {
       if (!e.strokeLocal.visible) continue;
 
       final isSelected = (selectedId != null && e.strokeLocal.id == selectedId);
-      final freezeExtras = isSelected;
+
+      // Keep layer extras active even when selected.
+      // Only freeze stroke-level extras if needed.
+      final freezeStrokeExtras = isSelected;
 
       // If stroke-extras enabled, never use baked pictures.
       // Also skip baked pictures whenever this layer currently has live extras
@@ -516,7 +525,7 @@ class Renderer extends CustomPainter {
         final baked = _bakedByStrokeId[e.strokeLocal.id];
         final hasLiveLayerExtras = _layerHasLiveExtrasNow(e.layerId);
 
-        if (!freezeExtras && !hasLiveLayerExtras && baked != null) {
+        if (!isSelected && !hasLiveLayerExtras && baked != null) {
           canvas.drawPicture(baked);
           continue;
         }
@@ -528,14 +537,14 @@ class Renderer extends CustomPainter {
         e.strokeLocal,
         baseTr,
         e.layerId,
-        freezeExtras: freezeExtras,
+        freezeExtras: false,
       );
 
       final finalStroke = _applyStrokeExtrasWorld(
         world,
         e.layerId,
         e.strokeLocal.id,
-        freezeExtras: freezeExtras,
+        freezeExtras: freezeStrokeExtras,
       );
 
       _drawByBrush(canvas, finalStroke, size, _modeForStroke(finalStroke));
@@ -563,7 +572,7 @@ class Renderer extends CustomPainter {
       final selectedId2 = _selectedStrokeIdFn();
       final isSelected =
           (selectedId2 != null && active.strokeLocal.id == selectedId2);
-      final freezeExtras = isSelected;
+      final freezeStrokeExtras = isSelected;
 
       final baseTr = _layerTransformFn(active.layerId);
 
@@ -571,14 +580,14 @@ class Renderer extends CustomPainter {
         active.strokeLocal,
         baseTr,
         active.layerId,
-        freezeExtras: freezeExtras,
+        freezeExtras: false,
       );
 
       final finalStroke = _applyStrokeExtrasWorld(
         world,
         active.layerId,
         active.strokeLocal.id,
-        freezeExtras: freezeExtras,
+        freezeExtras: freezeStrokeExtras,
       );
 
       _drawByBrush(canvas, finalStroke, size, _modeForStroke(finalStroke));
