@@ -119,6 +119,7 @@ class CanvasController extends ChangeNotifier {
   }
 
   final ValueNotifier<int> repaint = ValueNotifier<int>(0);
+  final ValueNotifier<int> lfoPreviewRepaint = ValueNotifier<int>(0);
 
   SymmetryMode symmetry = SymmetryMode.off;
 
@@ -183,12 +184,17 @@ class CanvasController extends ChangeNotifier {
 
   // --- LFO editor preview keeps ticker running while panel is open ---
   bool _lfoEditorPreviewActive = false;
-
   void setLfoEditorPreviewActive(bool active) {
     if (_lfoEditorPreviewActive == active) return;
     _lfoEditorPreviewActive = active;
-    _ensureTickerState(); // start/stop ticker based on panel visibility
-    notifyListeners(); // repaint UI
+    _ensureTickerState();
+
+    if (active) {
+      // make the playhead jump to the current time immediately on open
+      _tickLfoPreview();
+    }
+
+    notifyListeners();
   }
 
   // --- LFO editor preview keeps ticker running while panel is open ---
@@ -222,6 +228,10 @@ class CanvasController extends ChangeNotifier {
     }
 
     _tick();
+
+    if (_lfoEditorPreviewActive) {
+      _tickLfoPreview();
+    }
   }
 
   void _ensureTickerState() {
@@ -2296,6 +2306,10 @@ class CanvasController extends ChangeNotifier {
 
   void _tick() {
     repaint.value++;
+  }
+
+  void _tickLfoPreview() {
+    lfoPreviewRepaint.value++;
   }
 
   void _rebuildRendererSafe() {

@@ -421,238 +421,236 @@ class _LfoVisualEditorState extends ConsumerState<LfoVisualEditor> {
   }
 
   Widget _buildGestures(Size size) {
-    final controller = ref.watch(canvas_state.canvasControllerProvider);
-    final playhead01 = controller.lfoPlayhead01(widget.lfoId);
+    final controller = ref.read(canvas_state.canvasControllerProvider);
 
-    return GestureDetector(
-      behavior: HitTestBehavior.opaque,
-      dragStartBehavior: DragStartBehavior.down,
-      onDoubleTapDown: (d) {
-        final hit = _hitTest(d.localPosition, size);
+    return ValueListenableBuilder<int>(
+      valueListenable: controller.lfoPreviewRepaint,
+      builder: (context, _, __) {
+        final playhead01 = controller.lfoPlayhead01(widget.lfoId);
 
-        // remove node
-        if (hit != null && hit.isNode) {
-          final idx = hit.index;
-          if (idx == 0 || idx == _nodes.length - 1) return;
+        return GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          dragStartBehavior: DragStartBehavior.down,
+          onDoubleTapDown: (d) {
+            final hit = _hitTest(d.localPosition, size);
 
-          setState(() {
-            _nodes.removeAt(idx);
-            _selectedIndex = null;
-            _dragKind = _DragKind.none;
-            _dragIndex = null;
-            _ensureSortedAndSafe();
-          });
-          _emitCurve();
-          return;
-        }
+            // remove node
+            if (hit != null && hit.isNode) {
+              final idx = hit.index;
+              if (idx == 0 || idx == _nodes.length - 1) return;
 
-        // add node
-        final n = _toNorm(d.localPosition, size);
-        final p = Offset(_clamp01(n.dx), _clamp01(n.dy));
-        if (p.dx < 0.02 || p.dx > 0.98) return;
-
-        setState(() {
-          _nodes.add(_LfoNode(p, bendY: p.dy));
-          _ensureSortedAndSafe();
-          _selectedIndex = _closestNodeIndex(p);
-        });
-        _emitCurve();
-      },
-      onPanStart: (d) {
-        final hit = _hitTest(d.localPosition, size);
-        if (hit == null) return;
-
-        setState(() {
-          if (hit.isNode) {
-            _selectedIndex = hit.index;
-            _dragKind = _DragKind.node;
-            _dragIndex = hit.index;
-          } else {
-            _selectedIndex = null;
-            _dragKind = _DragKind.handleAmt;
-            _dragIndex = hit.index;
-          }
-        });
-      },
-      onPanUpdate: (d) {
-        final idx = _dragIndex;
-        if (idx == null) return;
-
-        // If we started moving before long press triggered, cancel it.
-        if (_lpArmed && !_lpActive) {
-          final start = _lpStartLocal;
-          if (start != null) {
-            final moved = (d.localPosition - start).distance;
-            if (moved > 6.0) {
-              _cancelLongPress();
+              setState(() {
+                _nodes.removeAt(idx);
+                _selectedIndex = null;
+                _dragKind = _DragKind.none;
+                _dragIndex = null;
+                _ensureSortedAndSafe();
+              });
+              _emitCurve();
+              return;
             }
-          }
-        }
 
-        // NODE DRAG
-        if (_dragKind == _DragKind.node) {
-          final raw = _toNorm(d.localPosition, size);
-          final next = _softSnapNorm(
-            Offset(_clamp01(raw.dx), _clamp01(raw.dy)),
-            size,
-            snapX: true,
-            snapY: true,
-          );
+            // add node
+            final n = _toNorm(d.localPosition, size);
+            final p = Offset(_clamp01(n.dx), _clamp01(n.dy));
+            if (p.dx < 0.02 || p.dx > 0.98) return;
 
-          // start endpoint
-          if (idx == 0) {
-            final dy = _clampNodeY(next.dy);
-            _nodes[0].p = Offset(0.0, dy);
-            if (_linkEndpoints) _nodes.last.p = Offset(1.0, dy);
-            setState(() {});
+            setState(() {
+              _nodes.add(_LfoNode(p, bendY: p.dy));
+              _ensureSortedAndSafe();
+              _selectedIndex = _closestNodeIndex(p);
+            });
             _emitCurve();
-            return;
-          }
-
-          // end endpoint
-          if (idx == _nodes.length - 1) {
-            final dy = _clampNodeY(next.dy);
-            _nodes.last.p = Offset(1.0, dy);
-            if (_linkEndpoints) _nodes[0].p = Offset(0.0, dy);
-            setState(() {});
-            _emitCurve();
-            return;
-          }
-
-          // locked order
-          if (_lockedOrder) {
-            final leftX = _nodes[idx - 1].p.dx;
-            final rightX = _nodes[idx + 1].p.dx;
-            final clampedX = next.dx.clamp(leftX, rightX);
-            _nodes[idx].p = Offset(clampedX, next.dy);
-            setState(() {});
-            _emitCurve();
-            return;
-          }
-
-          // free order
-          _nodes[idx].p = next;
-          _ensureSortedAndSafe();
-          final newIdx = _closestNodeIndex(next);
-          _dragIndex = newIdx;
-          _selectedIndex = newIdx;
-
-          setState(() {});
-          _emitCurve();
-          return;
-        }
-
-        // LONG PRESS CURVE DRAG
-        if (_dragKind == _DragKind.handleCurve) {
-          final seg = idx;
-          if (seg < 0 || seg >= _nodes.length - 1) return;
-
-          final start = _lpStartLocal;
-          if (start == null) return;
-
-          final dyPx = d.localPosition.dy - start.dy;
-          final delta = (-dyPx / (size.height <= 0 ? 1.0 : size.height)) *
-              _curveDragSensitivity;
-
-          if (_mode == CurveMode.bulge) {
-            final base = _lpStartBulge ?? _nodes[seg].bulgeAmt;
-            final nextAmt = (base + delta * 6.0).clamp(-2.5, 2.5).toDouble();
-            setState(() {
-              _nodes[seg].bulgeAmt = nextAmt;
-            });
-          } else {
-            final a = _nodes[seg];
-            final b = _nodes[seg + 1];
-            final minY = math.min(a.p.dy, b.p.dy);
-            final maxY = math.max(a.p.dy, b.p.dy);
-
-            final base = _lpStartBendY ?? a.bendY;
-            final nextY = (base - delta).clamp(minY, maxY).toDouble();
+          },
+          onPanStart: (d) {
+            final hit = _hitTest(d.localPosition, size);
+            if (hit == null) return;
 
             setState(() {
-              a.bendY = nextY;
+              if (hit.isNode) {
+                _selectedIndex = hit.index;
+                _dragKind = _DragKind.node;
+                _dragIndex = hit.index;
+              } else {
+                _selectedIndex = null;
+                _dragKind = _DragKind.handleAmt;
+                _dragIndex = hit.index;
+              }
             });
-          }
+          },
+          onPanUpdate: (d) {
+            final idx = _dragIndex;
+            if (idx == null) return;
 
-          _emitCurve();
-          return;
-        }
+            if (_lpArmed && !_lpActive) {
+              final start = _lpStartLocal;
+              if (start != null) {
+                final moved = (d.localPosition - start).distance;
+                if (moved > 6.0) {
+                  _cancelLongPress();
+                }
+              }
+            }
 
-        // NORMAL HANDLE DRAG (bias + amt/bendY)
-        if (_dragKind == _DragKind.handleAmt) {
-          final seg = idx;
-          if (seg < 0 || seg >= _nodes.length - 1) return;
+            if (_dragKind == _DragKind.node) {
+              final raw = _toNorm(d.localPosition, size);
+              final next = _softSnapNorm(
+                Offset(_clamp01(raw.dx), _clamp01(raw.dy)),
+                size,
+                snapX: true,
+                snapY: true,
+              );
 
-          final a = _nodes[seg];
-          final b = _nodes[seg + 1];
+              if (idx == 0) {
+                final dy = _clampNodeY(next.dy);
+                _nodes[0].p = Offset(0.0, dy);
+                if (_linkEndpoints) _nodes.last.p = Offset(1.0, dy);
+                setState(() {});
+                _emitCurve();
+                return;
+              }
 
-          final raw = _toNorm(d.localPosition, size);
-          final n = _softSnapNorm(
-            Offset(_clamp01(raw.dx), _clamp01(raw.dy)),
-            size,
-            snapX: true,
-            snapY: true,
-          );
+              if (idx == _nodes.length - 1) {
+                final dy = _clampNodeY(next.dy);
+                _nodes.last.p = Offset(1.0, dy);
+                if (_linkEndpoints) _nodes[0].p = Offset(0.0, dy);
+                setState(() {});
+                _emitCurve();
+                return;
+              }
 
-          final x0 = a.p.dx;
-          final x1 = b.p.dx;
-          final spanX = (x1 - x0).abs() < 1e-9 ? 1e-9 : (x1 - x0);
+              if (_lockedOrder) {
+                final leftX = _nodes[idx - 1].p.dx;
+                final rightX = _nodes[idx + 1].p.dx;
+                final clampedX = next.dx.clamp(leftX, rightX);
+                _nodes[idx].p = Offset(clampedX, next.dy);
+                setState(() {});
+                _emitCurve();
+                return;
+              }
 
-          const edge = 0.0;
-          final xClamped =
-              n.dx.clamp(math.min(x0, x1) + edge, math.max(x0, x1) - edge);
+              _nodes[idx].p = next;
+              _ensureSortedAndSafe();
+              final newIdx = _closestNodeIndex(next);
+              _dragIndex = newIdx;
+              _selectedIndex = newIdx;
 
-          final rawBias =
-              ((xClamped - x0) / spanX).clamp(0.001, 0.999).toDouble();
-          final bias = _clampBiasPxSafe(seg, size, rawBias);
+              setState(() {});
+              _emitCurve();
+              return;
+            }
 
-          if (_mode == CurveMode.bend) {
-            final minY = math.min(a.p.dy, b.p.dy);
-            final maxY = math.max(a.p.dy, b.p.dy);
-            final yBound = _boundedBetween(n.dy, minY, maxY);
+            if (_dragKind == _DragKind.handleCurve) {
+              final seg = idx;
+              if (seg < 0 || seg >= _nodes.length - 1) return;
 
+              final start = _lpStartLocal;
+              if (start == null) return;
+
+              final dyPx = d.localPosition.dy - start.dy;
+              final delta = (-dyPx / (size.height <= 0 ? 1.0 : size.height)) *
+                  _curveDragSensitivity;
+
+              if (_mode == CurveMode.bulge) {
+                final base = _lpStartBulge ?? _nodes[seg].bulgeAmt;
+                final nextAmt =
+                    (base + delta * 6.0).clamp(-2.5, 2.5).toDouble();
+                setState(() {
+                  _nodes[seg].bulgeAmt = nextAmt;
+                });
+              } else {
+                final a = _nodes[seg];
+                final b = _nodes[seg + 1];
+                final minY = math.min(a.p.dy, b.p.dy);
+                final maxY = math.max(a.p.dy, b.p.dy);
+
+                final base = _lpStartBendY ?? a.bendY;
+                final nextY = (base - delta).clamp(minY, maxY).toDouble();
+
+                setState(() {
+                  a.bendY = nextY;
+                });
+              }
+
+              _emitCurve();
+              return;
+            }
+
+            if (_dragKind == _DragKind.handleAmt) {
+              final seg = idx;
+              if (seg < 0 || seg >= _nodes.length - 1) return;
+
+              final a = _nodes[seg];
+              final b = _nodes[seg + 1];
+
+              final raw = _toNorm(d.localPosition, size);
+              final n = _softSnapNorm(
+                Offset(_clamp01(raw.dx), _clamp01(raw.dy)),
+                size,
+                snapX: true,
+                snapY: true,
+              );
+
+              final x0 = a.p.dx;
+              final x1 = b.p.dx;
+              final spanX = (x1 - x0).abs() < 1e-9 ? 1e-9 : (x1 - x0);
+
+              const edge = 0.0;
+              final xClamped =
+                  n.dx.clamp(math.min(x0, x1) + edge, math.max(x0, x1) - edge);
+
+              final rawBias =
+                  ((xClamped - x0) / spanX).clamp(0.001, 0.999).toDouble();
+              final bias = _clampBiasPxSafe(seg, size, rawBias);
+
+              if (_mode == CurveMode.bend) {
+                final minY = math.min(a.p.dy, b.p.dy);
+                final maxY = math.max(a.p.dy, b.p.dy);
+                final yBound = _boundedBetween(n.dy, minY, maxY);
+
+                setState(() {
+                  a.bias = bias;
+                  a.bendY = yBound;
+                });
+              } else {
+                final linY = lerpDouble(a.p.dy, b.p.dy, bias)!;
+                final y = n.dy;
+                final amt = ((linY - y) / 0.45);
+
+                setState(() {
+                  a.bias = bias;
+                  a.bulgeAmt = amt.clamp(-2.5, 2.5).toDouble();
+                });
+              }
+
+              _emitCurve();
+              return;
+            }
+          },
+          onPanEnd: (_) {
+            _cancelLongPress();
             setState(() {
-              a.bias = bias;
-              a.bendY = yBound;
+              _dragKind = _DragKind.none;
+              _dragIndex = null;
             });
-          } else {
-            final linY = lerpDouble(a.p.dy, b.p.dy, bias)!;
-            final y = n.dy;
-            final amt = ((linY - y) / 0.45);
-
-            setState(() {
-              a.bias = bias;
-              a.bulgeAmt = amt.clamp(-2.5, 2.5).toDouble();
-            });
-          }
-
-          _emitCurve();
-          return;
-        }
+          },
+          child: CustomPaint(
+            painter: _LfoEditorPainter(
+              nodes: _nodes,
+              selectedIndex: _selectedIndex,
+              mode: _mode,
+              resolution: _curveResolution,
+              nodeRadius: _nodeRadius,
+              handleRadius: _handleRadius,
+              strokeWidth: _strokeWidth,
+              playhead01: playhead01,
+              gridDivX: _gridDivX,
+              gridDivY: _gridDivY,
+            ),
+            child: const SizedBox.expand(),
+          ),
+        );
       },
-      onPanEnd: (_) {
-        _cancelLongPress();
-        setState(() {
-          _dragKind = _DragKind.none;
-          _dragIndex = null;
-        });
-      },
-      child: CustomPaint(
-        painter: _LfoEditorPainter(
-          repaint: controller,
-          nodes: _nodes,
-          selectedIndex: _selectedIndex,
-          mode: _mode,
-          resolution: _curveResolution,
-          nodeRadius: _nodeRadius,
-          handleRadius: _handleRadius,
-          strokeWidth: _strokeWidth,
-          playhead01: playhead01,
-          gridDivX: _gridDivX,
-          gridDivY: _gridDivY,
-        ),
-        child: const SizedBox.expand(),
-      ),
     );
   }
 
@@ -907,7 +905,7 @@ class _LfoVisualEditorState extends ConsumerState<LfoVisualEditor> {
 
 class _LfoEditorPainter extends CustomPainter {
   _LfoEditorPainter({
-    required Listenable repaint,
+    Listenable? repaint,
     required this.nodes,
     required this.selectedIndex,
     required this.mode,
@@ -1196,18 +1194,7 @@ class _LfoEditorPainter extends CustomPainter {
   }
 
   @override
-  bool shouldRepaint(covariant _LfoEditorPainter oldDelegate) {
-    return oldDelegate.playhead01 != playhead01 ||
-        oldDelegate.selectedIndex != selectedIndex ||
-        oldDelegate.mode != mode ||
-        oldDelegate.resolution != resolution ||
-        oldDelegate.nodeRadius != nodeRadius ||
-        oldDelegate.handleRadius != handleRadius ||
-        oldDelegate.strokeWidth != strokeWidth ||
-        oldDelegate.gridDivX != gridDivX ||
-        oldDelegate.gridDivY != gridDivY ||
-        oldDelegate.nodes.length != nodes.length;
-  }
+  bool shouldRepaint(covariant _LfoEditorPainter oldDelegate) => true;
 }
 
 class _TopBar extends StatelessWidget {
