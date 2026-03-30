@@ -93,13 +93,31 @@ double _smoothstep(double t) {
 }
 
 double _bulge(LfoNode a, LfoNode b, double t, double yLin) {
+  final bias = a.bias.clamp(0.05, 0.95).toDouble();
   final amt = a.bulgeAmt.clamp(-2.5, 2.5).toDouble();
-  if (amt.abs() < 1e-6) return yLin.clamp(-1.0, 1.0).toDouble();
 
-  final bias = a.bias.clamp(0.0, 1.0).toDouble();
-  final bump = _bump(t, bias);
+  if (amt.abs() < 1e-6) {
+    return yLin.clamp(-1.0, 1.0).toDouble();
+  }
 
-  final y = yLin + (bump * (amt / 2.5));
+  double bulge01(double tt) {
+    tt = tt.clamp(0.0, 1.0);
+    if (tt <= bias) {
+      final u = tt / bias;
+      return math.sin(u * math.pi * 0.5);
+    } else {
+      final u = (1.0 - tt) / (1.0 - bias);
+      return math.sin(u * math.pi * 0.5);
+    }
+  }
+
+  // Editor uses internal y01 (top=0, bottom=1):
+  // y01 = linY01 - (amt * 0.45) * bulge01(t)
+  //
+  // Runtime here is in shared y space (-1..1), so convert equivalently:
+  // yShared = yLin + (amt * 0.9) * bulge01(t)
+  final y = yLin + (amt * 0.9) * bulge01(t);
+
   return y.clamp(-1.0, 1.0).toDouble();
 }
 

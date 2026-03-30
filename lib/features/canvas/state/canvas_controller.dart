@@ -214,17 +214,14 @@ class CanvasController extends ChangeNotifier {
     final last = _lastTickElapsed;
     _lastTickElapsed = elapsed;
 
-    // First tick after start: no dt yet
     if (last != null) {
       final dtSec = (elapsed - last).inMicroseconds / 1000000.0;
-      if (dtSec > 0) _timeSec += dtSec;
+      if (dtSec > 0) {
+        _timeSec += dtSec;
+      }
     }
 
     _tick();
-
-    if (_lfoEditorPreviewActive) {
-      notifyListeners();
-    }
   }
 
   void _ensureTickerState() {

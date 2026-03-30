@@ -12,8 +12,6 @@ import '../../state/lfo_editor_types.dart';
 import 'package:glowbook/core/models/lfo_curve_math.dart';
 import 'package:glowbook/core/models/lfo.dart'; // if you need LfoCurveMode/LfoNode
 
-import 'package:glowbook/features/canvas/view/widgets/synth_knob.dart';
-
 class LfoVisualEditor extends ConsumerStatefulWidget {
   const LfoVisualEditor({
     super.key,
@@ -84,25 +82,47 @@ class _LfoVisualEditorState extends ConsumerState<LfoVisualEditor> {
 
   int? _selectedIndex;
 
-  // ✅ Rate
+// ✅ Rate
   late double _rateHz;
-  late double _rateNorm; // 0..1 knob
 
-  static const double _minRateHz = 0.05;
-  static const double _maxRateHz = 20.0;
+// UI edits time-per-cycle in seconds, controller still stores Hz.
+  static const double _minCycleSeconds = 0.01; // 10 ms
+  static const double _maxCycleSeconds = 300.0; // 5 min
 
-  double _hzToNorm(double hz) {
-    final h = hz.clamp(_minRateHz, _maxRateHz).toDouble();
-    final a = math.log(_minRateHz);
-    final b = math.log(_maxRateHz);
-    return ((math.log(h) - a) / (b - a)).clamp(0.0, 1.0).toDouble();
+  double _hzToCycleSeconds(double hz) {
+    final safeHz = hz <= 0 ? (1.0 / _maxCycleSeconds) : hz;
+    final seconds = 1.0 / safeHz;
+    return seconds.clamp(_minCycleSeconds, _maxCycleSeconds).toDouble();
   }
 
-  double _normToHz(double t) {
-    final tt = t.clamp(0.0, 1.0).toDouble();
-    final a = math.log(_minRateHz);
-    final b = math.log(_maxRateHz);
-    return math.exp(a + (b - a) * tt).toDouble();
+  double _cycleSecondsToHz(double seconds) {
+    final safeSeconds =
+        seconds.clamp(_minCycleSeconds, _maxCycleSeconds).toDouble();
+    return 1.0 / safeSeconds;
+  }
+
+  int _gridDivX = 8; // number of boxes across
+  int _gridDivY = 6; // number of boxes down
+
+  static const int _minGridDivX = 1;
+  static const int _maxGridDivX = 32;
+
+  static const int _minGridDivY = 1;
+  static const int _maxGridDivY = 24;
+
+  static const double _snapThresholdPx = 22.0;
+  static const double _snapStrength = 1.20;
+
+  void _setGridX(int value) {
+    setState(() {
+      _gridDivX = value.clamp(_minGridDivX, _maxGridDivX);
+    });
+  }
+
+  void _setGridY(int value) {
+    setState(() {
+      _gridDivY = value.clamp(_minGridDivY, _maxGridDivY);
+    });
   }
 
   _DragKind _dragKind = _DragKind.none;
@@ -119,9 +139,9 @@ class _LfoVisualEditorState extends ConsumerState<LfoVisualEditor> {
   static const double _bottomAssistBoostPx = 22.0;
 
   // Visuals
-  static const double _nodeRadius = 8.0; // parent nodes
+  static const double _nodeRadius = 7.0; // parent nodes
   static const double _handleRadius = 5.0;
-  static const double _strokeWidth = 3.0;
+  static const double _strokeWidth = 1.5;
 
   static const int _curveResolution = 140;
 
@@ -168,8 +188,7 @@ class _LfoVisualEditorState extends ConsumerState<LfoVisualEditor> {
     _ensureSortedAndSafe();
 
     // ✅ Rate init
-    _rateHz = widget.initialRateHz;
-    _rateNorm = _hzToNorm(_rateHz);
+    _rateHz = _cycleSecondsToHz(_hzToCycleSeconds(widget.initialRateHz));
 
     // Emit once on load so controller can “adopt” the curve if needed.
     _emitCurve();
@@ -186,8 +205,7 @@ class _LfoVisualEditorState extends ConsumerState<LfoVisualEditor> {
   void didUpdateWidget(covariant LfoVisualEditor oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (widget.initialRateHz != oldWidget.initialRateHz) {
-      _rateHz = widget.initialRateHz;
-      _rateNorm = _hzToNorm(_rateHz);
+      _rateHz = _cycleSecondsToHz(_hzToCycleSeconds(widget.initialRateHz));
     }
   }
 
@@ -250,6 +268,10 @@ class _LfoVisualEditorState extends ConsumerState<LfoVisualEditor> {
               mode: _mode,
               lockedOrder: _lockedOrder,
               linkEndpoints: _linkEndpoints,
+              gridDivX: _gridDivX,
+              gridDivY: _gridDivY,
+              onGridXChanged: _setGridX,
+              onGridYChanged: _setGridY,
               onToggleMode: () {
                 setState(() {
                   _mode = (_mode == CurveMode.bulge)
@@ -279,14 +301,12 @@ class _LfoVisualEditorState extends ConsumerState<LfoVisualEditor> {
               },
 
               // ✅ NEW: rate props
-              rateNorm: _rateNorm,
               rateHz: _rateHz,
               onInteractionChanged: widget.onInteractionChanged,
-              onRateNormChanged: (t) {
-                final hz = _normToHz(t);
+              onRateHzChanged: (hz) {
+                final safeHz = _cycleSecondsToHz(_hzToCycleSeconds(hz));
                 setState(() {
-                  _rateNorm = t.clamp(0.0, 1.0).toDouble();
-                  _rateHz = hz;
+                  _rateHz = safeHz;
                 });
                 widget.onRateChanged?.call(_rateHz);
               },
@@ -471,8 +491,13 @@ class _LfoVisualEditorState extends ConsumerState<LfoVisualEditor> {
 
         // NODE DRAG
         if (_dragKind == _DragKind.node) {
-          final n = _toNorm(d.localPosition, size);
-          final next = Offset(_clamp01(n.dx), _clamp01(n.dy));
+          final raw = _toNorm(d.localPosition, size);
+          final next = _softSnapNorm(
+            Offset(_clamp01(raw.dx), _clamp01(raw.dy)),
+            size,
+            snapX: true,
+            snapY: true,
+          );
 
           // start endpoint
           if (idx == 0) {
@@ -561,7 +586,13 @@ class _LfoVisualEditorState extends ConsumerState<LfoVisualEditor> {
           final a = _nodes[seg];
           final b = _nodes[seg + 1];
 
-          final n = _toNorm(d.localPosition, size);
+          final raw = _toNorm(d.localPosition, size);
+          final n = _softSnapNorm(
+            Offset(_clamp01(raw.dx), _clamp01(raw.dy)),
+            size,
+            snapX: true,
+            snapY: true,
+          );
 
           final x0 = a.p.dx;
           final x1 = b.p.dx;
@@ -617,6 +648,8 @@ class _LfoVisualEditorState extends ConsumerState<LfoVisualEditor> {
           handleRadius: _handleRadius,
           strokeWidth: _strokeWidth,
           playhead01: playhead01,
+          gridDivX: _gridDivX,
+          gridDivY: _gridDivY,
         ),
         child: const SizedBox.expand(),
       ),
@@ -788,6 +821,62 @@ class _LfoVisualEditorState extends ConsumerState<LfoVisualEditor> {
     return mid + t * half;
   }
 
+  double _nearestGridLine01(double v, int divs) {
+    if (divs <= 0) return v;
+    final step = 1.0 / divs;
+    final i = (v / step).round();
+    return (i * step).clamp(0.0, 1.0).toDouble();
+  }
+
+  double _softSnapAxis01({
+    required double raw01,
+    required int divs,
+    required Size size,
+    required bool isX,
+  }) {
+    if (divs <= 0) return raw01.clamp(0.0, 1.0).toDouble();
+
+    final nearest = _nearestGridLine01(raw01, divs);
+    final axisPx = isX ? size.width : size.height;
+    if (axisPx <= 0) return raw01.clamp(0.0, 1.0).toDouble();
+
+    final distPx = (raw01 - nearest).abs() * axisPx;
+    if (distPx >= _snapThresholdPx) {
+      return raw01.clamp(0.0, 1.0).toDouble();
+    }
+
+    final t = 1.0 - (distPx / _snapThresholdPx);
+    final pull = t * t * _snapStrength;
+
+    return lerpDouble(raw01, nearest, pull)!.clamp(0.0, 1.0).toDouble();
+  }
+
+  Offset _softSnapNorm(
+    Offset n,
+    Size size, {
+    bool snapX = true,
+    bool snapY = true,
+  }) {
+    return Offset(
+      snapX
+          ? _softSnapAxis01(
+              raw01: n.dx,
+              divs: _gridDivX,
+              size: size,
+              isX: true,
+            )
+          : n.dx.clamp(0.0, 1.0).toDouble(),
+      snapY
+          ? _softSnapAxis01(
+              raw01: n.dy,
+              divs: _gridDivY,
+              size: size,
+              isX: false,
+            )
+          : n.dy.clamp(0.0, 1.0).toDouble(),
+    );
+  }
+
   // Bulge sampling
   double _segmentSampleYBulge(int seg, double t) {
     final a = _nodes[seg];
@@ -827,6 +916,8 @@ class _LfoEditorPainter extends CustomPainter {
     required this.handleRadius,
     required this.strokeWidth,
     required this.playhead01,
+    required this.gridDivX,
+    required this.gridDivY,
   }) : super(repaint: repaint);
 
   final List<_LfoNode> nodes;
@@ -839,6 +930,8 @@ class _LfoEditorPainter extends CustomPainter {
   final double strokeWidth;
 
   final double playhead01;
+  final int gridDivX;
+  final int gridDivY;
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -853,12 +946,13 @@ class _LfoEditorPainter extends CustomPainter {
       ..color = Colors.white.withValues(alpha: 0.06)
       ..strokeWidth = 1;
 
-    for (int i = 1; i < 8; i++) {
-      final x = r.left + r.width * (i / 8);
+    for (int i = 0; i <= gridDivX; i++) {
+      final x = r.left + r.width * (i / (gridDivX <= 0 ? 1 : gridDivX));
       canvas.drawLine(Offset(x, r.top), Offset(x, r.bottom), gridPaint);
     }
-    for (int i = 1; i < 4; i++) {
-      final y = r.top + r.height * (i / 4);
+
+    for (int i = 0; i <= gridDivY; i++) {
+      final y = r.top + r.height * (i / (gridDivY <= 0 ? 1 : gridDivY));
       canvas.drawLine(Offset(r.left, y), Offset(r.right, y), gridPaint);
     }
 
@@ -1029,13 +1123,8 @@ class _LfoEditorPainter extends CustomPainter {
       final outer = Paint()
         ..color = const Color(0xFF66FFB3)
         ..style = PaintingStyle.stroke
-        ..strokeWidth = isSelected ? 3 : 2;
+        ..strokeWidth = isSelected ? 2.5 : 1.5;
 
-      final inner = Paint()
-        ..color = const Color(0xFF0F0F18)
-        ..style = PaintingStyle.fill;
-
-      canvas.drawCircle(p, isSelected ? (nodeRadius + 1) : nodeRadius, inner);
       canvas.drawCircle(p, isSelected ? (nodeRadius + 1) : nodeRadius, outer);
 
       if (isSelected) {
@@ -1115,6 +1204,8 @@ class _LfoEditorPainter extends CustomPainter {
         oldDelegate.nodeRadius != nodeRadius ||
         oldDelegate.handleRadius != handleRadius ||
         oldDelegate.strokeWidth != strokeWidth ||
+        oldDelegate.gridDivX != gridDivX ||
+        oldDelegate.gridDivY != gridDivY ||
         oldDelegate.nodes.length != nodes.length;
   }
 }
@@ -1124,29 +1215,31 @@ class _TopBar extends StatelessWidget {
     required this.mode,
     required this.lockedOrder,
     required this.linkEndpoints,
+    required this.gridDivX,
+    required this.gridDivY,
+    required this.onGridXChanged,
+    required this.onGridYChanged,
     required this.onToggleMode,
     required this.onToggleLockedOrder,
     required this.onToggleLinkEndpoints,
-
-    // ✅ NEW
-    required this.rateNorm,
     required this.rateHz,
-    required this.onRateNormChanged,
+    required this.onRateHzChanged,
     this.onInteractionChanged,
   });
 
   final CurveMode mode;
   final bool lockedOrder;
   final bool linkEndpoints;
+  final int gridDivX;
+  final int gridDivY;
+  final ValueChanged<int> onGridXChanged;
+  final ValueChanged<int> onGridYChanged;
 
   final VoidCallback onToggleMode;
   final VoidCallback onToggleLockedOrder;
   final VoidCallback onToggleLinkEndpoints;
-
-  // ✅ NEW
-  final double rateNorm; // 0..1
-  final double rateHz; // display
-  final ValueChanged<double> onRateNormChanged;
+  final double rateHz;
+  final ValueChanged<double> onRateHzChanged;
   final ValueChanged<bool>? onInteractionChanged;
 
   @override
@@ -1202,35 +1295,339 @@ class _TopBar extends StatelessWidget {
               color: Colors.white70,
             ),
           ),
-
           const Spacer(),
-
-          // ✅ NEW: Rate knob
-          SynthKnob(
-            value: rateNorm,
-            onChanged: onRateNormChanged,
-            min: 0.0,
-            max: 1.0,
-            size: 34,
-            label: 'Rate',
-            showValueText: true,
-            valueFormatter: (_) =>
-                '${rateHz.toStringAsFixed(rateHz < 1 ? 2 : 1)}Hz',
-            onInteractionChanged: onInteractionChanged,
-            sensitivity: 0.010,
+          _GridDragValue(
+            label: 'X',
+            value: gridDivX,
+            min: 1,
+            max: 32,
+            onChanged: onGridXChanged,
           ),
-
+          const SizedBox(width: 6),
+          _GridDragValue(
+            label: 'Y',
+            value: gridDivY,
+            min: 1,
+            max: 24,
+            onChanged: onGridYChanged,
+          ),
           const SizedBox(width: 10),
-
-          Text(
-            mode == CurveMode.bulge ? 'Bulge' : 'Bend',
-            style: const TextStyle(
-              color: Colors.white54,
-              fontSize: 11,
-              fontWeight: FontWeight.w600,
-            ),
+          _CycleTimeDragValue(
+            rateHz: rateHz,
+            onChangedHz: onRateHzChanged,
+            onInteractionChanged: onInteractionChanged,
           ),
         ],
+      ),
+    );
+  }
+}
+
+class _GridDragValue extends StatefulWidget {
+  const _GridDragValue({
+    required this.label,
+    required this.value,
+    required this.min,
+    required this.max,
+    required this.onChanged,
+  });
+
+  final String label;
+  final int value;
+  final int min;
+  final int max;
+  final ValueChanged<int> onChanged;
+
+  @override
+  State<_GridDragValue> createState() => _GridDragValueState();
+}
+
+class _GridDragValueState extends State<_GridDragValue> {
+  double _dragAccumDy = 0.0;
+  static const double _pxPerStep = 12.0;
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      dragStartBehavior: DragStartBehavior.down,
+      onVerticalDragStart: (_) {
+        _dragAccumDy = 0.0;
+      },
+      onVerticalDragUpdate: (d) {
+        _dragAccumDy += d.delta.dy;
+
+        while (_dragAccumDy <= -_pxPerStep) {
+          _dragAccumDy += _pxPerStep;
+          final next = (widget.value + 1).clamp(widget.min, widget.max);
+          if (next != widget.value) {
+            widget.onChanged(next);
+          }
+        }
+
+        while (_dragAccumDy >= _pxPerStep) {
+          _dragAccumDy -= _pxPerStep;
+          final next = (widget.value - 1).clamp(widget.min, widget.max);
+          if (next != widget.value) {
+            widget.onChanged(next);
+          }
+        }
+      },
+      onVerticalDragEnd: (_) {
+        _dragAccumDy = 0.0;
+      },
+      onVerticalDragCancel: () {
+        _dragAccumDy = 0.0;
+      },
+      child: Container(
+        height: 26,
+        padding: const EdgeInsets.symmetric(horizontal: 8),
+        decoration: BoxDecoration(
+          color: Colors.white.withValues(alpha: 0.04),
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: Colors.white.withValues(alpha: 0.10)),
+        ),
+        alignment: Alignment.center,
+        child: Text(
+          '${widget.label}:${widget.value}',
+          style: const TextStyle(
+            color: Colors.white70,
+            fontSize: 11,
+            fontWeight: FontWeight.w600,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _CycleTimeDragValue extends StatefulWidget {
+  const _CycleTimeDragValue({
+    required this.rateHz,
+    required this.onChangedHz,
+    this.onInteractionChanged,
+  });
+
+  final double rateHz;
+  final ValueChanged<double> onChangedHz;
+  final ValueChanged<bool>? onInteractionChanged;
+
+  @override
+  State<_CycleTimeDragValue> createState() => _CycleTimeDragValueState();
+}
+
+class _CycleTimeDragValueState extends State<_CycleTimeDragValue> {
+  static const double _minCycleSeconds = 0.01; // 10 ms
+  static const double _maxCycleSeconds = 300.0; // 5 min
+  static const double _pxPerStep = 10.0;
+
+  double _dragAccumDy = 0.0;
+
+  double _hzToCycleSeconds(double hz) {
+    final safeHz = hz <= 0 ? (1.0 / _maxCycleSeconds) : hz;
+    final seconds = 1.0 / safeHz;
+    return seconds.clamp(_minCycleSeconds, _maxCycleSeconds).toDouble();
+  }
+
+  double _cycleSecondsToHz(double seconds) {
+    final safeSeconds =
+        seconds.clamp(_minCycleSeconds, _maxCycleSeconds).toDouble();
+    return 1.0 / safeSeconds;
+  }
+
+  String _formatCycleTime(double seconds) {
+    final s = seconds.clamp(_minCycleSeconds, _maxCycleSeconds);
+
+    if (s < 10.0) {
+      return '${s.toStringAsFixed(2)}s';
+    }
+    if (s < 100.0) {
+      return '${s.toStringAsFixed(1)}s';
+    }
+    return '${s.toStringAsFixed(0)}s';
+  }
+
+  double _stepForDrag({
+    required double currentSeconds,
+    required double dragDy,
+  }) {
+    final speed = dragDy.abs();
+
+    double baseStep;
+    if (currentSeconds < 0.10) {
+      baseStep = 0.01;
+    } else if (currentSeconds < 1.0) {
+      baseStep = 0.02;
+    } else if (currentSeconds < 10.0) {
+      baseStep = 0.05;
+    } else if (currentSeconds < 100.0) {
+      baseStep = 0.5;
+    } else {
+      baseStep = 2.0;
+    }
+
+    double speedMult;
+    if (speed < 1.5) {
+      speedMult = 0.5;
+    } else if (speed < 3.5) {
+      speedMult = 1.0;
+    } else if (speed < 6.0) {
+      speedMult = 2.0;
+    } else if (speed < 10.0) {
+      speedMult = 5.0;
+    } else if (speed < 16.0) {
+      speedMult = 10.0;
+    } else if (speed < 24.0) {
+      speedMult = 20.0;
+    } else {
+      speedMult = 40.0;
+    }
+
+    return baseStep * speedMult;
+  }
+
+  Future<void> _showTypedInputDialog() async {
+    final currentSeconds = _hzToCycleSeconds(widget.rateHz);
+    final controller = TextEditingController(
+      text: currentSeconds < 10
+          ? currentSeconds.toStringAsFixed(2)
+          : currentSeconds < 100
+              ? currentSeconds.toStringAsFixed(1)
+              : currentSeconds.toStringAsFixed(0),
+    );
+
+    final result = await showDialog<double>(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          backgroundColor: const Color(0xFF14141C),
+          title: const Text(
+            'Set time',
+            style: TextStyle(color: Colors.white),
+          ),
+          content: TextField(
+            controller: controller,
+            autofocus: true,
+            keyboardType: const TextInputType.numberWithOptions(decimal: true),
+            style: const TextStyle(color: Colors.white),
+            decoration: const InputDecoration(
+              hintText: 'Seconds',
+              hintStyle: TextStyle(color: Colors.white38),
+              suffixText: 's',
+              suffixStyle: TextStyle(color: Colors.white70),
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: const Text('Cancel'),
+            ),
+            TextButton(
+              onPressed: () {
+                final parsed = double.tryParse(controller.text.trim());
+                if (parsed == null) return;
+
+                final seconds =
+                    parsed.clamp(_minCycleSeconds, _maxCycleSeconds).toDouble();
+                Navigator.of(context).pop(seconds);
+              },
+              child: const Text('OK'),
+            ),
+          ],
+        );
+      },
+    );
+
+    if (result == null) return;
+
+    final nextHz = _cycleSecondsToHz(result);
+    if ((nextHz - widget.rateHz).abs() > 0.0000001) {
+      widget.onChangedHz(nextHz);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final currentSeconds = _hzToCycleSeconds(widget.rateHz);
+
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      dragStartBehavior: DragStartBehavior.down,
+      onLongPress: () async {
+        widget.onInteractionChanged?.call(true);
+        await _showTypedInputDialog();
+        widget.onInteractionChanged?.call(false);
+      },
+      onVerticalDragStart: (_) {
+        _dragAccumDy = 0.0;
+        widget.onInteractionChanged?.call(true);
+      },
+      onVerticalDragUpdate: (d) {
+        _dragAccumDy += d.delta.dy;
+
+        var workingSeconds = _hzToCycleSeconds(widget.rateHz);
+
+        while (_dragAccumDy <= -_pxPerStep) {
+          _dragAccumDy += _pxPerStep;
+
+          final step = _stepForDrag(
+            currentSeconds: workingSeconds,
+            dragDy: d.delta.dy,
+          );
+
+          workingSeconds = (workingSeconds + step)
+              .clamp(_minCycleSeconds, _maxCycleSeconds)
+              .toDouble();
+
+          final nextHz = _cycleSecondsToHz(workingSeconds);
+          if ((nextHz - widget.rateHz).abs() > 0.0000001) {
+            widget.onChangedHz(nextHz);
+          }
+        }
+
+        while (_dragAccumDy >= _pxPerStep) {
+          _dragAccumDy -= _pxPerStep;
+
+          final step = _stepForDrag(
+            currentSeconds: workingSeconds,
+            dragDy: d.delta.dy,
+          );
+
+          workingSeconds = (workingSeconds - step)
+              .clamp(_minCycleSeconds, _maxCycleSeconds)
+              .toDouble();
+
+          final nextHz = _cycleSecondsToHz(workingSeconds);
+          if ((nextHz - widget.rateHz).abs() > 0.0000001) {
+            widget.onChangedHz(nextHz);
+          }
+        }
+      },
+      onVerticalDragEnd: (_) {
+        _dragAccumDy = 0.0;
+        widget.onInteractionChanged?.call(false);
+      },
+      onVerticalDragCancel: () {
+        _dragAccumDy = 0.0;
+        widget.onInteractionChanged?.call(false);
+      },
+      child: Container(
+        height: 26,
+        padding: const EdgeInsets.symmetric(horizontal: 8),
+        decoration: BoxDecoration(
+          color: Colors.white.withValues(alpha: 0.04),
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: Colors.white.withValues(alpha: 0.10)),
+        ),
+        alignment: Alignment.center,
+        child: Text(
+          'Time:${_formatCycleTime(currentSeconds)}',
+          style: const TextStyle(
+            color: Colors.white70,
+            fontSize: 11,
+            fontWeight: FontWeight.w600,
+          ),
+        ),
       ),
     );
   }
