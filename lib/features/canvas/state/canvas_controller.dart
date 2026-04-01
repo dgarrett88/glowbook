@@ -97,6 +97,24 @@ class LayerRotationAnim {
   bool get isActive => constantEnabled && constantDegPerSec.abs() > 0.000001;
 }
 
+class _LayerFrameEval {
+  final LayerTransform transform;
+  final double extraX;
+  final double extraY;
+  final double extraRotationRad;
+  final double extraScale;
+  final double extraOpacity;
+
+  const _LayerFrameEval({
+    required this.transform,
+    required this.extraX,
+    required this.extraY,
+    required this.extraRotationRad,
+    required this.extraScale,
+    required this.extraOpacity,
+  });
+}
+
 class CanvasController extends ChangeNotifier {
   CanvasController() {
     gb.GlowBlendState.I.addListener(_handleBlendChanged);
@@ -216,9 +234,12 @@ class CanvasController extends ChangeNotifier {
 
   final Map<String, Lfo> _lfoByIdMap = <String, Lfo>{};
   final Map<String, double> _rawLfoValueCache = <String, double>{};
+  final Map<String, _LayerFrameEval> _layerFrameEvalCache =
+      <String, _LayerFrameEval>{};
 
   int _modCacheFrame = 0;
   int _modCacheBuiltForFrame = -1;
+  int _layerEvalBuiltForFrame = -1;
   bool _lfoLookupDirty = true;
 
   List<Lfo> get lfos => List.unmodifiable(_lfos);
@@ -230,7 +251,9 @@ class CanvasController extends ChangeNotifier {
   void _markModCachesDirty() {
     _lfoLookupDirty = true;
     _rawLfoValueCache.clear();
+    _layerFrameEvalCache.clear();
     _modCacheBuiltForFrame = -1;
+    _layerEvalBuiltForFrame = -1;
   }
 
   void _rebuildLfoLookupIfNeeded() {
@@ -304,7 +327,6 @@ class CanvasController extends ChangeNotifier {
       }
     }
 
-    // ✅ keep ticker alive if panel is open
     final anyActive = anyConstant || anyLfoActive || _lfoEditorPreviewActive;
 
     if (anyActive && !_tickerRunning) {
@@ -313,13 +335,59 @@ class CanvasController extends ChangeNotifier {
     } else if (!anyActive && _tickerRunning) {
       _ticker.stop();
       _tickerRunning = false;
-
-      // reset dt baseline so next start doesn't jump
       _lastTickElapsed = null;
-
-      // DO NOT reset _timeSec (keeps LFO continuous)
       _tick();
     }
+  }
+
+  void _ensureLayerFrameCache() {
+    _ensureModFrameCache();
+
+    if (_layerEvalBuiltForFrame == _modCacheFrame) return;
+
+    _layerFrameEvalCache.clear();
+
+    for (final layer in _state.layers) {
+      _layerFrameEvalCache[layer.id] = _LayerFrameEval(
+        transform: layer.transform,
+        extraX: _computeLayerExtraX(layer.id),
+        extraY: _computeLayerExtraY(layer.id),
+        extraRotationRad: _computeLayerExtraRotationRadians(layer.id),
+        extraScale: _computeLayerExtraScale(layer.id),
+        extraOpacity: _computeLayerExtraOpacity(layer.id),
+      );
+    }
+
+    _layerEvalBuiltForFrame = _modCacheFrame;
+  }
+
+  _LayerFrameEval? _layerFrameEval(String layerId) {
+    _ensureLayerFrameCache();
+    return _layerFrameEvalCache[layerId];
+  }
+
+  LayerTransform _layerTransformCached(String layerId) {
+    return _layerFrameEval(layerId)?.transform ?? const LayerTransform();
+  }
+
+  double _layerExtraRotationRadians(String layerId) {
+    return _layerFrameEval(layerId)?.extraRotationRad ?? 0.0;
+  }
+
+  double _layerExtraX(String layerId) {
+    return _layerFrameEval(layerId)?.extraX ?? 0.0;
+  }
+
+  double _layerExtraY(String layerId) {
+    return _layerFrameEval(layerId)?.extraY ?? 0.0;
+  }
+
+  double _layerExtraScale(String layerId) {
+    return _layerFrameEval(layerId)?.extraScale ?? 0.0;
+  }
+
+  double _layerExtraOpacity(String layerId) {
+    return _layerFrameEval(layerId)?.extraOpacity ?? 0.0;
   }
 
   int _lfoIndexById(String id) => _lfos.indexWhere((x) => x.id == id);
@@ -660,7 +728,7 @@ class CanvasController extends ChangeNotifier {
     return total;
   }
 
-  double _layerExtraRotationRadians(String layerId) {
+  double _computeLayerExtraRotationRadians(String layerId) {
     final li = _state.layers.indexWhere((l) => l.id == layerId);
     if (li < 0) return 0.0;
 
@@ -707,7 +775,7 @@ class CanvasController extends ChangeNotifier {
     return extraDeg * math.pi / 180.0;
   }
 
-  double _layerExtraX(String layerId) {
+  double _computeLayerExtraX(String layerId) {
     final li = _state.layers.indexWhere((l) => l.id == layerId);
     if (li < 0) return 0.0;
 
@@ -741,7 +809,7 @@ class CanvasController extends ChangeNotifier {
     return out - base;
   }
 
-  double _layerExtraY(String layerId) {
+  double _computeLayerExtraY(String layerId) {
     final li = _state.layers.indexWhere((l) => l.id == layerId);
     if (li < 0) return 0.0;
 
@@ -778,7 +846,7 @@ class CanvasController extends ChangeNotifier {
     return finalWorldY - baseWorldY;
   }
 
-  double _layerExtraScale(String layerId) {
+  double _computeLayerExtraScale(String layerId) {
     final li = _state.layers.indexWhere((l) => l.id == layerId);
     if (li < 0) return 0.0;
 
@@ -820,10 +888,10 @@ class CanvasController extends ChangeNotifier {
     String layerId,
     LayerTransform base,
   ) {
-    final dx = _layerExtraX(layerId);
-    final dy = _layerExtraY(layerId);
-    final extraRot = _layerExtraRotationRadians(layerId);
-    final extraScale = _layerExtraScale(layerId);
+    final dx = _computeLayerExtraX(layerId);
+    final dy = _computeLayerExtraY(layerId);
+    final extraRot = _computeLayerExtraRotationRadians(layerId);
+    final extraScale = _computeLayerExtraScale(layerId);
 
 // extraScale now means: finalScale - base.scale
     final effScale = (base.scale + extraScale).clamp(0.1, 5.0).toDouble();
@@ -1064,7 +1132,7 @@ class CanvasController extends ChangeNotifier {
   }
 
   // NOTE: this returns an ADDITIVE delta; renderer will clamp final opacity.
-  double _layerExtraOpacity(String layerId) {
+  double _computeLayerExtraOpacity(String layerId) {
     final li = _state.layers.indexWhere((l) => l.id == layerId);
     if (li < 0) return 0.0;
 
@@ -1288,11 +1356,7 @@ class CanvasController extends ChangeNotifier {
     () => symmetry,
 
     // ✅ always use latest layer transform (fixes stale pivot issue)
-    layerTransformFn: (layerId) {
-      final i = _state.layers.indexWhere((l) => l.id == layerId);
-      if (i < 0) return const LayerTransform();
-      return _state.layers[i].transform;
-    },
+    layerTransformFn: _layerTransformCached,
 
     layerExtraRotationRadians: _layerExtraRotationRadians,
     layerExtraX: _layerExtraX,
