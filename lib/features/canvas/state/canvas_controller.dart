@@ -210,11 +210,63 @@ class CanvasController extends ChangeNotifier {
   final List<Lfo> _lfos = <Lfo>[];
   final List<LfoRoute> _routes = <LfoRoute>[];
 
+  // ---------------------------------------------------------------------------
+  // FAST LFO LOOKUP / PER-FRAME MOD CACHE
+  // ---------------------------------------------------------------------------
+
+  final Map<String, Lfo> _lfoByIdMap = <String, Lfo>{};
+  final Map<String, double> _rawLfoValueCache = <String, double>{};
+
+  int _modCacheFrame = 0;
+  int _modCacheBuiltForFrame = -1;
+  bool _lfoLookupDirty = true;
+
   List<Lfo> get lfos => List.unmodifiable(_lfos);
   List<LfoRoute> get lfoRoutes => List.unmodifiable(_routes);
 
   List<LfoRoute> routesForLfo(String lfoId) =>
       _routes.where((r) => r.lfoId == lfoId).toList();
+
+  void _markModCachesDirty() {
+    _lfoLookupDirty = true;
+    _rawLfoValueCache.clear();
+    _modCacheBuiltForFrame = -1;
+  }
+
+  void _rebuildLfoLookupIfNeeded() {
+    if (!_lfoLookupDirty) return;
+
+    _lfoByIdMap
+      ..clear()
+      ..addEntries(_lfos.map((l) => MapEntry(l.id, l)));
+
+    _lfoLookupDirty = false;
+  }
+
+  void _ensureModFrameCache() {
+    _rebuildLfoLookupIfNeeded();
+
+    if (_modCacheBuiltForFrame == _modCacheFrame) return;
+
+    _rawLfoValueCache.clear();
+
+    for (final lfo in _lfos) {
+      if (!lfo.enabled) continue;
+      _rawLfoValueCache[lfo.id] = lfo.eval(_timeSec);
+    }
+
+    _modCacheBuiltForFrame = _modCacheFrame;
+  }
+
+  Lfo? _lfoById(String id) {
+    _rebuildLfoLookupIfNeeded();
+    return _lfoByIdMap[id];
+  }
+
+  double _rawLfoValue(String lfoId) {
+    _ensureModFrameCache();
+    return _rawLfoValueCache[lfoId] ?? 0.0;
+  }
 
   void _onTick(Duration elapsed) {
     final last = _lastTickElapsed;
@@ -227,6 +279,8 @@ class CanvasController extends ChangeNotifier {
       }
     }
 
+    _modCacheFrame++;
+
     _tick();
 
     if (_lfoEditorPreviewActive) {
@@ -237,13 +291,14 @@ class CanvasController extends ChangeNotifier {
   void _ensureTickerState() {
     final anyConstant = _layerRotation.values.any((a) => a.isActive);
 
+    _rebuildLfoLookupIfNeeded();
+
     bool anyLfoActive = false;
     if (_routes.isNotEmpty && _lfos.isNotEmpty) {
       for (final r in _routes) {
         if (!r.enabled) continue;
-        final li = _lfos.indexWhere((l) => l.id == r.lfoId);
-        if (li < 0) continue;
-        if (!_lfos[li].enabled) continue;
+        final lfo = _lfoByIdMap[r.lfoId];
+        if (lfo == null || !lfo.enabled) continue;
         anyLfoActive = true;
         break;
       }
@@ -273,6 +328,7 @@ class CanvasController extends ChangeNotifier {
     if (index < 0 || index >= _lfos.length) return;
 
     _lfos[index] = next;
+    _markModCachesDirty();
 
     _ensureTickerState();
     _tick();
@@ -301,6 +357,7 @@ class CanvasController extends ChangeNotifier {
     if (i < 0) return;
 
     _lfos[i] = _lfos[i].copyWith(rateHz: hz);
+    _markModCachesDirty();
     notifyListeners();
   }
 
@@ -559,14 +616,11 @@ class CanvasController extends ChangeNotifier {
   // ---------------------------------------------------------------------------
 
   double _evalRouteShaped(LfoRoute r, LfoParam param) {
-    final i = _lfos.indexWhere((x) => x.id == r.lfoId);
-    if (i < 0) return 0.0;
-    final lfo = _lfos[i];
-    if (!lfo.enabled) return 0.0;
+    final lfo = _lfoById(r.lfoId);
+    if (lfo == null || !lfo.enabled) return 0.0;
 
-    final raw = lfo.eval(_timeSec); // [-1..1]
+    final raw = _rawLfoValue(r.lfoId); // [-1..1]
 
-    // ✅ Visual params should be unipolar by default: 0..1
     final bool forceUnipolar = (param == LfoParam.layerOpacity ||
         param == LfoParam.strokeCoreOpacity ||
         param == LfoParam.strokeGlowRadius ||
@@ -574,10 +628,9 @@ class CanvasController extends ChangeNotifier {
         param == LfoParam.strokeGlowBrightness);
 
     if (forceUnipolar) {
-      return ((raw + 1.0) * 0.5); // [0..1]
+      return ((raw + 1.0) * 0.5);
     }
 
-    // Existing behavior for transform params (X/Y/rot/scale etc.)
     return r.bipolar ? raw : ((raw + 1.0) * 0.5);
   }
 
@@ -629,13 +682,10 @@ class CanvasController extends ChangeNotifier {
       if (r.strokeId != null) continue;
       if (r.param != LfoParam.layerRotationDeg) continue;
 
-      final i = _lfos.indexWhere((l) => l.id == r.lfoId);
-      if (i < 0) continue;
+      final lfo = _lfoById(r.lfoId);
+      if (lfo == null || !lfo.enabled) continue;
 
-      final lfo = _lfos[i];
-      if (!lfo.enabled) continue;
-
-      final raw = lfo.eval(_timeSec); // [-1..1]
+      final raw = _rawLfoValue(r.lfoId); // [-1..1]
       final lfo01 = ((raw + 1.0) * 0.5).clamp(0.0, 1.0).toDouble();
 
       // amount is stored as -360..360, but for bounded rotation
@@ -672,13 +722,10 @@ class CanvasController extends ChangeNotifier {
       if (r.strokeId != null) continue;
       if (r.param != LfoParam.layerX) continue;
 
-      final i = _lfos.indexWhere((l) => l.id == r.lfoId);
-      if (i < 0) continue;
+      final lfo = _lfoById(r.lfoId);
+      if (lfo == null || !lfo.enabled) continue;
 
-      final lfo = _lfos[i];
-      if (!lfo.enabled) continue;
-
-      final raw = lfo.eval(_timeSec);
+      final raw = _rawLfoValue(r.lfoId);
       final lfo01 = ((raw + 1.0) * 0.5).clamp(0.0, 1.0).toDouble();
       final depthPct = (r.amount / 500.0).clamp(-1.0, 1.0).toDouble();
 
@@ -710,13 +757,10 @@ class CanvasController extends ChangeNotifier {
       if (r.strokeId != null) continue;
       if (r.param != LfoParam.layerY) continue;
 
-      final i = _lfos.indexWhere((l) => l.id == r.lfoId);
-      if (i < 0) continue;
+      final lfo = _lfoById(r.lfoId);
+      if (lfo == null || !lfo.enabled) continue;
 
-      final lfo = _lfos[i];
-      if (!lfo.enabled) continue;
-
-      final raw = lfo.eval(_timeSec);
+      final raw = _rawLfoValue(r.lfoId);
       final lfo01 = ((raw + 1.0) * 0.5).clamp(0.0, 1.0).toDouble();
       final depthPct = (r.amount / 500.0).clamp(-1.0, 1.0).toDouble();
 
@@ -749,13 +793,10 @@ class CanvasController extends ChangeNotifier {
       if (r.strokeId != null) continue;
       if (r.param != LfoParam.layerScale) continue;
 
-      final i = _lfos.indexWhere((l) => l.id == r.lfoId);
-      if (i < 0) continue;
+      final lfo = _lfoById(r.lfoId);
+      if (lfo == null || !lfo.enabled) continue;
 
-      final lfo = _lfos[i];
-      if (!lfo.enabled) continue;
-
-      final raw = lfo.eval(_timeSec); // [-1..1]
+      final raw = _rawLfoValue(r.lfoId);
       final lfo01 = ((raw + 1.0) * 0.5).clamp(0.0, 1.0).toDouble();
 
       // amount is stored as -3..3, but for bounded scale
@@ -839,13 +880,10 @@ class CanvasController extends ChangeNotifier {
   }
 
   double _currentLfoShapedValueForRoute(LfoRoute r) {
-    final i = _lfos.indexWhere((x) => x.id == r.lfoId);
-    if (i < 0) return 0.0;
+    final lfo = _lfoById(r.lfoId);
+    if (lfo == null || !lfo.enabled) return 0.0;
 
-    final lfo = _lfos[i];
-    if (!lfo.enabled) return 0.0;
-
-    final raw = lfo.eval(_timeSec); // [-1..1]
+    final raw = _rawLfoValue(r.lfoId); // [-1..1]
 
     final bool forceUnipolar = (r.param == LfoParam.layerOpacity ||
         r.param == LfoParam.strokeCoreOpacity ||
@@ -1040,13 +1078,10 @@ class CanvasController extends ChangeNotifier {
       if (r.strokeId != null) continue;
       if (r.param != LfoParam.layerOpacity) continue;
 
-      final i = _lfos.indexWhere((l) => l.id == r.lfoId);
-      if (i < 0) continue;
+      final lfo = _lfoById(r.lfoId);
+      if (lfo == null || !lfo.enabled) continue;
 
-      final lfo = _lfos[i];
-      if (!lfo.enabled) continue;
-
-      final raw = lfo.eval(_timeSec); // [-1..1]
+      final raw = _rawLfoValue(r.lfoId);
       final lfo01 = (raw + 1.0) * 0.5; // [0..1]
       final depth = r.amount.clamp(-1.0, 1.0).toDouble();
 
@@ -1073,13 +1108,10 @@ class CanvasController extends ChangeNotifier {
       if (r.strokeId != strokeId) continue;
       if (r.param != LfoParam.strokeX) continue;
 
-      final i = _lfos.indexWhere((l) => l.id == r.lfoId);
-      if (i < 0) continue;
+      final lfo = _lfoById(r.lfoId);
+      if (lfo == null || !lfo.enabled) continue;
 
-      final lfo = _lfos[i];
-      if (!lfo.enabled) continue;
-
-      final raw = lfo.eval(_timeSec);
+      final raw = _rawLfoValue(r.lfoId);
       final lfo01 = ((raw + 1.0) * 0.5).clamp(0.0, 1.0).toDouble();
       final depthPct = (r.amount / 500.0).clamp(-1.0, 1.0).toDouble();
 
@@ -1105,13 +1137,10 @@ class CanvasController extends ChangeNotifier {
       if (r.strokeId != strokeId) continue;
       if (r.param != LfoParam.strokeY) continue;
 
-      final i = _lfos.indexWhere((l) => l.id == r.lfoId);
-      if (i < 0) continue;
+      final lfo = _lfoById(r.lfoId);
+      if (lfo == null || !lfo.enabled) continue;
 
-      final lfo = _lfos[i];
-      if (!lfo.enabled) continue;
-
-      final raw = lfo.eval(_timeSec);
+      final raw = _rawLfoValue(r.lfoId);
       final lfo01 = ((raw + 1.0) * 0.5).clamp(0.0, 1.0).toDouble();
       final depthPct = (r.amount / 500.0).clamp(-1.0, 1.0).toDouble();
 
@@ -1152,13 +1181,10 @@ class CanvasController extends ChangeNotifier {
       if (r.strokeId != strokeId) continue;
       if (r.param != LfoParam.strokeSize) continue;
 
-      final i = _lfos.indexWhere((l) => l.id == r.lfoId);
-      if (i < 0) continue;
+      final lfo = _lfoById(r.lfoId);
+      if (lfo == null || !lfo.enabled) continue;
 
-      final lfo = _lfos[i];
-      if (!lfo.enabled) continue;
-
-      final raw = lfo.eval(_timeSec);
+      final raw = _rawLfoValue(r.lfoId);
       final lfo01 = ((raw + 1.0) * 0.5).clamp(0.0, 1.0).toDouble();
       final depthPct = (r.amount / 100.0).clamp(-1.0, 1.0).toDouble();
 
@@ -1236,13 +1262,10 @@ class CanvasController extends ChangeNotifier {
       if (r.strokeId != strokeId) continue;
       if (r.param != param) continue;
 
-      final i = _lfos.indexWhere((l) => l.id == r.lfoId);
-      if (i < 0) continue;
+      final lfo = _lfoById(r.lfoId);
+      if (lfo == null || !lfo.enabled) continue;
 
-      final lfo = _lfos[i];
-      if (!lfo.enabled) continue;
-
-      final raw = lfo.eval(_timeSec); // [-1..1]
+      final raw = _rawLfoValue(r.lfoId);
       final lfo01 = (raw + 1.0) * 0.5; // [0..1]
       final depth = r.amount.clamp(-1.0, 1.0);
 
@@ -2910,6 +2933,7 @@ class CanvasController extends ChangeNotifier {
       phase: 0.0,
       offset: 0.0,
     ));
+    _markModCachesDirty();
 
     _hasUnsavedChanges = true; // ✅ ADD
 
@@ -2922,7 +2946,7 @@ class CanvasController extends ChangeNotifier {
   void removeLfo(String id) {
     _lfos.removeWhere((l) => l.id == id);
     _routes.removeWhere((r) => r.lfoId == id);
-
+    _markModCachesDirty();
     _hasUnsavedChanges = true; // ✅ ADD
 
     _ensureTickerState();
@@ -2948,6 +2972,7 @@ class CanvasController extends ChangeNotifier {
 
     final item = _lfos.removeAt(oldIndex);
     _lfos.insert(newIndex, item);
+    _markModCachesDirty();
 
     _hasUnsavedChanges = true; // ✅ ADD
 
@@ -2959,6 +2984,7 @@ class CanvasController extends ChangeNotifier {
     final i = _lfos.indexWhere((l) => l.id == id);
     if (i < 0) return;
     _lfos[i] = _lfos[i].copyWith(enabled: enabled);
+    _markModCachesDirty();
 
     // If this affects whether any layer "needs pivot", refresh pivots
     for (final l in _state.layers) {
@@ -2979,6 +3005,7 @@ class CanvasController extends ChangeNotifier {
     if (old.curveMode == mode) return;
 
     _lfos[i] = old.copyWith(curveMode: mode);
+    _markModCachesDirty();
     notifyListeners(); // or your existing state update call
     _hasUnsavedChanges = true;
   }
@@ -2987,6 +3014,7 @@ class CanvasController extends ChangeNotifier {
     final i = _lfos.indexWhere((l) => l.id == id);
     if (i < 0) return;
     _lfos[i] = _lfos[i].copyWith(wave: wave);
+    _markModCachesDirty();
 
     _tick();
     notifyListeners();
@@ -2998,6 +3026,7 @@ class CanvasController extends ChangeNotifier {
     if (i < 0) return;
     final v = hz.clamp(0.01, 20.0).toDouble();
     _lfos[i] = _lfos[i].copyWith(rateHz: v);
+    _markModCachesDirty();
 
     _ensureTickerState();
     _tick();
@@ -3010,6 +3039,7 @@ class CanvasController extends ChangeNotifier {
     if (i < 0) return;
     final v = phase01.clamp(0.0, 1.0).toDouble();
     _lfos[i] = _lfos[i].copyWith(phase: v);
+    _markModCachesDirty();
 
     _tick();
     notifyListeners();
@@ -3021,6 +3051,7 @@ class CanvasController extends ChangeNotifier {
     if (i < 0) return;
     final v = offset.clamp(-1.0, 1.0).toDouble();
     _lfos[i] = _lfos[i].copyWith(offset: v);
+    _markModCachesDirty();
 
     _tick();
     notifyListeners();
@@ -3049,6 +3080,7 @@ class CanvasController extends ChangeNotifier {
     }
 
     _lfos[i] = l.copyWith(shapeMode: mode);
+    _markModCachesDirty();
     _ensureTickerState();
     _tick();
     notifyListeners();
@@ -3077,6 +3109,7 @@ class CanvasController extends ChangeNotifier {
       shapeMode: LfoShapeMode.curve,
       nodes: cleaned,
     );
+    _markModCachesDirty();
 
     _ensureTickerState();
     _tick();
@@ -3101,6 +3134,7 @@ class CanvasController extends ChangeNotifier {
       ..sort((a, b) => a.x.compareTo(b.x));
 
     _lfos[i] = _lfos[i].copyWith(nodes: cleaned);
+    _markModCachesDirty();
     _ensureTickerState();
     _tick();
     notifyListeners();
@@ -3123,6 +3157,7 @@ class CanvasController extends ChangeNotifier {
     nodes.sort((a, b) => a.x.compareTo(b.x));
 
     _lfos[i] = l.copyWith(nodes: nodes, shapeMode: LfoShapeMode.curve);
+    _markModCachesDirty();
     _ensureTickerState();
     _tick();
     notifyListeners();
@@ -3150,6 +3185,7 @@ class CanvasController extends ChangeNotifier {
     nodes.sort((a, b) => a.x.compareTo(b.x));
 
     _lfos[i] = l.copyWith(nodes: nodes, shapeMode: LfoShapeMode.curve);
+    _markModCachesDirty();
     _ensureTickerState();
     _tick();
     notifyListeners();
@@ -3170,6 +3206,7 @@ class CanvasController extends ChangeNotifier {
     nodes.removeAt(index);
 
     _lfos[i] = l.copyWith(nodes: nodes, shapeMode: LfoShapeMode.curve);
+    _markModCachesDirty();
     _ensureTickerState();
     _tick();
     notifyListeners();
