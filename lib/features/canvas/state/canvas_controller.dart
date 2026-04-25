@@ -17,6 +17,7 @@ import 'package:glowbook/core/models/lfo_route.dart';
 
 import '../render/renderer.dart';
 import 'canvas_state.dart';
+import 'canvas_preview_quality.dart';
 import 'glow_blend.dart' as gb;
 
 enum SymmetryMode { off, mirrorV, mirrorH, quad }
@@ -112,6 +113,28 @@ class _LayerFrameEval {
     required this.extraRotationRad,
     required this.extraScale,
     required this.extraOpacity,
+  });
+}
+
+class _StrokeFrameEval {
+  final double extraX;
+  final double extraY;
+  final double extraRotationRad;
+  final double extraSize;
+  final double coreOpacity;
+  final double glowRadius;
+  final double glowOpacity;
+  final double glowBrightness;
+
+  const _StrokeFrameEval({
+    required this.extraX,
+    required this.extraY,
+    required this.extraRotationRad,
+    required this.extraSize,
+    required this.coreOpacity,
+    required this.glowRadius,
+    required this.glowOpacity,
+    required this.glowBrightness,
   });
 }
 
@@ -236,10 +259,13 @@ class CanvasController extends ChangeNotifier {
   final Map<String, double> _rawLfoValueCache = <String, double>{};
   final Map<String, _LayerFrameEval> _layerFrameEvalCache =
       <String, _LayerFrameEval>{};
+  final Map<String, _StrokeFrameEval> _strokeFrameEvalCache =
+      <String, _StrokeFrameEval>{};
 
   int _modCacheFrame = 0;
   int _modCacheBuiltForFrame = -1;
   int _layerEvalBuiltForFrame = -1;
+  int _strokeEvalBuiltForFrame = -1;
   bool _lfoLookupDirty = true;
 
   List<Lfo> get lfos => List.unmodifiable(_lfos);
@@ -252,8 +278,15 @@ class CanvasController extends ChangeNotifier {
     _lfoLookupDirty = true;
     _rawLfoValueCache.clear();
     _layerFrameEvalCache.clear();
+    _strokeFrameEvalCache.clear();
     _modCacheBuiltForFrame = -1;
     _layerEvalBuiltForFrame = -1;
+    _strokeEvalBuiltForFrame = -1;
+  }
+
+  void _markStrokeFrameCacheDirty() {
+    _strokeFrameEvalCache.clear();
+    _strokeEvalBuiltForFrame = -1;
   }
 
   void _rebuildLfoLookupIfNeeded() {
@@ -365,6 +398,79 @@ class CanvasController extends ChangeNotifier {
     _ensureLayerFrameCache();
     return _layerFrameEvalCache[layerId];
   }
+
+  void _ensureStrokeFrameCache() {
+    _ensureLayerFrameCache();
+
+    if (_strokeEvalBuiltForFrame == _modCacheFrame) return;
+
+    _strokeFrameEvalCache.clear();
+
+    for (final layer in _state.layers) {
+      for (final group in layer.groups) {
+        for (final stroke in group.strokes) {
+          final key = _strokeEvalKey(layer.id, stroke.id);
+
+          _strokeFrameEvalCache[key] = _StrokeFrameEval(
+            extraX: _computeStrokeExtraX(layer.id, stroke.id),
+            extraY: _computeStrokeExtraY(layer.id, stroke.id),
+            extraRotationRad:
+                _computeStrokeExtraRotationRad(layer.id, stroke.id),
+            extraSize: computeStrokeExtraSize(layer.id, stroke.id),
+            coreOpacity:
+                _computeStrokeCoreOpacityEffective(layer.id, stroke.id),
+            glowRadius: _computeStrokeGlowRadiusEffective(layer.id, stroke.id),
+            glowOpacity:
+                _computeStrokeGlowOpacityEffective(layer.id, stroke.id),
+            glowBrightness:
+                _computeStrokeGlowBrightnessEffective(layer.id, stroke.id),
+          );
+        }
+      }
+    }
+
+    _strokeEvalBuiltForFrame = _modCacheFrame;
+  }
+
+  _StrokeFrameEval? _strokeFrameEval(String layerId, String strokeId) {
+    _ensureStrokeFrameCache();
+    return _strokeFrameEvalCache[_strokeEvalKey(layerId, strokeId)];
+  }
+
+  double _strokeExtraX(String layerId, String strokeId) {
+    return _strokeFrameEval(layerId, strokeId)?.extraX ?? 0.0;
+  }
+
+  double _strokeExtraY(String layerId, String strokeId) {
+    return _strokeFrameEval(layerId, strokeId)?.extraY ?? 0.0;
+  }
+
+  double _strokeExtraRotationRad(String layerId, String strokeId) {
+    return _strokeFrameEval(layerId, strokeId)?.extraRotationRad ?? 0.0;
+  }
+
+  double strokeExtraSize(String layerId, String strokeId) {
+    return _strokeFrameEval(layerId, strokeId)?.extraSize ?? 0.0;
+  }
+
+  double strokeCoreOpacityEffective(String layerId, String strokeId) {
+    return _strokeFrameEval(layerId, strokeId)?.coreOpacity ?? 1.0;
+  }
+
+  double strokeGlowRadiusEffective(String layerId, String strokeId) {
+    return _strokeFrameEval(layerId, strokeId)?.glowRadius ?? 0.5;
+  }
+
+  double strokeGlowOpacityEffective(String layerId, String strokeId) {
+    return _strokeFrameEval(layerId, strokeId)?.glowOpacity ?? 1.0;
+  }
+
+  double strokeGlowBrightnessEffective(String layerId, String strokeId) {
+    return _strokeFrameEval(layerId, strokeId)?.glowBrightness ?? 1.0;
+  }
+
+  String _strokeEvalKey(String layerId, String strokeId) =>
+      '$layerId::$strokeId';
 
   LayerTransform _layerTransformCached(String layerId) {
     return _layerFrameEval(layerId)?.transform ?? const LayerTransform();
@@ -1166,7 +1272,7 @@ class CanvasController extends ChangeNotifier {
     return (out - base).clamp(-1.0, 1.0).toDouble();
   }
 
-  double _strokeExtraX(String layerId, String strokeId) {
+  double _computeStrokeExtraX(String layerId, String strokeId) {
     final base = 0.0;
     double out = base;
 
@@ -1195,7 +1301,7 @@ class CanvasController extends ChangeNotifier {
     return out - base;
   }
 
-  double _strokeExtraY(String layerId, String strokeId) {
+  double _computeStrokeExtraY(String layerId, String strokeId) {
     final baseUi = 0.0;
     double outUi = baseUi;
 
@@ -1224,7 +1330,7 @@ class CanvasController extends ChangeNotifier {
     return -outUi;
   }
 
-  double _strokeExtraRotationRad(String layerId, String strokeId) {
+  double _computeStrokeExtraRotationRad(String layerId, String strokeId) {
     final deg = _sumRoutes(
       layerId: layerId,
       strokeId: strokeId,
@@ -1236,7 +1342,7 @@ class CanvasController extends ChangeNotifier {
 // ─────────────────────────────────────────────────────────────
 // Stroke SIZE (unbounded, delta-based → keep old behavior)
 // ─────────────────────────────────────────────────────────────
-  double strokeExtraSize(String layerId, String strokeId) {
+  double computeStrokeExtraSize(String layerId, String strokeId) {
     final base = _findStrokeBaseValue(layerId, strokeId, (s) => s.size, 10.0)
         .clamp(0.5, 200.0)
         .toDouble();
@@ -1272,7 +1378,7 @@ class CanvasController extends ChangeNotifier {
 // Stroke VISUAL PARAMS (0..1, Vital-style FINAL values)
 // ─────────────────────────────────────────────────────────────
 
-  double strokeCoreOpacityEffective(String layerId, String strokeId) {
+  double _computeStrokeCoreOpacityEffective(String layerId, String strokeId) {
     final base =
         _findStrokeBaseValue(layerId, strokeId, (s) => s.coreOpacity, 1.0);
     return _applyVitalStrokeParam(
@@ -1283,7 +1389,7 @@ class CanvasController extends ChangeNotifier {
     );
   }
 
-  double strokeGlowRadiusEffective(String layerId, String strokeId) {
+  double _computeStrokeGlowRadiusEffective(String layerId, String strokeId) {
     final base =
         _findStrokeBaseValue(layerId, strokeId, (s) => s.glowRadius, 0.5);
     return _applyVitalStrokeParam(
@@ -1294,7 +1400,7 @@ class CanvasController extends ChangeNotifier {
     );
   }
 
-  double strokeGlowOpacityEffective(String layerId, String strokeId) {
+  double _computeStrokeGlowOpacityEffective(String layerId, String strokeId) {
     final base =
         _findStrokeBaseValue(layerId, strokeId, (s) => s.glowOpacity, 1.0);
     return _applyVitalStrokeParam(
@@ -1305,7 +1411,8 @@ class CanvasController extends ChangeNotifier {
     );
   }
 
-  double strokeGlowBrightnessEffective(String layerId, String strokeId) {
+  double _computeStrokeGlowBrightnessEffective(
+      String layerId, String strokeId) {
     final base =
         _findStrokeBaseValue(layerId, strokeId, (s) => s.glowBrightness, 1.0);
     return _applyVitalStrokeParam(
@@ -1354,6 +1461,8 @@ class CanvasController extends ChangeNotifier {
   late final Renderer _renderer = Renderer(
     repaint,
     () => symmetry,
+    previewScaleFn: () => previewLogicalScale,
+    previewFullSizeFn: () => previewFullLogicalSize,
 
     // ✅ always use latest layer transform (fixes stale pivot issue)
     layerTransformFn: _layerTransformCached,
@@ -1465,6 +1574,47 @@ class CanvasController extends ChangeNotifier {
   void setCanvasSize(Size s) {
     if (_canvasSize == s) return;
     _canvasSize = s;
+  }
+
+  // ---------------------------------------------------------------------------
+  // PREVIEW QUALITY / INTERNAL LIVE RENDER SCALE
+  // ---------------------------------------------------------------------------
+
+  CanvasPreviewQuality _previewQuality = CanvasPreviewQuality.auto;
+  CanvasPreviewQuality get previewQuality => _previewQuality;
+
+  CanvasPreviewMetrics? _previewMetrics;
+  CanvasPreviewMetrics? get previewMetrics => _previewMetrics;
+
+  double get previewLogicalScale =>
+      _previewMetrics?.logicalScale.clamp(0.10, 1.0).toDouble() ?? 1.0;
+
+  Size get previewFullLogicalSize =>
+      _previewMetrics?.fullLogicalSize ?? _canvasSize;
+
+  void setPreviewQuality(CanvasPreviewQuality quality) {
+    if (_previewQuality == quality) return;
+    _previewQuality = quality;
+    _tick();
+    notifyListeners();
+  }
+
+  void setPreviewMetrics(CanvasPreviewMetrics metrics) {
+    final old = _previewMetrics;
+
+    final bool same = old != null &&
+        old.quality == metrics.quality &&
+        old.fullLogicalSize == metrics.fullLogicalSize &&
+        old.devicePixelRatio == metrics.devicePixelRatio &&
+        (old.logicalScale - metrics.logicalScale).abs() < 0.0001 &&
+        old.renderWidthPx == metrics.renderWidthPx &&
+        old.renderHeightPx == metrics.renderHeightPx;
+
+    if (same) return;
+
+    _previewMetrics = metrics;
+    _tick();
+    notifyListeners();
   }
 
   // ---------------------------------------------------------------------------
@@ -1800,6 +1950,7 @@ class CanvasController extends ChangeNotifier {
     groups[groupIndex] = group.copyWith(strokes: strokes);
     layers[li] = layer.copyWith(groups: groups);
     _state = _state.copyWith(layers: layers);
+    _markStrokeFrameCacheDirty();
 
     _ensureLayerPivot(layerId);
     _renderer.rebuildFromLayers(_state.layers);
@@ -1853,6 +2004,7 @@ class CanvasController extends ChangeNotifier {
     groups[groupIndex] = group.copyWith(strokes: strokes);
     layers[li] = layer.copyWith(groups: groups);
     _state = _state.copyWith(layers: layers);
+    _markStrokeFrameCacheDirty();
 
     _ensureLayerPivot(layerId);
     _renderer.rebuildFromLayers(_state.layers);
@@ -1914,6 +2066,7 @@ class CanvasController extends ChangeNotifier {
     groups[groupIndex] = group.copyWith(strokes: strokes);
     layers[li] = layer.copyWith(groups: groups);
     _state = _state.copyWith(layers: layers);
+    _markStrokeFrameCacheDirty();
 
     _ensureLayerPivot(layerId);
     _renderer.rebuildFromLayers(_state.layers);
@@ -2028,6 +2181,7 @@ class CanvasController extends ChangeNotifier {
 
     layers[idx] = layer.copyWith(transform: newTr);
     _state = _state.copyWith(layers: layers);
+    _markStrokeFrameCacheDirty();
 
     _ensureLayerPivot(layerId);
     _renderer.rebuildFromLayers(_state.layers);
@@ -2281,6 +2435,7 @@ class CanvasController extends ChangeNotifier {
     groups[groupIndex] = group.copyWith(strokes: strokes);
     layers[li] = layer.copyWith(groups: groups);
     _state = _state.copyWith(layers: layers);
+    _markStrokeFrameCacheDirty();
 
     // If we hid the selected stroke, clear selection (avoids “ghost selection”).
     if (!visible && _selectedStrokeId == strokeId) {
@@ -2618,6 +2773,7 @@ class CanvasController extends ChangeNotifier {
     groups[gi] = group.copyWith(strokes: strokes);
     layers[layerIndex] = layer.copyWith(groups: groups);
     _state = _state.copyWith(layers: layers);
+    _markStrokeFrameCacheDirty();
 
     _ensureLayerPivot(layerId);
 
@@ -2786,6 +2942,7 @@ class CanvasController extends ChangeNotifier {
     groups[gi] = group.copyWith(strokes: strokes);
     layers[layerIndex] = layer.copyWith(groups: groups);
     _state = _state.copyWith(layers: layers);
+    _markStrokeFrameCacheDirty();
 
     _ensureLayerPivot(layerId);
 
@@ -3312,6 +3469,7 @@ class CanvasController extends ChangeNotifier {
 
   void removeRoute(String routeId) {
     _routes.removeWhere((r) => r.id == routeId);
+    _markModCachesDirty();
 
     // routes removal can change pivot necessity; refresh all
     for (final l in _state.layers) {
@@ -3330,6 +3488,7 @@ class CanvasController extends ChangeNotifier {
 
     final prev = _routes[i];
     _routes[i] = prev.copyWith(enabled: enabled);
+    _markModCachesDirty();
 
     final now = _routes[i];
 
@@ -3357,6 +3516,7 @@ class CanvasController extends ChangeNotifier {
     if (!_state.layers.any((l) => l.id == layerId)) return;
 
     _routes[i] = _routes[i].copyWith(layerId: layerId);
+    _markModCachesDirty();
 
     final now = _routes[i];
     if (now.enabled &&
@@ -3419,6 +3579,7 @@ class CanvasController extends ChangeNotifier {
     if ((_routes[i].amount - v).abs() < 0.000001) return;
 
     _routes[i] = r.copyWith(amount: v);
+    _markModCachesDirty();
 
     _tick();
     notifyListeners();
@@ -3431,6 +3592,7 @@ class CanvasController extends ChangeNotifier {
 
     final prev = _routes[i];
     _routes[i] = prev.copyWith(param: param);
+    _markModCachesDirty();
 
     final now = _routes[i];
 
@@ -3454,6 +3616,7 @@ class CanvasController extends ChangeNotifier {
     if (i < 0) return;
 
     _routes[i] = _routes[i].copyWith(bipolar: bipolar);
+    _markModCachesDirty();
 
     _tick();
     notifyListeners();
@@ -3489,6 +3652,7 @@ class CanvasController extends ChangeNotifier {
       bipolar: true,
       amount: _defaultAmountForParam(param),
     ));
+    _markModCachesDirty();
 
     if (param == LfoParam.layerRotationDeg) {
       _ensureLayerPivot(layerId);
@@ -3508,6 +3672,7 @@ class CanvasController extends ChangeNotifier {
   void clearRouteForLayerParam(String layerId, LfoParam param) {
     _routes.removeWhere(
         (r) => r.layerId == layerId && r.param == param && r.strokeId == null);
+    _markModCachesDirty();
 
     for (final l in _state.layers) {
       _ensureLayerPivot(l.id);
@@ -3547,6 +3712,7 @@ class CanvasController extends ChangeNotifier {
     _routes.removeWhere(
       (r) => r.layerId == layerId && r.strokeId == strokeId && r.param == param,
     );
+    _markModCachesDirty();
 
     _ensureTickerState();
     _tick();
@@ -3565,6 +3731,7 @@ class CanvasController extends ChangeNotifier {
     _routes.removeWhere(
       (r) => r.layerId == layerId && r.strokeId == strokeId && r.param == param,
     );
+    _markModCachesDirty();
 
     final id = 'route-${DateTime.now().millisecondsSinceEpoch}';
     _routes.add(LfoRoute(
@@ -3645,6 +3812,7 @@ class CanvasController extends ChangeNotifier {
     groups[groupIndex] = group.copyWith(strokes: strokes);
     layers[layerIndex] = layer.copyWith(groups: groups);
     _state = _state.copyWith(layers: layers);
+    _markStrokeFrameCacheDirty();
 
     _ensureLayerPivot(layerId);
 
@@ -3714,6 +3882,7 @@ class CanvasController extends ChangeNotifier {
       activeLayerId: id,
       redoStack: const [],
     );
+    _markStrokeFrameCacheDirty();
 
     _renderer.rebuildFromLayers(_state.layers);
     _hasUnsavedChanges = true;
@@ -3796,6 +3965,7 @@ class CanvasController extends ChangeNotifier {
 
     layers[idx] = layer.copyWith(visible: visible);
     _state = _state.copyWith(layers: layers);
+    _markStrokeFrameCacheDirty();
 
     _ensureLayerPivot(id);
 
@@ -3842,6 +4012,7 @@ class CanvasController extends ChangeNotifier {
       transform: layer.transform.copyWith(position: Offset(x, -y)), // ✅ flip
     );
     _state = _state.copyWith(layers: layers);
+    _markStrokeFrameCacheDirty();
 
     _ensureLayerPivot(id);
 
@@ -3865,6 +4036,7 @@ class CanvasController extends ChangeNotifier {
     );
 
     _state = _state.copyWith(layers: layers);
+    _markStrokeFrameCacheDirty();
     _hasUnsavedChanges = true;
 
     _ensureLayerPivot(id);
@@ -3887,6 +4059,7 @@ class CanvasController extends ChangeNotifier {
     final newTransform = layer.transform.copyWith(rotation: radians);
     layers[idx] = layer.copyWith(transform: newTransform);
     _state = _state.copyWith(layers: layers);
+    _markStrokeFrameCacheDirty();
 
     // 2) ensure pivot exists for rotation (combined strokes center)
     _ensureLayerPivot(id);
@@ -3910,6 +4083,7 @@ class CanvasController extends ChangeNotifier {
       transform: layer.transform.copyWith(scale: clamped.toDouble()),
     );
     _state = _state.copyWith(layers: layers);
+    _markStrokeFrameCacheDirty();
 
     _ensureLayerPivot(id);
 
@@ -4293,6 +4467,8 @@ class CanvasController extends ChangeNotifier {
     }
 
     // ---- 7) Rebuild renderer + ticker state ----
+    _markModCachesDirty();
+    _markStrokeFrameCacheDirty();
     _rebuildRendererSafe();
     _ensureTickerState();
 
@@ -4337,6 +4513,8 @@ class CanvasController extends ChangeNotifier {
       _ensureLayerPivot(l.id);
     }
 
+    _markModCachesDirty();
+    _markStrokeFrameCacheDirty();
     _rebuildRendererSafe();
 
     _ensureTickerState();
@@ -4350,8 +4528,14 @@ class CanvasController extends ChangeNotifier {
   }
 
   void _afterEdit({String? layerId}) {
+    // committed stroke visuals may have changed
+    _markStrokeFrameCacheDirty();
+
     // Keep pivots stable & renderer consistent after any edit
-    if (layerId != null) _ensureLayerPivot(layerId);
+    if (layerId != null) {
+      _ensureLayerPivot(layerId);
+    }
+
     _rebuildRendererSafe();
 
     _hasUnsavedChanges = true;

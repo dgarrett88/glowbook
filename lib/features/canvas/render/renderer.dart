@@ -30,6 +30,9 @@ class Renderer extends CustomPainter {
   Renderer(
     this.repaint,
     this.symmetryFn, {
+    required double Function() previewScaleFn,
+    required Size Function() previewFullSizeFn,
+
     // ✅ NEW: get latest layer transform live (prevents stale pivot/rotation bugs)
     required LayerTransform Function(String layerId) layerTransformFn,
 
@@ -51,6 +54,8 @@ class Renderer extends CustomPainter {
     double Function(String layerId, String strokeId)? strokeExtraGlowBrightness,
     required String? Function() selectedStrokeIdFn,
   })  : _layerTransformFn = layerTransformFn,
+        _previewScaleFn = previewScaleFn,
+        _previewFullSizeFn = previewFullSizeFn,
         _layerExtraRotationRadians = layerExtraRotationRadians,
         _layerExtraX = layerExtraX,
         _layerExtraY = layerExtraY,
@@ -69,6 +74,15 @@ class Renderer extends CustomPainter {
 
   final Listenable repaint;
   final SymmetryMode Function() symmetryFn;
+
+  // ---------------------------------------------------------------------------
+  // PREVIEW SCALE CALLBACKS
+  // ---------------------------------------------------------------------------
+
+  /// The live preview CustomPaint may be physically smaller than the full canvas.
+  /// Renderer still works in full logical/world coordinates and scales down inside paint.
+  final double Function() _previewScaleFn;
+  final Size Function() _previewFullSizeFn;
 
   // ---------------------------------------------------------------------------
   // CALLBACKS (from controller)
@@ -504,8 +518,26 @@ class Renderer extends CustomPainter {
 
   @override
   void paint(Canvas canvas, Size size) {
-    _lastSize = size;
+    final previewScale = _previewScaleFn().clamp(0.10, 1.0).toDouble();
+    final fullSize = _previewFullSizeFn();
 
+    final sceneSize =
+        (fullSize.width > 0 && fullSize.height > 0) ? fullSize : size;
+
+    _lastSize = sceneSize;
+
+    canvas.save();
+
+    if ((previewScale - 1.0).abs() > 0.0001) {
+      canvas.scale(previewScale, previewScale);
+    }
+
+    _paintScene(canvas, sceneSize);
+
+    canvas.restore();
+  }
+
+  void _paintScene(Canvas canvas, Size size) {
     final selectedId = _selectedStrokeIdFn();
 
     // Draw committed strokes

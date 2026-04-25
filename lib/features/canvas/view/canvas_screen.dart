@@ -12,6 +12,7 @@ import '../../../core/utils/uuid.dart';
 import 'widgets/top_toolbar.dart';
 import 'widgets/bottom_dock.dart';
 import '../../../core/models/canvas_document_bundle.dart';
+import '../state/canvas_preview_quality.dart';
 import '../state/glow_blend.dart' as gb;
 import 'layer_panel.dart';
 import 'lfo_panel.dart';
@@ -202,8 +203,29 @@ class _CanvasScreenState extends ConsumerState<CanvasScreen> {
       ),
       body: LayoutBuilder(
         builder: (context, constraints) {
-          controller
-              .setCanvasSize(Size(constraints.maxWidth, constraints.maxHeight));
+          final fullSize = Size(
+            constraints.maxWidth,
+            constraints.maxHeight,
+          );
+
+          controller.setCanvasSize(fullSize);
+
+          final dpr = MediaQuery.devicePixelRatioOf(context);
+
+          final previewMetrics = computeCanvasPreviewMetrics(
+            fullLogicalSize: fullSize,
+            devicePixelRatio: dpr,
+            quality: controller.previewQuality,
+          );
+
+          controller.setPreviewMetrics(previewMetrics);
+
+          final previewScale = previewMetrics.logicalScale;
+
+          final previewLogicalSize = Size(
+            fullSize.width * previewScale,
+            fullSize.height * previewScale,
+          );
 
           return Stack(
             children: [
@@ -242,13 +264,27 @@ class _CanvasScreenState extends ConsumerState<CanvasScreen> {
                   }
                   controller.cancelPointer(e.pointer);
                 },
-                child: RepaintBoundary(
-                  key: _repaintKey,
-                  child: Container(
-                    color: canvasBg,
-                    child: CustomPaint(
-                      painter: controller.painter,
-                      size: Size.infinite,
+                child: Container(
+                  color: canvasBg,
+                  child: ClipRect(
+                    child: Align(
+                      alignment: Alignment.topLeft,
+                      child: Transform.scale(
+                        alignment: Alignment.topLeft,
+                        scale: previewScale <= 0 ? 1.0 : (1.0 / previewScale),
+                        filterQuality: FilterQuality.medium,
+                        child: RepaintBoundary(
+                          key: _repaintKey,
+                          child: SizedBox(
+                            width: previewLogicalSize.width,
+                            height: previewLogicalSize.height,
+                            child: CustomPaint(
+                              painter: controller.painter,
+                              size: previewLogicalSize,
+                            ),
+                          ),
+                        ),
+                      ),
                     ),
                   ),
                 ),
