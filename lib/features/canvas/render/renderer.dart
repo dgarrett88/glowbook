@@ -626,6 +626,13 @@ class Renderer extends CustomPainter {
     }
   }
 
+    /// Export path: paint the scene at full logical size with no live preview scaling.
+  /// The caller is responsible for scaling the canvas to the desired output pixels.
+  void paintForExport(Canvas canvas, Size size) {
+    _lastSize = size;
+    _paintScene(canvas, size);
+  }
+
   @override
   bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
 }

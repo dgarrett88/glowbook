@@ -7,6 +7,7 @@ enum CanvasPreviewQuality {
   p480,
   p720,
   p1080,
+  p1440,
   native,
 }
 
@@ -23,6 +24,8 @@ extension CanvasPreviewQualityX on CanvasPreviewQuality {
         return '720p';
       case CanvasPreviewQuality.p1080:
         return '1080p';
+      case CanvasPreviewQuality.p1440:
+        return '1440p';
       case CanvasPreviewQuality.native:
         return 'Native';
     }
@@ -40,6 +43,8 @@ extension CanvasPreviewQualityX on CanvasPreviewQuality {
         return 1280.0;
       case CanvasPreviewQuality.p1080:
         return 1920.0;
+      case CanvasPreviewQuality.p1440:
+        return 2560.0;
       case CanvasPreviewQuality.native:
         return null;
     }

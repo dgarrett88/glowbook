@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../state/canvas_controller.dart' as canvas_state;
 import '../../../core/services/gallery_saver.dart';
+import '../../../core/services/video_export_service.dart';
 import '../../../core/services/document_storage.dart';
 import '../../../core/models/canvas_doc.dart' as doc_model;
 import '../../../core/utils/uuid.dart';
@@ -30,6 +31,8 @@ class CanvasScreen extends ConsumerStatefulWidget {
 }
 
 enum _NewPageAction { saveAndNew, discardAndNew, cancel }
+enum _ExportAction { image, video }
+
 
 class _CanvasScreenState extends ConsumerState<CanvasScreen> {
   final GlobalKey _repaintKey = GlobalKey();
@@ -191,7 +194,7 @@ class _CanvasScreenState extends ConsumerState<CanvasScreen> {
         preferredSize: const Size.fromHeight(56),
         child: TopToolbar(
           controller: controller,
-          onExport: _exportPng,
+                    onExport: () => _showExportMenu(controller),
           onNew: () => _handleNewDocument(controller),
           onExitToMenu: () => _handleExitToMainMenu(controller),
         ),
@@ -363,6 +366,180 @@ class _CanvasScreenState extends ConsumerState<CanvasScreen> {
         },
       ),
     );
+  }
+
+  Future<void> _showExportMenu(
+  canvas_state.CanvasController controller,
+) async {
+  final action = await showModalBottomSheet<_ExportAction>(
+    context: context,
+    builder: (context) {
+      return SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const ListTile(
+              title: Text(
+                'Export',
+                style: TextStyle(fontWeight: FontWeight.bold),
+              ),
+            ),
+            ListTile(
+              leading: const Icon(Icons.image_outlined),
+              title: const Text('Save image to gallery'),
+              subtitle: const Text('PNG snapshot'),
+              onTap: () => Navigator.of(context).pop(_ExportAction.image),
+            ),
+            ListTile(
+              leading: const Icon(Icons.movie_outlined),
+              title: const Text('Export video'),
+              subtitle: const Text('MP4 animation'),
+              onTap: () => Navigator.of(context).pop(_ExportAction.video),
+            ),
+          ],
+        ),
+      );
+    },
+  );
+
+  if (!mounted || action == null) return;
+
+  switch (action) {
+    case _ExportAction.image:
+      await _exportPng();
+      break;
+
+case _ExportAction.video:
+  final options = await _showVideoResolutionMenu();
+  if (!mounted || options == null) return;
+
+  final fpsOption = await _showVideoFpsMenu();
+  if (!mounted || fpsOption == null) return;
+
+  await _exportVideo(controller, options, fpsOption);
+  break;
+  }
+}
+
+Future<VideoExportOptions?> _showVideoResolutionMenu() async {
+  return showModalBottomSheet<VideoExportOptions>(
+    context: context,
+    builder: (context) {
+      return SafeArea(
+        child: ListView(
+          shrinkWrap: true,
+          children: [
+            const ListTile(
+              title: Text(
+                'Video resolution',
+                style: TextStyle(fontWeight: FontWeight.bold),
+              ),
+              subtitle: Text('Uses the current canvas aspect ratio'),
+            ),
+            for (final option in VideoExportOptions.values)
+              ListTile(
+                leading: const Icon(Icons.high_quality_outlined),
+                title: Text(option.label),
+                subtitle: Text('${option.longestSidePx}px longest side'),
+                onTap: () => Navigator.of(context).pop(option),
+              ),
+          ],
+        ),
+      );
+    },
+  );
+}
+
+Future<VideoExportFpsOption?> _showVideoFpsMenu() async {
+  return showModalBottomSheet<VideoExportFpsOption>(
+    context: context,
+    builder: (context) {
+      return SafeArea(
+        child: ListView(
+          shrinkWrap: true,
+          children: [
+            const ListTile(
+              title: Text(
+                'Frame rate',
+                style: TextStyle(fontWeight: FontWeight.bold),
+              ),
+              subtitle: Text('60 FPS is smoother but takes longer to export'),
+            ),
+            for (final option in VideoExportFpsOption.values)
+              ListTile(
+                leading: const Icon(Icons.slow_motion_video_outlined),
+                title: Text(option.label),
+                subtitle: Text('${option.fps} frames per second'),
+                onTap: () => Navigator.of(context).pop(option),
+              ),
+          ],
+        ),
+      );
+    },
+  );
+}
+
+Future<void> _exportVideo(
+  canvas_state.CanvasController controller,
+  VideoExportOptions options,
+  VideoExportFpsOption fpsOption,
+) async {
+    double progress = 0.0;
+
+    try {
+      showDialog<void>(
+        context: context,
+        barrierDismissible: false,
+        builder: (context) {
+          return StatefulBuilder(
+            builder: (context, setDialogState) {
+              Future<void>.delayed(const Duration(milliseconds: 200), () {
+                if (context.mounted) {
+                  setDialogState(() {});
+                }
+              });
+
+              return AlertDialog(
+             title: Text('Exporting ${options.label} ${fpsOption.label} video'),
+                content: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    LinearProgressIndicator(value: progress),
+                    const SizedBox(height: 12),
+                    Text('${(progress * 100).clamp(0, 100).round()}%'),
+                  ],
+                ),
+              );
+            },
+          );
+        },
+      );
+
+final uri = await VideoExportService.exportCurrentCanvasVideo(
+  controller: controller,
+  options: options,
+  fpsOption: fpsOption,
+  onProgress: (p) {
+    progress = p.clamp(0.0, 1.0);
+  },
+);
+
+      if (mounted) {
+        Navigator.of(context, rootNavigator: true).pop();
+
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Video saved: ${uri ?? 'Gallery'}')),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        Navigator.of(context, rootNavigator: true).pop();
+
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Video export failed: $e')),
+        );
+      }
+    }
   }
 
   Future<void> _exportPng() async {

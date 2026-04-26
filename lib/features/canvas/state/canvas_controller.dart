@@ -1,5 +1,7 @@
 import 'dart:math' as math;
-import 'dart:ui' show Size;
+import 'dart:typed_data';
+import 'dart:ui' as ui;
+import 'dart:ui' show Offset, Size;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -1570,6 +1572,7 @@ class CanvasController extends ChangeNotifier {
   // ---------------------------------------------------------------------------
 
   Size _canvasSize = Size.zero;
+  Size get canvasSize => _canvasSize;
 
   void setCanvasSize(Size s) {
     if (_canvasSize == s) return;
@@ -2552,6 +2555,70 @@ class CanvasController extends ChangeNotifier {
 
   void _tickLfoPreview() {
     lfoPreviewRepaint.value++;
+  }
+
+    Future<Uint8List?> renderExportPngFrame({
+    required Size outputSizePx,
+    required double timeSec,
+  }) async {
+    final sourceSize = _canvasSize;
+
+    if (sourceSize.width <= 0 || sourceSize.height <= 0) {
+      return null;
+    }
+
+    final outputWidth = outputSizePx.width.round().clamp(1, 8192);
+    final outputHeight = outputSizePx.height.round().clamp(1, 8192);
+
+    final oldTimeSec = _timeSec;
+
+    try {
+      // Force deterministic animation time for this export frame.
+      _timeSec = timeSec;
+      _modCacheFrame++;
+
+      final recorder = ui.PictureRecorder();
+      final canvas = Canvas(recorder);
+
+      // Match the live canvas background.
+      // Important: MP4 does not support alpha, so export frames must be opaque.
+      final bool isMultiply = gb.GlowBlendState.I.mode == gb.GlowBlend.multiply;
+
+      final int bgArgb = (isMultiply && !_hasCustomBackground)
+          ? 0xFFFFFFFF
+          : backgroundColor;
+
+      canvas.drawRect(
+        Rect.fromLTWH(
+          0,
+          0,
+          outputWidth.toDouble(),
+          outputHeight.toDouble(),
+        ),
+        Paint()..color = Color(bgArgb),
+      );
+
+      final scaleX = outputWidth / sourceSize.width;
+      final scaleY = outputHeight / sourceSize.height;
+
+      canvas.scale(scaleX, scaleY);
+
+      // Paint the real scene, not the downscaled live preview.
+      _renderer.paintForExport(canvas, sourceSize);
+
+      final picture = recorder.endRecording();
+      final image = await picture.toImage(outputWidth, outputHeight);
+      final byteData = await image.toByteData(format: ui.ImageByteFormat.png);
+
+      picture.dispose();
+      image.dispose();
+
+      if (byteData == null) return null;
+      return byteData.buffer.asUint8List();
+    } finally {
+      _timeSec = oldTimeSec;
+      _modCacheFrame++;
+    }
   }
 
   void _rebuildRendererSafe() {
