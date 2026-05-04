@@ -219,11 +219,13 @@ class CanvasController extends ChangeNotifier {
   // ---------------------------------------------------------------------------
   // TIME SOURCE for animation
   // ---------------------------------------------------------------------------
-
   late final Ticker _ticker;
   double _timeSec = 0.0;
   Duration? _lastTickElapsed;
   bool _tickerRunning = false;
+
+  bool _exportPauseLiveAnimation = false;
+  bool get exportPauseLiveAnimation => _exportPauseLiveAnimation;
 
   // --- LFO editor preview keeps ticker running while panel is open ---
   bool _lfoEditorPreviewActive = false;
@@ -346,7 +348,45 @@ class CanvasController extends ChangeNotifier {
     }
   }
 
+  void beginExportPauseLiveAnimation() {
+    if (_exportPauseLiveAnimation) return;
+
+    _exportPauseLiveAnimation = true;
+
+    if (_tickerRunning) {
+      _ticker.stop();
+      _tickerRunning = false;
+    }
+
+    _lastTickElapsed = null;
+
+    // Repaint once so the live preview freezes cleanly.
+    _tick();
+    notifyListeners();
+  }
+
+  void endExportPauseLiveAnimation() {
+    if (!_exportPauseLiveAnimation) return;
+
+    _exportPauseLiveAnimation = false;
+    _lastTickElapsed = null;
+
+    _ensureTickerState();
+
+    _tick();
+    notifyListeners();
+  }
+
   void _ensureTickerState() {
+    if (_exportPauseLiveAnimation) {
+      if (_tickerRunning) {
+        _ticker.stop();
+        _tickerRunning = false;
+      }
+      _lastTickElapsed = null;
+      return;
+    }
+
     final anyConstant = _layerRotation.values.any((a) => a.isActive);
 
     _rebuildLfoLookupIfNeeded();
@@ -2557,7 +2597,7 @@ class CanvasController extends ChangeNotifier {
     lfoPreviewRepaint.value++;
   }
 
-    Future<Uint8List?> renderExportPngFrame({
+  Future<Uint8List?> renderExportPngFrame({
     required Size outputSizePx,
     required double timeSec,
   }) async {
@@ -2584,9 +2624,8 @@ class CanvasController extends ChangeNotifier {
       // Important: MP4 does not support alpha, so export frames must be opaque.
       final bool isMultiply = gb.GlowBlendState.I.mode == gb.GlowBlend.multiply;
 
-      final int bgArgb = (isMultiply && !_hasCustomBackground)
-          ? 0xFFFFFFFF
-          : backgroundColor;
+      final int bgArgb =
+          (isMultiply && !_hasCustomBackground) ? 0xFFFFFFFF : backgroundColor;
 
       canvas.drawRect(
         Rect.fromLTWH(
@@ -2598,10 +2637,21 @@ class CanvasController extends ChangeNotifier {
         Paint()..color = Color(bgArgb),
       );
 
-      final scaleX = outputWidth / sourceSize.width;
-      final scaleY = outputHeight / sourceSize.height;
+      // Fit the live canvas into the requested export size without stretching.
+      // This lets us export square / portrait / landscape while preserving artwork.
+      final scale = math.min(
+        outputWidth / sourceSize.width,
+        outputHeight / sourceSize.height,
+      );
 
-      canvas.scale(scaleX, scaleY);
+      final fittedWidth = sourceSize.width * scale;
+      final fittedHeight = sourceSize.height * scale;
+
+      final dx = (outputWidth - fittedWidth) / 2.0;
+      final dy = (outputHeight - fittedHeight) / 2.0;
+
+      canvas.translate(dx, dy);
+      canvas.scale(scale, scale);
 
       // Paint the real scene, not the downscaled live preview.
       _renderer.paintForExport(canvas, sourceSize);

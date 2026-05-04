@@ -31,8 +31,22 @@ class CanvasScreen extends ConsumerStatefulWidget {
 }
 
 enum _NewPageAction { saveAndNew, discardAndNew, cancel }
+
 enum _ExportAction { image, video }
 
+class _VideoExportSettingsResult {
+  final VideoExportOptions resolution;
+  final VideoExportAspectOption aspect;
+  final VideoExportFpsOption fps;
+  final double durationSec;
+
+  const _VideoExportSettingsResult({
+    required this.resolution,
+    required this.aspect,
+    required this.fps,
+    required this.durationSec,
+  });
+}
 
 class _CanvasScreenState extends ConsumerState<CanvasScreen> {
   final GlobalKey _repaintKey = GlobalKey();
@@ -194,7 +208,7 @@ class _CanvasScreenState extends ConsumerState<CanvasScreen> {
         preferredSize: const Size.fromHeight(56),
         child: TopToolbar(
           controller: controller,
-                    onExport: () => _showExportMenu(controller),
+          onExport: () => _showExportMenu(controller),
           onNew: () => _handleNewDocument(controller),
           onExitToMenu: () => _handleExitToMainMenu(controller),
         ),
@@ -369,176 +383,467 @@ class _CanvasScreenState extends ConsumerState<CanvasScreen> {
   }
 
   Future<void> _showExportMenu(
-  canvas_state.CanvasController controller,
-) async {
-  final action = await showModalBottomSheet<_ExportAction>(
-    context: context,
-    builder: (context) {
-      return SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const ListTile(
-              title: Text(
-                'Export',
-                style: TextStyle(fontWeight: FontWeight.bold),
+    canvas_state.CanvasController controller,
+  ) async {
+    final action = await showModalBottomSheet<_ExportAction>(
+      context: context,
+      builder: (context) {
+        return SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const ListTile(
+                title: Text(
+                  'Export',
+                  style: TextStyle(fontWeight: FontWeight.bold),
+                ),
               ),
-            ),
-            ListTile(
-              leading: const Icon(Icons.image_outlined),
-              title: const Text('Save image to gallery'),
-              subtitle: const Text('PNG snapshot'),
-              onTap: () => Navigator.of(context).pop(_ExportAction.image),
-            ),
-            ListTile(
-              leading: const Icon(Icons.movie_outlined),
-              title: const Text('Export video'),
-              subtitle: const Text('MP4 animation'),
-              onTap: () => Navigator.of(context).pop(_ExportAction.video),
-            ),
-          ],
-        ),
-      );
-    },
-  );
+              ListTile(
+                leading: const Icon(Icons.image_outlined),
+                title: const Text('Save image to gallery'),
+                subtitle: const Text('PNG snapshot'),
+                onTap: () => Navigator.of(context).pop(_ExportAction.image),
+              ),
+              ListTile(
+                leading: const Icon(Icons.movie_outlined),
+                title: const Text('Export video'),
+                subtitle: const Text('MP4 animation'),
+                onTap: () => Navigator.of(context).pop(_ExportAction.video),
+              ),
+            ],
+          ),
+        );
+      },
+    );
 
-  if (!mounted || action == null) return;
+    if (!mounted || action == null) return;
 
-  switch (action) {
-    case _ExportAction.image:
-      await _exportPng();
-      break;
+    switch (action) {
+      case _ExportAction.image:
+        await _exportPng();
+        break;
 
-case _ExportAction.video:
-  final options = await _showVideoResolutionMenu();
-  if (!mounted || options == null) return;
+      case _ExportAction.video:
+        final settings = await _showVideoExportSettingsSheet();
+        if (!mounted || settings == null) return;
 
-  final fpsOption = await _showVideoFpsMenu();
-  if (!mounted || fpsOption == null) return;
-
-  await _exportVideo(controller, options, fpsOption);
-  break;
+        await _exportVideo(
+          controller,
+          settings.resolution,
+          settings.aspect,
+          settings.fps,
+          settings.durationSec,
+        );
+        break;
+    }
   }
-}
 
-Future<VideoExportOptions?> _showVideoResolutionMenu() async {
-  return showModalBottomSheet<VideoExportOptions>(
-    context: context,
-    builder: (context) {
-      return SafeArea(
-        child: ListView(
-          shrinkWrap: true,
-          children: [
-            const ListTile(
-              title: Text(
-                'Video resolution',
-                style: TextStyle(fontWeight: FontWeight.bold),
-              ),
-              subtitle: Text('Uses the current canvas aspect ratio'),
-            ),
-            for (final option in VideoExportOptions.values)
-              ListTile(
-                leading: const Icon(Icons.high_quality_outlined),
-                title: Text(option.label),
-                subtitle: Text('${option.longestSidePx}px longest side'),
-                onTap: () => Navigator.of(context).pop(option),
-              ),
-          ],
-        ),
-      );
-    },
-  );
-}
+  Future<_VideoExportSettingsResult?> _showVideoExportSettingsSheet() async {
+    return showModalBottomSheet<_VideoExportSettingsResult>(
+      context: context,
+      isScrollControlled: true,
+      builder: (context) {
+        var selectedResolution = VideoExportOptions.p360;
+        var selectedAspect = VideoExportAspectOption.current;
+        var selectedFps = VideoExportFpsOption.fps30;
+        var durationSec = 15.0;
 
-Future<VideoExportFpsOption?> _showVideoFpsMenu() async {
-  return showModalBottomSheet<VideoExportFpsOption>(
-    context: context,
-    builder: (context) {
-      return SafeArea(
-        child: ListView(
-          shrinkWrap: true,
-          children: [
-            const ListTile(
-              title: Text(
-                'Frame rate',
-                style: TextStyle(fontWeight: FontWeight.bold),
-              ),
-              subtitle: Text('60 FPS is smoother but takes longer to export'),
-            ),
-            for (final option in VideoExportFpsOption.values)
-              ListTile(
-                leading: const Icon(Icons.slow_motion_video_outlined),
-                title: Text(option.label),
-                subtitle: Text('${option.fps} frames per second'),
-                onTap: () => Navigator.of(context).pop(option),
-              ),
-          ],
-        ),
-      );
-    },
-  );
-}
+        return StatefulBuilder(
+          builder: (context, setSheetState) {
+            final totalFrames = (durationSec * selectedFps.fps).round();
 
-Future<void> _exportVideo(
-  canvas_state.CanvasController controller,
-  VideoExportOptions options,
-  VideoExportFpsOption fpsOption,
-) async {
+            String frameWarning() {
+              if (totalFrames >= 1800) {
+                return 'Large export: this may take a while.';
+              }
+              if (totalFrames >= 900) {
+                return 'Medium-large export.';
+              }
+              return 'Good for quick exports.';
+            }
+
+            return SafeArea(
+              child: Padding(
+                padding: EdgeInsets.only(
+                  left: 16,
+                  right: 16,
+                  top: 12,
+                  bottom: 16 + MediaQuery.of(context).viewInsets.bottom,
+                ),
+                child: SingleChildScrollView(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          const Icon(Icons.movie_outlined),
+                          const SizedBox(width: 8),
+                          const Expanded(
+                            child: Text(
+                              'Export Video',
+                              style: TextStyle(
+                                fontSize: 18,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                          ),
+                          IconButton(
+                            tooltip: 'Close',
+                            icon: const Icon(Icons.close),
+                            onPressed: () => Navigator.of(context).pop(),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 16),
+                      const Text(
+                        'Resolution',
+                        style: TextStyle(fontWeight: FontWeight.bold),
+                      ),
+                      const SizedBox(height: 8),
+                      Wrap(
+                        spacing: 8,
+                        runSpacing: 8,
+                        children: [
+                          for (final option in VideoExportOptions.values)
+                            ChoiceChip(
+                              label: Text(option.label),
+                              selected: selectedResolution == option,
+                              onSelected: (_) {
+                                setSheetState(() {
+                                  selectedResolution = option;
+                                });
+                              },
+                            ),
+                        ],
+                      ),
+                      const SizedBox(height: 18),
+                      const Text(
+                        'Aspect Ratio',
+                        style: TextStyle(fontWeight: FontWeight.bold),
+                      ),
+                      const SizedBox(height: 8),
+                      Wrap(
+                        spacing: 8,
+                        runSpacing: 8,
+                        children: [
+                          for (final option in VideoExportAspectOption.values)
+                            ChoiceChip(
+                              label: Text(option.label),
+                              selected: selectedAspect == option,
+                              onSelected: (_) {
+                                setSheetState(() {
+                                  selectedAspect = option;
+                                });
+                              },
+                            ),
+                        ],
+                      ),
+                      const SizedBox(height: 18),
+                      const Text(
+                        'Frame Rate',
+                        style: TextStyle(fontWeight: FontWeight.bold),
+                      ),
+                      const SizedBox(height: 8),
+                      Wrap(
+                        spacing: 8,
+                        runSpacing: 8,
+                        children: [
+                          for (final option in VideoExportFpsOption.values)
+                            ChoiceChip(
+                              label: Text(option.label),
+                              selected: selectedFps == option,
+                              onSelected: (_) {
+                                setSheetState(() {
+                                  selectedFps = option;
+                                });
+                              },
+                            ),
+                        ],
+                      ),
+                      const SizedBox(height: 18),
+                      Row(
+                        children: [
+                          const Expanded(
+                            child: Text(
+                              'Duration',
+                              style: TextStyle(fontWeight: FontWeight.bold),
+                            ),
+                          ),
+                          Text(
+                            '${durationSec.toStringAsFixed(1)} sec',
+                            style: const TextStyle(
+                              fontSize: 18,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                        ],
+                      ),
+                      Slider(
+                        min: 1.0,
+                        max: 60.0,
+                        divisions: 590,
+                        value: durationSec,
+                        label: '${durationSec.toStringAsFixed(1)} sec',
+                        onChanged: (v) {
+                          setSheetState(() {
+                            durationSec = v.clamp(1.0, 60.0).toDouble();
+                          });
+                        },
+                      ),
+                      Wrap(
+                        spacing: 8,
+                        runSpacing: 8,
+                        children: [
+                          for (final quick in [
+                            3.0,
+                            5.0,
+                            10.0,
+                            15.0,
+                            30.0,
+                            60.0
+                          ])
+                            ActionChip(
+                              label: Text('${quick.round()}s'),
+                              onPressed: () {
+                                setSheetState(() {
+                                  durationSec = quick;
+                                });
+                              },
+                            ),
+                        ],
+                      ),
+                      const SizedBox(height: 16),
+                      Text(
+                        '${selectedResolution.label} · ${selectedAspect.label} · ${selectedFps.label} · $totalFrames frames',
+                        style: const TextStyle(fontWeight: FontWeight.w600),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(frameWarning()),
+                      const SizedBox(height: 18),
+                      SizedBox(
+                        width: double.infinity,
+                        child: FilledButton.icon(
+                          icon: const Icon(Icons.file_upload_outlined),
+                          label: const Text('Export Video'),
+                          onPressed: () {
+                            Navigator.of(context).pop(
+                              _VideoExportSettingsResult(
+                                resolution: selectedResolution,
+                                aspect: selectedAspect,
+                                fps: selectedFps,
+                                durationSec: durationSec,
+                              ),
+                            );
+                          },
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+
+  Future<VideoExportOptions?> _showVideoResolutionMenu() async {
+    return showModalBottomSheet<VideoExportOptions>(
+      context: context,
+      builder: (context) {
+        return SafeArea(
+          child: ListView(
+            shrinkWrap: true,
+            children: [
+              const ListTile(
+                title: Text(
+                  'Video resolution',
+                  style: TextStyle(fontWeight: FontWeight.bold),
+                ),
+                subtitle: Text('Uses the current canvas aspect ratio'),
+              ),
+              for (final option in VideoExportOptions.values)
+                ListTile(
+                  leading: const Icon(Icons.high_quality_outlined),
+                  title: Text(option.label),
+                  subtitle: Text('${option.longestSidePx}px longest side'),
+                  onTap: () => Navigator.of(context).pop(option),
+                ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  Future<VideoExportFpsOption?> _showVideoFpsMenu() async {
+    return showModalBottomSheet<VideoExportFpsOption>(
+      context: context,
+      builder: (context) {
+        return SafeArea(
+          child: ListView(
+            shrinkWrap: true,
+            children: [
+              const ListTile(
+                title: Text(
+                  'Frame rate',
+                  style: TextStyle(fontWeight: FontWeight.bold),
+                ),
+                subtitle: Text('60 FPS is smoother but takes longer to export'),
+              ),
+              for (final option in VideoExportFpsOption.values)
+                ListTile(
+                  leading: const Icon(Icons.slow_motion_video_outlined),
+                  title: Text(option.label),
+                  subtitle: Text('${option.fps} frames per second'),
+                  onTap: () => Navigator.of(context).pop(option),
+                ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  Future<void> _exportVideo(
+    canvas_state.CanvasController controller,
+    VideoExportOptions options,
+    VideoExportAspectOption aspectOption,
+    VideoExportFpsOption fpsOption,
+    double durationSec,
+  ) async {
     double progress = 0.0;
+    String stage = 'Starting export';
+    int completedFrames = 0;
+    int totalFrames = (durationSec * fpsOption.fps).round();
+    Duration elapsed = Duration.zero;
+    Duration? eta;
+
+    final cancelToken = VideoExportCancelToken();
+
+    StateSetter? dialogSetState;
+    bool dialogOpen = false;
+
+    String formatDuration(Duration d) {
+      final totalSeconds = d.inSeconds;
+      final minutes = totalSeconds ~/ 60;
+      final seconds = totalSeconds % 60;
+
+      if (minutes > 0) {
+        return '${minutes}m ${seconds.toString().padLeft(2, '0')}s';
+      }
+
+      return '${seconds}s';
+    }
+
+    void refreshDialog() {
+      final setter = dialogSetState;
+      if (setter == null || !dialogOpen) return;
+      setter(() {});
+    }
+
+    controller.beginExportPauseLiveAnimation();
 
     try {
+      dialogOpen = true;
+
       showDialog<void>(
         context: context,
         barrierDismissible: false,
         builder: (context) {
           return StatefulBuilder(
             builder: (context, setDialogState) {
-              Future<void>.delayed(const Duration(milliseconds: 200), () {
-                if (context.mounted) {
-                  setDialogState(() {});
-                }
-              });
+              dialogSetState = setDialogState;
+
+              final pct = (progress * 100).clamp(0, 100).round();
+              final etaText = elapsed.inSeconds >= 3 && eta != null
+                  ? formatDuration(eta!)
+                  : 'Calculating...';
 
               return AlertDialog(
-             title: Text('Exporting ${options.label} ${fpsOption.label} video'),
+                title: Text(
+                  'Exporting ${options.label} ${aspectOption.label} ${fpsOption.label}',
+                ),
                 content: Column(
                   mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     LinearProgressIndicator(value: progress),
                     const SizedBox(height: 12),
-                    Text('${(progress * 100).clamp(0, 100).round()}%'),
+                    Text('$pct% · $stage'),
+                    const SizedBox(height: 8),
+                    Text('Frames: $completedFrames / $totalFrames'),
+                    Text('Elapsed: ${formatDuration(elapsed)}'),
+                    Text('Time left: $etaText'),
                   ],
                 ),
+                actions: [
+                  TextButton(
+                    onPressed: () {
+                      cancelToken.cancel();
+                      stage = 'Cancelling...';
+                      refreshDialog();
+                    },
+                    child: const Text('Cancel'),
+                  ),
+                ],
               );
             },
           );
         },
       );
 
-final uri = await VideoExportService.exportCurrentCanvasVideo(
-  controller: controller,
-  options: options,
-  fpsOption: fpsOption,
-  onProgress: (p) {
-    progress = p.clamp(0.0, 1.0);
-  },
-);
+      final uri = await VideoExportService.exportCurrentCanvasVideo(
+        controller: controller,
+        options: options,
+        aspectOption: aspectOption,
+        fpsOption: fpsOption,
+        durationSec: durationSec,
+        cancelToken: cancelToken,
+        onProgress: (p) {
+          progress = p.clamp(0.0, 1.0);
+        },
+        onProgressInfo: (info) {
+          progress = info.progress;
+          stage = info.stage;
+          completedFrames = info.completedFrames;
+          totalFrames = info.totalFrames;
+          elapsed = info.elapsed;
+          eta = info.eta;
+          refreshDialog();
+        },
+      );
 
       if (mounted) {
+        dialogOpen = false;
         Navigator.of(context, rootNavigator: true).pop();
 
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('Video saved: ${uri ?? 'Gallery'}')),
         );
       }
+    } on VideoExportCancelledException {
+      if (mounted) {
+        dialogOpen = false;
+        Navigator.of(context, rootNavigator: true).pop();
+
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Video export cancelled')),
+        );
+      }
     } catch (e) {
       if (mounted) {
+        dialogOpen = false;
         Navigator.of(context, rootNavigator: true).pop();
 
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('Video export failed: $e')),
         );
       }
+    } finally {
+      controller.endExportPauseLiveAnimation();
     }
   }
 
