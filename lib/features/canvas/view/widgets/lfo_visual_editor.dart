@@ -28,6 +28,9 @@ class LfoVisualEditor extends ConsumerStatefulWidget {
 
     // persist curve changes to controller
     this.onCurveChanged,
+
+    // Optional: lets parent update display label/wave enum for presets.
+    this.onPresetWaveChanged,
   });
 
   final String lfoId;
@@ -44,6 +47,7 @@ class LfoVisualEditor extends ConsumerStatefulWidget {
   final List<LfoEditorNode>? initialNodes;
 
   final ValueChanged<LfoEditorCurve>? onCurveChanged;
+    final ValueChanged<LfoWave>? onPresetWaveChanged;
 
   @override
   ConsumerState<LfoVisualEditor> createState() => _LfoVisualEditorState();
@@ -65,6 +69,40 @@ class _LfoNode {
 }
 
 enum _DragKind { none, node, handleAmt, handleCurve }
+
+enum _LfoPreset { sin, tri, sawUp, sawDown, square }
+
+extension _LfoPresetX on _LfoPreset {
+  String get label {
+    switch (this) {
+      case _LfoPreset.sin:
+        return 'Sin';
+      case _LfoPreset.tri:
+        return 'Tri';
+      case _LfoPreset.sawUp:
+        return 'Saw Up';
+      case _LfoPreset.sawDown:
+        return 'Saw Down';
+      case _LfoPreset.square:
+        return 'Square';
+    }
+  }
+
+  LfoWave get wave {
+    switch (this) {
+      case _LfoPreset.sin:
+        return LfoWave.sine;
+      case _LfoPreset.tri:
+        return LfoWave.triangle;
+      case _LfoPreset.sawUp:
+        return LfoWave.sawUp;
+      case _LfoPreset.sawDown:
+        return LfoWave.sawDown;
+      case _LfoPreset.square:
+        return LfoWave.square;
+    }
+  }
+}
 
 class _Hit {
   final bool isNode;
@@ -123,6 +161,83 @@ class _LfoVisualEditorState extends ConsumerState<LfoVisualEditor> {
     setState(() {
       _gridDivY = value.clamp(_minGridDivY, _maxGridDivY);
     });
+  }
+
+    void _applyPreset(_LfoPreset preset) {
+    setState(() {
+      _mode = CurveMode.bulge;
+      _nodes = _presetNodes(preset);
+      _selectedIndex = null;
+      _dragKind = _DragKind.none;
+      _dragIndex = null;
+      _ensureSortedAndSafe();
+    });
+
+    _emitCurve();
+    widget.onPresetWaveChanged?.call(preset.wave);
+  }
+
+  List<_LfoNode> _presetNodes(_LfoPreset preset) {
+    switch (preset) {
+      case _LfoPreset.sin:
+        // Smooth unipolar sine-style hump:
+        // baseline -> peak -> baseline.
+        //
+        // This uses sin(pi*x)^2 instead of a simple triangle/bulge.
+        // Important: sin² has near-flat slope at x=0 and x=1,
+        // so when the loop wraps from end -> start it doesn't "bounce".
+        //
+        // Internal editor y:
+        // 0.0 = top
+        // 1.0 = bottom / baseline
+        return <_LfoNode>[
+          for (int i = 0; i <= 12; i++)
+            (() {
+              final x = i / 12.0;
+              final v = math.sin(math.pi * x);
+              final hump = (v * v).clamp(0.0, 1.0).toDouble();
+              final y01 = (1.0 - hump).clamp(0.0, 1.0).toDouble();
+
+              return _LfoNode(
+                Offset(x, y01),
+                bias: 0.5,
+                bulgeAmt: 0.0,
+                bendY: y01,
+              );
+            })(),
+        ];
+
+      case _LfoPreset.tri:
+        // Straight baseline -> peak -> baseline.
+        return <_LfoNode>[
+          _LfoNode(const Offset(0.0, 1.0), bendY: 1.0),
+          _LfoNode(const Offset(0.5, 0.0), bendY: 0.0),
+          _LfoNode(const Offset(1.0, 1.0), bendY: 1.0),
+        ];
+
+      case _LfoPreset.sawUp:
+        // Exactly 2 points: bottom start -> top end.
+        return <_LfoNode>[
+          _LfoNode(const Offset(0.0, 1.0), bendY: 1.0),
+          _LfoNode(const Offset(1.0, 0.0), bendY: 0.0),
+        ];
+
+      case _LfoPreset.sawDown:
+        // Exactly 2 points: top start -> bottom end.
+        return <_LfoNode>[
+          _LfoNode(const Offset(0.0, 0.0), bendY: 0.0),
+          _LfoNode(const Offset(1.0, 1.0), bendY: 1.0),
+        ];
+
+      case _LfoPreset.square:
+        // High first half, baseline second half.
+        return <_LfoNode>[
+          _LfoNode(const Offset(0.0, 0.0), bendY: 0.0),
+          _LfoNode(const Offset(0.499, 0.0), bendY: 0.0),
+          _LfoNode(const Offset(0.5, 1.0), bendY: 1.0),
+          _LfoNode(const Offset(1.0, 1.0), bendY: 1.0),
+        ];
+    }
   }
 
   _DragKind _dragKind = _DragKind.none;
@@ -264,14 +379,96 @@ class _LfoVisualEditorState extends ConsumerState<LfoVisualEditor> {
         return Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            _TopBar(
-              mode: _mode,
-              lockedOrder: _lockedOrder,
-              linkEndpoints: _linkEndpoints,
+            _EditorTopBar(
               gridDivX: _gridDivX,
               gridDivY: _gridDivY,
               onGridXChanged: _setGridX,
               onGridYChanged: _setGridY,
+              onPresetSelected: _applyPreset,
+              rateHz: _rateHz,
+              onInteractionChanged: widget.onInteractionChanged,
+              onRateHzChanged: (hz) {
+                final safeHz = _cycleSecondsToHz(_hzToCycleSeconds(hz));
+                setState(() {
+                  _rateHz = safeHz;
+                });
+                widget.onRateChanged?.call(_rateHz);
+              },
+            ),
+
+            Expanded(
+              child: LayoutBuilder(
+                builder: (context, gc) {
+                  final graphSize = Size(gc.maxWidth, gc.maxHeight);
+
+                  return DecoratedBox(
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF0F0F18),
+                      border: Border(
+                        left: BorderSide(
+                          color: Colors.white.withValues(alpha: 0.10),
+                        ),
+                        right: BorderSide(
+                          color: Colors.white.withValues(alpha: 0.10),
+                        ),
+                      ),
+                    ),
+                    child: Listener(
+                      behavior: HitTestBehavior.opaque,
+                      onPointerDown: (e) {
+                        widget.onInteractionChanged?.call(true);
+
+                        final hit = _hitTest(e.localPosition, graphSize);
+                        if (hit == null) {
+                          _cancelLongPress();
+                          setState(() {
+                            _dragKind = _DragKind.none;
+                            _dragIndex = null;
+                          });
+                          return;
+                        }
+
+                        if (hit.isNode) {
+                          _cancelLongPress();
+                          setState(() {
+                            _selectedIndex = hit.index;
+                            _dragKind = _DragKind.node;
+                            _dragIndex = hit.index;
+                          });
+                        } else {
+                          _armLongPressForSegment(hit.index, e.localPosition);
+                          setState(() {
+                            _selectedIndex = null;
+                            _dragKind = _DragKind.handleAmt;
+                            _dragIndex = hit.index;
+                          });
+                        }
+                      },
+                      onPointerUp: (_) {
+                        _cancelLongPress();
+                        _dragKind = _DragKind.none;
+                        _dragIndex = null;
+                        widget.onInteractionChanged?.call(false);
+                        setState(() {});
+                      },
+                      onPointerCancel: (_) {
+                        _cancelLongPress();
+                        _dragKind = _DragKind.none;
+                        _dragIndex = null;
+                        widget.onInteractionChanged?.call(false);
+                        setState(() {});
+                      },
+                      child: _buildGestures(graphSize),
+                    ),
+                  );
+                },
+              ),
+            ),
+
+            _EditorBottomBar(
+              mode: _mode,
+              lockedOrder: _lockedOrder,
+              linkEndpoints: _linkEndpoints,
               onToggleMode: () {
                 setState(() {
                   _mode = (_mode == CurveMode.bulge)
@@ -299,84 +496,6 @@ class _LfoVisualEditorState extends ConsumerState<LfoVisualEditor> {
                 });
                 _emitCurve();
               },
-
-              // ✅ NEW: rate props
-              rateHz: _rateHz,
-              onInteractionChanged: widget.onInteractionChanged,
-              onRateHzChanged: (hz) {
-                final safeHz = _cycleSecondsToHz(_hzToCycleSeconds(hz));
-                setState(() {
-                  _rateHz = safeHz;
-                });
-                widget.onRateChanged?.call(_rateHz);
-              },
-            ),
-            Expanded(
-              child: LayoutBuilder(
-                builder: (context, gc) {
-                  final graphSize = Size(gc.maxWidth, gc.maxHeight);
-
-                  return ClipRRect(
-                    borderRadius: const BorderRadius.vertical(
-                        bottom: Radius.circular(12)),
-                    child: DecoratedBox(
-                      decoration: BoxDecoration(
-                        color: const Color(0xFF0F0F18),
-                        border: Border.all(color: Colors.white10),
-                        borderRadius: const BorderRadius.vertical(
-                            bottom: Radius.circular(12)),
-                      ),
-                      child: Listener(
-                        behavior: HitTestBehavior.opaque,
-                        onPointerDown: (e) {
-                          widget.onInteractionChanged?.call(true);
-
-                          final hit = _hitTest(e.localPosition, graphSize);
-                          if (hit == null) {
-                            _cancelLongPress();
-                            setState(() {
-                              _dragKind = _DragKind.none;
-                              _dragIndex = null;
-                            });
-                            return;
-                          }
-
-                          if (hit.isNode) {
-                            _cancelLongPress();
-                            setState(() {
-                              _selectedIndex = hit.index;
-                              _dragKind = _DragKind.node;
-                              _dragIndex = hit.index;
-                            });
-                          } else {
-                            _armLongPressForSegment(hit.index, e.localPosition);
-                            setState(() {
-                              _selectedIndex = null;
-                              _dragKind = _DragKind.handleAmt;
-                              _dragIndex = hit.index;
-                            });
-                          }
-                        },
-                        onPointerUp: (_) {
-                          _cancelLongPress();
-                          _dragKind = _DragKind.none;
-                          _dragIndex = null;
-                          widget.onInteractionChanged?.call(false);
-                          setState(() {});
-                        },
-                        onPointerCancel: (_) {
-                          _cancelLongPress();
-                          _dragKind = _DragKind.none;
-                          _dragIndex = null;
-                          widget.onInteractionChanged?.call(false);
-                          setState(() {});
-                        },
-                        child: _buildGestures(graphSize),
-                      ),
-                    ),
-                  );
-                },
-              ),
             ),
           ],
         );
@@ -1197,34 +1316,23 @@ class _LfoEditorPainter extends CustomPainter {
   bool shouldRepaint(covariant _LfoEditorPainter oldDelegate) => true;
 }
 
-class _TopBar extends StatelessWidget {
-  const _TopBar({
-    required this.mode,
-    required this.lockedOrder,
-    required this.linkEndpoints,
+class _EditorTopBar extends StatelessWidget {
+  const _EditorTopBar({
     required this.gridDivX,
     required this.gridDivY,
     required this.onGridXChanged,
     required this.onGridYChanged,
-    required this.onToggleMode,
-    required this.onToggleLockedOrder,
-    required this.onToggleLinkEndpoints,
+    required this.onPresetSelected,
     required this.rateHz,
     required this.onRateHzChanged,
     this.onInteractionChanged,
   });
 
-  final CurveMode mode;
-  final bool lockedOrder;
-  final bool linkEndpoints;
   final int gridDivX;
   final int gridDivY;
   final ValueChanged<int> onGridXChanged;
   final ValueChanged<int> onGridYChanged;
-
-  final VoidCallback onToggleMode;
-  final VoidCallback onToggleLockedOrder;
-  final VoidCallback onToggleLinkEndpoints;
+  final ValueChanged<_LfoPreset> onPresetSelected;
   final double rateHz;
   final ValueChanged<double> onRateHzChanged;
   final ValueChanged<bool>? onInteractionChanged;
@@ -1232,57 +1340,53 @@ class _TopBar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      height: 34,
+      height: 38,
       padding: const EdgeInsets.symmetric(horizontal: 8),
       decoration: BoxDecoration(
-        color: const Color(0xFF0B0B12),
-        border: Border(
-          left: BorderSide(color: Colors.white.withValues(alpha: 0.10)),
-          right: BorderSide(color: Colors.white.withValues(alpha: 0.10)),
-          top: BorderSide(color: Colors.white.withValues(alpha: 0.10)),
-          bottom: BorderSide(color: Colors.white.withValues(alpha: 0.10)),
-        ),
+        color: const Color(0xFF101018),
         borderRadius: const BorderRadius.vertical(top: Radius.circular(12)),
+        border: Border.all(
+          color: Colors.white.withValues(alpha: 0.12),
+        ),
       ),
       child: Row(
         children: [
-          _IconToggleButton(
-            tooltip: 'Curve: ${mode == CurveMode.bulge ? "Bulge" : "Bend"}',
-            selected: true,
-            onPressed: onToggleMode,
-            child: CustomPaint(
-              size: const Size(22, 22),
-              painter: _SideSCurveIconPainter(isBend: mode == CurveMode.bend),
-            ),
-          ),
-          const SizedBox(width: 8),
-          _IconToggleButton(
-            tooltip: lockedOrder ? 'Node order: locked' : 'Node order: free',
-            selected: lockedOrder,
-            onPressed: onToggleLockedOrder,
-            child: Text(
-              lockedOrder ? '⇄̸' : '⇄',
-              style: const TextStyle(
-                color: Colors.white70,
-                fontSize: 16,
-                fontWeight: FontWeight.w700,
-                height: 1,
+          PopupMenuButton<_LfoPreset>(
+            tooltip: 'LFO preset',
+            color: const Color(0xFF181820),
+            onSelected: onPresetSelected,
+            itemBuilder: (context) {
+              return [
+                for (final preset in _LfoPreset.values)
+                  PopupMenuItem<_LfoPreset>(
+                    value: preset,
+                    child: Text(
+                      preset.label,
+                      style: const TextStyle(color: Colors.white),
+                    ),
+                  ),
+              ];
+            },
+            child: Container(
+              height: 28,
+              padding: const EdgeInsets.symmetric(horizontal: 10),
+              alignment: Alignment.center,
+              decoration: BoxDecoration(
+                color: const Color(0xFF1D1D28),
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: Colors.white24),
+              ),
+              child: const Text(
+                'Preset',
+                style: TextStyle(
+                  color: Colors.white,
+                  fontSize: 11,
+                  fontWeight: FontWeight.w700,
+                ),
               ),
             ),
           ),
-          const SizedBox(width: 8),
-          _IconToggleButton(
-            tooltip:
-                linkEndpoints ? 'Endpoints: linked' : 'Endpoints: independent',
-            selected: linkEndpoints,
-            onPressed: onToggleLinkEndpoints,
-            child: Icon(
-              linkEndpoints ? Icons.link : Icons.link_off,
-              size: 18,
-              color: Colors.white70,
-            ),
-          ),
-          const Spacer(),
+          const SizedBox(width: 10),
           _GridDragValue(
             label: 'X',
             value: gridDivX,
@@ -1298,11 +1402,102 @@ class _TopBar extends StatelessWidget {
             max: 24,
             onChanged: onGridYChanged,
           ),
-          const SizedBox(width: 10),
+          const Spacer(),
           _CycleTimeDragValue(
             rateHz: rateHz,
             onChangedHz: onRateHzChanged,
             onInteractionChanged: onInteractionChanged,
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _EditorBottomBar extends StatelessWidget {
+  const _EditorBottomBar({
+    required this.mode,
+    required this.lockedOrder,
+    required this.linkEndpoints,
+    required this.onToggleMode,
+    required this.onToggleLockedOrder,
+    required this.onToggleLinkEndpoints,
+  });
+
+  final CurveMode mode;
+  final bool lockedOrder;
+  final bool linkEndpoints;
+
+  final VoidCallback onToggleMode;
+  final VoidCallback onToggleLockedOrder;
+  final VoidCallback onToggleLinkEndpoints;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      height: 36,
+      padding: const EdgeInsets.symmetric(horizontal: 8),
+      decoration: BoxDecoration(
+        color: const Color(0xFF101018),
+        borderRadius: const BorderRadius.vertical(bottom: Radius.circular(12)),
+        border: Border.all(
+          color: Colors.white.withValues(alpha: 0.12),
+        ),
+      ),
+      child: Row(
+        children: [
+          _IconToggleButton(
+            tooltip: 'Curve: ${mode == CurveMode.bulge ? "Bulge" : "Bend"}',
+            selected: true,
+            onPressed: onToggleMode,
+            child: Text(
+              mode == CurveMode.bulge ? 'Bulge' : 'Bend',
+              style: const TextStyle(
+                color: Colors.white,
+                fontSize: 11,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ),
+          const SizedBox(width: 8),
+          _IconToggleButton(
+            tooltip: lockedOrder ? 'Node order: locked' : 'Node order: free',
+            selected: lockedOrder,
+            onPressed: onToggleLockedOrder,
+            child: Text(
+              lockedOrder ? 'Order Lock' : 'Order Free',
+              style: const TextStyle(
+                color: Colors.white,
+                fontSize: 11,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ),
+          const Spacer(),
+          _IconToggleButton(
+            tooltip:
+                linkEndpoints ? 'Endpoints: linked' : 'Endpoints: independent',
+            selected: linkEndpoints,
+            onPressed: onToggleLinkEndpoints,
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(
+                  linkEndpoints ? Icons.link : Icons.link_off,
+                  size: 15,
+                  color: Colors.white,
+                ),
+                const SizedBox(width: 5),
+                Text(
+                  linkEndpoints ? 'Linked' : 'Ends Free',
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 11,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ],
+            ),
           ),
         ],
       ),
@@ -1640,9 +1835,10 @@ class _IconToggleButton extends StatelessWidget {
       child: InkWell(
         borderRadius: BorderRadius.circular(8),
         onTap: onPressed,
-        child: Container(
-          width: 34,
-          height: 26,
+child: Container(
+  constraints: const BoxConstraints(minWidth: 34),
+  height: 26,
+  padding: const EdgeInsets.symmetric(horizontal: 8),
           alignment: Alignment.center,
           decoration: BoxDecoration(
             color: selected

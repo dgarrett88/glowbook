@@ -41,6 +41,20 @@ class _LayerPanelState extends ConsumerState<LayerPanel> {
 
   bool _turnedSinceTouch = false;
 
+  @override
+  void initState() {
+    super.initState();
+
+    // Layer panel contains live LFO mod indicators/knob overlays.
+    // While this panel is mounted/visible, keep the lightweight UI LFO ticker alive.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      ref
+          .read(canvas_state.canvasControllerProvider)
+          .setLfoEditorPreviewActive(true);
+    });
+  }
+
   void _onKnobInteraction(bool active) {
     _knobIsActive.value = active;
 
@@ -54,6 +68,7 @@ class _LayerPanelState extends ConsumerState<LayerPanel> {
     if (_turnedSinceTouch) {
       _fadeOut.value = false;
     }
+
     _turnedSinceTouch = false;
   }
 
@@ -63,137 +78,175 @@ class _LayerPanelState extends ConsumerState<LayerPanel> {
 
     // First actual value change during this touch session triggers fade-out.
     if (_turnedSinceTouch) return;
+
     _turnedSinceTouch = true;
     _fadeOut.value = true;
   }
 
   @override
   void dispose() {
+    ref
+        .read(canvas_state.canvasControllerProvider)
+        .setLfoEditorPreviewActive(false);
+
     _fadeOut.dispose();
     _knobIsActive.dispose();
+
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
     final controller = ref.watch(canvas_state.canvasControllerProvider);
-    final layers = controller.layers;
-    final activeId = controller.activeLayerId;
 
-    // Outer: controls scroll lock
-    return ValueListenableBuilder<bool>(
-      valueListenable: _knobIsActive,
-      builder: (context, knobActive, _) {
-        // Inner: controls fade visibility
+    // Rebuild the visible layer panel on the lightweight LFO UI ticker so
+    // mod lights and mod-ring overlays animate even when nothing else changes.
+    return AnimatedBuilder(
+      animation: controller.lfoPreviewRepaint,
+      builder: (context, _) {
+        final layers = controller.layers;
+        final activeId = controller.activeLayerId;
+
+        // Outer: controls scroll lock
         return ValueListenableBuilder<bool>(
-          valueListenable: _fadeOut,
-          builder: (context, fadeOut, __) {
-            return AnimatedOpacity(
-              opacity: fadeOut ? 0.0 : 1.0,
-              duration: const Duration(milliseconds: 200),
-              curve: Curves.easeOut,
-              child: ClipRRect(
-                borderRadius:
-                    const BorderRadius.vertical(top: Radius.circular(16)),
-                child: BackdropFilter(
-                  filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
-                  child: Container(
-                    decoration: BoxDecoration(
-                      color: const Color(0xFF101018).withValues(alpha: 0.4),
-                      border: const Border(
-                        top: BorderSide(color: Color(0xFF303040)),
-                      ),
+          valueListenable: _knobIsActive,
+          builder: (context, knobActive, _) {
+            // Inner: controls fade visibility
+            return ValueListenableBuilder<bool>(
+              valueListenable: _fadeOut,
+              builder: (context, fadeOut, __) {
+                return AnimatedOpacity(
+                  opacity: fadeOut ? 0.0 : 1.0,
+                  duration: const Duration(milliseconds: 200),
+                  curve: Curves.easeOut,
+                  child: ClipRRect(
+                    borderRadius: const BorderRadius.vertical(
+                      top: Radius.circular(16),
                     ),
-                    child: ReorderableListView.builder(
-                      scrollController: widget.scrollController,
-                      padding: const EdgeInsets.symmetric(vertical: 4),
-                      buildDefaultDragHandles: false,
-                      physics: knobActive
-                          ? const NeverScrollableScrollPhysics()
-                          : null,
-                      itemCount: layers.length,
-                      header: widget.showHeader
-                          ? Column(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                Padding(
-                                  padding:
-                                      const EdgeInsets.only(top: 10, bottom: 8),
-                                  child: Center(
-                                    child: Container(
-                                      width: 44,
-                                      height: 5,
-                                      decoration: BoxDecoration(
-                                        color: Colors.white
-                                            .withValues(alpha: 0.25),
-                                        borderRadius:
-                                            BorderRadius.circular(999),
+                    child: BackdropFilter(
+                      filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
+                      child: Container(
+                        decoration: BoxDecoration(
+                          color: const Color(0xFF101018)
+                              .withValues(alpha: 0.4),
+                          border: const Border(
+                            top: BorderSide(color: Color(0xFF303040)),
+                          ),
+                        ),
+                        child: ReorderableListView.builder(
+                          scrollController: widget.scrollController,
+                          padding: const EdgeInsets.symmetric(vertical: 4),
+                          buildDefaultDragHandles: false,
+                          physics: knobActive
+                              ? const NeverScrollableScrollPhysics()
+                              : null,
+                          itemCount: layers.length,
+                          header: widget.showHeader
+                              ? Column(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    Padding(
+                                      padding: const EdgeInsets.only(
+                                        top: 10,
+                                        bottom: 8,
+                                      ),
+                                      child: Center(
+                                        child: Container(
+                                          width: 44,
+                                          height: 5,
+                                          decoration: BoxDecoration(
+                                            color: Colors.white
+                                                .withValues(alpha: 0.25),
+                                            borderRadius:
+                                                BorderRadius.circular(999),
+                                          ),
+                                        ),
                                       ),
                                     ),
-                                  ),
-                                ),
-                                _LayerPanelHeader(
-                                  layerCount: layers.length,
-                                  onAddLayer: controller.addLayer,
-                                ),
-                                const Divider(
-                                    height: 1, color: Color(0xFF262636)),
-                              ],
-                            )
-                          : null,
-                      onReorder: (oldIndex, newIndex) {
-                        if (knobActive) return;
-                        if (newIndex > oldIndex) newIndex -= 1;
+                                    _LayerPanelHeader(
+                                      layerCount: layers.length,
+                                      onAddLayer: controller.addLayer,
+                                    ),
+                                    const Divider(
+                                      height: 1,
+                                      color: Color(0xFF262636),
+                                    ),
+                                  ],
+                                )
+                              : null,
+                          onReorder: (oldIndex, newIndex) {
+                            if (knobActive) return;
+                            if (newIndex > oldIndex) newIndex -= 1;
 
-                        final newOrder = List<CanvasLayer>.from(layers);
-                        final moved = newOrder.removeAt(oldIndex);
-                        newOrder.insert(newIndex, moved);
+                            final newOrder = List<CanvasLayer>.from(layers);
+                            final moved = newOrder.removeAt(oldIndex);
+                            newOrder.insert(newIndex, moved);
 
-                        controller.reorderLayersByIds(
-                          newOrder.map((l) => l.id).toList(),
-                        );
-                      },
-                      itemBuilder: (context, index) {
-                        final layer = layers[index];
-                        final bool isActive = layer.id == activeId;
-                        final bool isOnlyLayer = layers.length == 1;
-                        final bool isExpanded = _expanded.contains(layer.id);
-
-                        return _LayerTile(
-                          key: ValueKey(layer.id),
-                          layer: layer,
-                          isActive: isActive,
-                          isOnlyLayer: isOnlyLayer,
-                          isExpanded: isExpanded,
-                          index: index,
-                          reorderEnabled: !knobActive,
-                          onAnyKnobInteraction: _onKnobInteraction,
-                          onAnyKnobValueChanged: _onKnobValueChanged,
-                          onSelect: () => controller.setActiveLayer(layer.id),
-                          onToggleVisible: () => controller.setLayerVisibility(
-                              layer.id, !layer.visible),
-                          onToggleLocked: () => controller.setLayerLocked(
-                              layer.id, !layer.locked),
-                          onDelete: isOnlyLayer
-                              ? null
-                              : () => controller.removeLayer(layer.id),
-                          onRename: () =>
-                              _promptRenameLayer(context, controller, layer),
-                          onToggleExpanded: () {
-                            setState(() {
-                              if (isExpanded) {
-                                _expanded.remove(layer.id);
-                              } else {
-                                _expanded.add(layer.id);
-                              }
-                            });
+                            controller.reorderLayersByIds(
+                              newOrder.map((l) => l.id).toList(),
+                            );
                           },
-                        );
-                      },
+                          itemBuilder: (context, index) {
+                            final layer = layers[index];
+                            final bool isActive = layer.id == activeId;
+                            final bool isOnlyLayer = layers.length == 1;
+                            final bool isExpanded =
+                                _expanded.contains(layer.id);
+
+                            return _LayerTile(
+                              key: ValueKey(layer.id),
+                              layer: layer,
+                              isActive: isActive,
+                              isOnlyLayer: isOnlyLayer,
+                              isExpanded: isExpanded,
+                              index: index,
+                              reorderEnabled: !knobActive,
+                              onAnyKnobInteraction: _onKnobInteraction,
+                              onAnyKnobValueChanged: _onKnobValueChanged,
+                              onSelect: () {
+                                controller.setActiveLayer(layer.id);
+                              },
+                              onToggleVisible: () {
+                                controller.setLayerVisibility(
+                                  layer.id,
+                                  !layer.visible,
+                                );
+                              },
+                              onToggleLocked: () {
+                                controller.setLayerLocked(
+                                  layer.id,
+                                  !layer.locked,
+                                );
+                              },
+                              onDelete: isOnlyLayer
+                                  ? null
+                                  : () {
+                                      controller.removeLayer(layer.id);
+                                    },
+                              onRename: () {
+                                _promptRenameLayer(
+                                  context,
+                                  controller,
+                                  layer,
+                                );
+                              },
+                              onToggleExpanded: () {
+                                setState(() {
+                                  if (isExpanded) {
+                                    _expanded.remove(layer.id);
+                                  } else {
+                                    _expanded.add(layer.id);
+                                  }
+                                });
+                              },
+                            );
+                          },
+                        ),
+                      ),
                     ),
                   ),
-                ),
-              ),
+                );
+              },
             );
           },
         );
@@ -522,8 +575,8 @@ class _LayerTileState extends State<_LayerTile> {
                         onPressed: widget.onToggleExpanded,
                         icon: Icon(
                           widget.isExpanded
-                              ? Icons.keyboard_arrow_down
-                              : Icons.keyboard_arrow_up,
+                              ? Icons.keyboard_arrow_up
+                              : Icons.keyboard_arrow_down,
                           color: Colors.white70,
                         ),
                       ),
@@ -2031,8 +2084,8 @@ class _StrokeTileState extends State<_StrokeTile> {
                         },
                         icon: Icon(
                           _expanded
-                              ? Icons.keyboard_arrow_down
-                              : Icons.keyboard_arrow_up,
+                              ? Icons.keyboard_arrow_up
+                              : Icons.keyboard_arrow_down,
                           color: Colors.white70,
                         ),
                       ),
@@ -3252,8 +3305,8 @@ class _LfoCard extends StatelessWidget {
                 visualDensity: VisualDensity.compact,
                 icon: Icon(
                   isExpanded
-                      ? Icons.keyboard_arrow_down
-                      : Icons.keyboard_arrow_up,
+                      ? Icons.keyboard_arrow_up
+                      : Icons.keyboard_arrow_down,
                   color: Colors.white70,
                 ),
                 onPressed: onToggleExpanded,

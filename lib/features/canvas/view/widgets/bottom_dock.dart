@@ -462,7 +462,7 @@ class _BottomDockState extends State<BottomDock>
 
   void _openLayersSheet(BuildContext context) {
     // ✅ SHEET BEHAVIOUR
-    const double kInitial = 0.42;
+    const double kInitial = 0.60;
     const double kMin = 0.15;
     const double kMax = 0.90;
 
@@ -472,12 +472,11 @@ class _BottomDockState extends State<BottomDock>
       barrierColor: Colors.transparent, // ✅ remove dark overlay
       isScrollControlled: true,
       builder: (ctx) {
-        return DraggableScrollableSheet(
-          controller: _layersSheetCtrl,
-          initialChildSize: kInitial,
-          minChildSize: kMin,
-          maxChildSize: kMax,
-          expand: false,
+return DraggableScrollableSheet(
+  initialChildSize: kInitial,
+  minChildSize: kMin,
+  maxChildSize: kMax,
+  expand: false,
           builder: (context, scrollController) {
             return ClipRRect(
               borderRadius:
@@ -500,7 +499,7 @@ class _BottomDockState extends State<BottomDock>
 
   // ✅ NEW: LFO sheet (matches layers sheet style)
   void _openLfoSheet(BuildContext context) {
-    const double kInitial = 0.42;
+    const double kInitial = 0.60;
     const double kMin = 0.15;
     const double kMax = 0.90;
 

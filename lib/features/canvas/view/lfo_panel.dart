@@ -369,8 +369,8 @@ class _LfoTile extends ConsumerWidget {
                         onPressed: onToggleExpanded,
                         icon: Icon(
                           isExpanded
-                              ? Icons.keyboard_arrow_down
-                              : Icons.keyboard_arrow_up,
+                              ? Icons.keyboard_arrow_up
+                              : Icons.keyboard_arrow_down,
                           color: Colors.white70,
                         ),
                       ),
@@ -397,11 +397,14 @@ class _LfoTile extends ConsumerWidget {
             Padding(
               padding: const EdgeInsets.fromLTRB(10, 8, 10, 10),
               child: SizedBox(
-                height: 220,
+                height: 280,
                 width: double.infinity,
                 child: LfoVisualEditor(
                   lfoId: lfo.id,
                   onInteractionChanged: onAnyKnobInteraction,
+                  onPresetWaveChanged: (wave) {
+                    controller.setLfoWave(lfo.id, wave);
+                  },
 
                   // ✅ RATE (load + persist)
                   initialRateHz: lfo.rateHz,
