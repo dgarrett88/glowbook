@@ -33,6 +33,11 @@ class DocumentStorage {
     return File('${root.path}${Platform.pathSeparator}doc_$id.json');
   }
 
+  Future<File> _recoveryFile() async {
+    final root = await _documentsRoot();
+    return File('${root.path}${Platform.pathSeparator}recovery_current.json');
+  }
+
   Future<List<SavedDocumentInfo>> loadIndex() async {
     final file = await _indexFile();
     if (!await file.exists()) {
@@ -70,6 +75,50 @@ class DocumentStorage {
       return count;
     }
     return bundle.strokes.length;
+  }
+
+  Future<void> saveRecoveryBundle(CanvasDocumentBundle bundle) async {
+    final file = await _recoveryFile();
+
+    // Write to temp first so a half-written recovery file is less likely.
+    final temp = File('${file.path}.tmp');
+    await temp.writeAsString(json.encode(bundle.toJson()), flush: true);
+
+    if (await file.exists()) {
+      await file.delete();
+    }
+
+    await temp.rename(file.path);
+  }
+
+  Future<bool> hasRecoveryBundle() async {
+    final file = await _recoveryFile();
+    return file.exists();
+  }
+
+  Future<CanvasDocumentBundle?> loadRecoveryBundle() async {
+    final file = await _recoveryFile();
+    if (!await file.exists()) return null;
+
+    final raw = await file.readAsString();
+    if (raw.trim().isEmpty) return null;
+
+    final decoded = json.decode(raw);
+    if (decoded is! Map) return null;
+
+    return CanvasDocumentBundle.fromJson(decoded.cast<String, dynamic>());
+  }
+
+  Future<void> clearRecoveryBundle() async {
+    final file = await _recoveryFile();
+    if (await file.exists()) {
+      await file.delete();
+    }
+
+    final temp = File('${file.path}.tmp');
+    if (await temp.exists()) {
+      await temp.delete();
+    }
   }
 
   Future<String> saveBundle(

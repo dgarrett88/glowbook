@@ -1505,6 +1505,7 @@ class CanvasController extends ChangeNotifier {
     () => symmetry,
     previewScaleFn: () => previewLogicalScale,
     previewFullSizeFn: () => previewFullLogicalSize,
+    backgroundColorFn: () => effectiveCanvasBackgroundColor,
 
     // ✅ always use latest layer transform (fixes stale pivot issue)
     layerTransformFn: _layerTransformCached,
@@ -1550,6 +1551,18 @@ class CanvasController extends ChangeNotifier {
   int backgroundColor = 0xFF000000;
   bool _hasCustomBackground = false;
   bool get hasCustomBackground => _hasCustomBackground;
+
+  int get effectiveCanvasBackgroundColor {
+    final isMultiply = gb.GlowBlendState.I.mode == gb.GlowBlend.multiply;
+
+    // Multiply on pure black basically disappears, so default multiply
+    // preview/export uses white unless the user has explicitly picked a bg.
+    if (isMultiply && !_hasCustomBackground) {
+      return 0xFFFFFFFF;
+    }
+
+    return backgroundColor;
+  }
 
   double coreOpacity = 0.86;
 
@@ -1623,7 +1636,7 @@ class CanvasController extends ChangeNotifier {
   // PREVIEW QUALITY / INTERNAL LIVE RENDER SCALE
   // ---------------------------------------------------------------------------
 
-  CanvasPreviewQuality _previewQuality = CanvasPreviewQuality.auto;
+  CanvasPreviewQuality _previewQuality = CanvasPreviewQuality.p720;
   CanvasPreviewQuality get previewQuality => _previewQuality;
 
   CanvasPreviewMetrics? _previewMetrics;
@@ -2622,10 +2635,7 @@ class CanvasController extends ChangeNotifier {
 
       // Match the live canvas background.
       // Important: MP4 does not support alpha, so export frames must be opaque.
-      final bool isMultiply = gb.GlowBlendState.I.mode == gb.GlowBlend.multiply;
-
-      final int bgArgb =
-          (isMultiply && !_hasCustomBackground) ? 0xFFFFFFFF : backgroundColor;
+      final int bgArgb = effectiveCanvasBackgroundColor;
 
       canvas.drawRect(
         Rect.fromLTWH(

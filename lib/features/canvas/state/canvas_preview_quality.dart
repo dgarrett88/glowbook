@@ -2,20 +2,15 @@ import 'dart:math' as math;
 import 'dart:ui';
 
 enum CanvasPreviewQuality {
-  auto,
   p360,
   p480,
   p720,
   p1080,
-  p1440,
-  native,
 }
 
 extension CanvasPreviewQualityX on CanvasPreviewQuality {
   String get label {
     switch (this) {
-      case CanvasPreviewQuality.auto:
-        return 'Auto';
       case CanvasPreviewQuality.p360:
         return '360p';
       case CanvasPreviewQuality.p480:
@@ -24,17 +19,11 @@ extension CanvasPreviewQualityX on CanvasPreviewQuality {
         return '720p';
       case CanvasPreviewQuality.p1080:
         return '1080p';
-      case CanvasPreviewQuality.p1440:
-        return '1440p';
-      case CanvasPreviewQuality.native:
-        return 'Native';
     }
   }
 
-  double? get targetLongestPhysicalSide {
+  double get targetLongestPhysicalSide {
     switch (this) {
-      case CanvasPreviewQuality.auto:
-        return 1920.0; // safe v1 default: roughly 1080p preview
       case CanvasPreviewQuality.p360:
         return 640.0;
       case CanvasPreviewQuality.p480:
@@ -43,10 +32,6 @@ extension CanvasPreviewQualityX on CanvasPreviewQuality {
         return 1280.0;
       case CanvasPreviewQuality.p1080:
         return 1920.0;
-      case CanvasPreviewQuality.p1440:
-        return 2560.0;
-      case CanvasPreviewQuality.native:
-        return null;
     }
   }
 }
@@ -93,7 +78,7 @@ CanvasPreviewMetrics computeCanvasPreviewMetrics({
 
   double logicalScale;
 
-  if (targetLongest == null || nativeLongest <= 0) {
+  if (nativeLongest <= 0) {
     logicalScale = 1.0;
   } else {
     logicalScale = targetLongest / nativeLongest;

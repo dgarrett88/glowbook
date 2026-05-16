@@ -94,7 +94,9 @@ class _CanvasScreenState extends ConsumerState<CanvasScreen> {
   void _toggleLayers() => setState(() => _showLayers = !_showLayers);
   void _toggleLfos() => setState(() => _showLfos = !_showLfos);
 
-  Future<void> _saveCurrent(canvas_state.CanvasController controller) async {
+  CanvasDocumentBundle _buildCurrentBundle(
+    canvas_state.CanvasController controller,
+  ) {
     final now = DateTime.now().millisecondsSinceEpoch;
     final size = MediaQuery.of(context).size;
     final existing = _currentDoc;
@@ -102,14 +104,13 @@ class _CanvasScreenState extends ConsumerState<CanvasScreen> {
     final doc = (existing ??
             doc_model.CanvasDoc(
               id: _currentDocId ?? simpleId(),
-              name: existing?.name ?? 'Untitled',
-              createdAt: existing?.createdAt ?? now,
+              name: 'Untitled',
+              createdAt: now,
               updatedAt: now,
-              width: existing?.width ?? size.width.toInt(),
-              height: existing?.height ?? size.height.toInt(),
-              background: existing?.background ??
-                  doc_model.Background.solid(0xFF000000),
-              symmetry: existing?.symmetry ?? doc_model.SymmetryMode.off,
+              width: size.width.toInt(),
+              height: size.height.toInt(),
+              background: doc_model.Background.solid(0xFF000000),
+              symmetry: doc_model.SymmetryMode.off,
             ))
         .copyWith(
       updatedAt: now,
@@ -117,16 +118,35 @@ class _CanvasScreenState extends ConsumerState<CanvasScreen> {
       background: doc_model.Background.solid(controller.backgroundColor),
     );
 
-    final bundle = CanvasDocumentBundle(
+    return CanvasDocumentBundle(
       doc: doc,
       strokes: List.of(controller.strokes),
       layers: List.of(controller.layers),
       activeLayerId: controller.activeLayerId,
-
-      // ✅ persist per-document LFO state
       lfos: List.of(controller.lfos),
       lfoRoutes: List.of(controller.lfoRoutes),
     );
+  }
+
+  Future<bool> _saveRecoverySnapshot(
+    canvas_state.CanvasController controller,
+  ) async {
+    try {
+      final bundle = _buildCurrentBundle(controller);
+      await DocumentStorage.instance.saveRecoveryBundle(bundle);
+      return true;
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Could not create recovery save: $e')),
+        );
+      }
+      return false;
+    }
+  }
+
+  Future<void> _saveCurrent(canvas_state.CanvasController controller) async {
+    final bundle = _buildCurrentBundle(controller);
 
     final savedId = await DocumentStorage.instance.saveBundle(
       bundle,
@@ -134,7 +154,7 @@ class _CanvasScreenState extends ConsumerState<CanvasScreen> {
     );
 
     _currentDocId = savedId;
-    _currentDoc = doc;
+    _currentDoc = bundle.doc;
 
     controller.markSaved();
 
@@ -194,14 +214,7 @@ class _CanvasScreenState extends ConsumerState<CanvasScreen> {
   Widget build(BuildContext context) {
     final controller = ref.watch(canvas_state.canvasControllerProvider);
 
-    final mode = gb.GlowBlendState.I.mode;
-    final bool isMultiply = mode == gb.GlowBlend.multiply;
-
-    final int bgArgb = (isMultiply && !controller.hasCustomBackground)
-        ? 0xFFFFFFFF
-        : controller.backgroundColor;
-
-    final Color canvasBg = Color(bgArgb);
+    final Color canvasBg = Color(controller.effectiveCanvasBackgroundColor);
 
     return Scaffold(
       appBar: PreferredSize(
@@ -744,6 +757,9 @@ class _CanvasScreenState extends ConsumerState<CanvasScreen> {
       setter(() {});
     }
 
+    final recoverySaved = await _saveRecoverySnapshot(controller);
+    if (!recoverySaved) return;
+
     controller.beginExportPauseLiveAnimation();
 
     try {
@@ -844,6 +860,12 @@ class _CanvasScreenState extends ConsumerState<CanvasScreen> {
       }
     } finally {
       controller.endExportPauseLiveAnimation();
+
+      // If the app fully crashed/killed during export, this line will never run,
+      // so the recovery file remains available next launch.
+      try {
+        await DocumentStorage.instance.clearRecoveryBundle();
+      } catch (_) {}
     }
   }
 

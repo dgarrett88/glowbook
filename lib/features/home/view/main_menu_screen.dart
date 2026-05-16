@@ -26,12 +26,78 @@ class _MainMenuScreenState extends State<MainMenuScreen> {
   void initState() {
     super.initState();
     _docsFuture = _storage.listDocuments();
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _checkForRecovery();
+    });
   }
 
   void _refreshDocs() {
     setState(() {
       _docsFuture = _storage.listDocuments();
     });
+  }
+
+  Future<void> _checkForRecovery() async {
+    final hasRecovery = await _storage.hasRecoveryBundle();
+    if (!mounted || !hasRecovery) return;
+
+    final shouldRestore = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) {
+        return AlertDialog(
+          title: const Text('Restore unsaved work?'),
+          content: const Text(
+            'Animod found a recovery save from before an export or crash. '
+            'Would you like to restore it?',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(false),
+              child: const Text('Discard'),
+            ),
+            ElevatedButton(
+              onPressed: () => Navigator.of(context).pop(true),
+              child: const Text('Restore'),
+            ),
+          ],
+        );
+      },
+    );
+
+    if (!mounted) return;
+
+    if (shouldRestore == true) {
+      final bundle = await _storage.loadRecoveryBundle();
+
+      if (!mounted) return;
+
+      if (bundle == null) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Could not restore recovery save.')),
+        );
+        await _storage.clearRecoveryBundle();
+        return;
+      }
+
+      await Navigator.of(context).push(
+        MaterialPageRoute(
+          builder: (_) => CanvasScreen(initialDocument: bundle),
+        ),
+      );
+
+      if (!mounted) return;
+
+      // Clear only after the user has left the restored canvas.
+      // If the app crashes while restoring/editing, recovery remains safer
+      // if we later move this to an explicit save/clear flow.
+      await _storage.clearRecoveryBundle();
+      _refreshDocs();
+      return;
+    }
+
+    await _storage.clearRecoveryBundle();
   }
 
   Future<void> _openNewCanvas() async {

@@ -32,6 +32,7 @@ class Renderer extends CustomPainter {
     this.symmetryFn, {
     required double Function() previewScaleFn,
     required Size Function() previewFullSizeFn,
+    required int Function() backgroundColorFn,
 
     // ✅ NEW: get latest layer transform live (prevents stale pivot/rotation bugs)
     required LayerTransform Function(String layerId) layerTransformFn,
@@ -56,6 +57,7 @@ class Renderer extends CustomPainter {
   })  : _layerTransformFn = layerTransformFn,
         _previewScaleFn = previewScaleFn,
         _previewFullSizeFn = previewFullSizeFn,
+        _backgroundColorFn = backgroundColorFn,
         _layerExtraRotationRadians = layerExtraRotationRadians,
         _layerExtraX = layerExtraX,
         _layerExtraY = layerExtraY,
@@ -83,6 +85,13 @@ class Renderer extends CustomPainter {
   /// Renderer still works in full logical/world coordinates and scales down inside paint.
   final double Function() _previewScaleFn;
   final Size Function() _previewFullSizeFn;
+
+  /// Renderer-owned opaque background.
+  ///
+  /// This is important for non-additive blend modes like multiply/screen/overlay,
+  /// because strokes must blend against real background pixels inside the same
+  /// painted scene, not against a transparent CustomPaint surface.
+  final int Function() _backgroundColorFn;
 
   // ---------------------------------------------------------------------------
   // CALLBACKS (from controller)
@@ -538,6 +547,13 @@ class Renderer extends CustomPainter {
   }
 
   void _paintScene(Canvas canvas, Size size) {
+    // Paint the actual canvas background inside the same scene as the strokes.
+    // This makes blend modes behave the same at every preview resolution.
+    canvas.drawRect(
+      Offset.zero & size,
+      Paint()..color = Color(_backgroundColorFn()),
+    );
+
     final selectedId = _selectedStrokeIdFn();
 
     // Draw committed strokes
@@ -626,7 +642,7 @@ class Renderer extends CustomPainter {
     }
   }
 
-    /// Export path: paint the scene at full logical size with no live preview scaling.
+  /// Export path: paint the scene at full logical size with no live preview scaling.
   /// The caller is responsible for scaling the canvas to the desired output pixels.
   void paintForExport(Canvas canvas, Size size) {
     _lastSize = size;
