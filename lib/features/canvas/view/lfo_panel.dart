@@ -272,11 +272,15 @@ class _LfoTile extends ConsumerWidget {
           ),
           const SizedBox(width: 6),
           ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 140),
+            constraints: const BoxConstraints(
+              minWidth: 52,
+              maxWidth: 88,
+            ),
             child: Text(
               lfo.name,
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
+              softWrap: false,
               style: TextStyle(
                 color: lfo.enabled ? Colors.white : Colors.white54,
                 fontWeight: FontWeight.w700,

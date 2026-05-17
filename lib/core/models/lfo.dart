@@ -121,6 +121,8 @@ class Lfo {
   /// Breakpoint curve nodes (sorted by x).
   final List<LfoNode> nodes;
 
+  final bool autoPresetManaged;
+
   const Lfo({
     required this.id,
     required this.name,
@@ -132,12 +134,14 @@ class Lfo {
     this.shapeMode = LfoShapeMode.wave,
     this.curveMode = LfoCurveMode.bulge,
     this.nodes = const [],
+    this.autoPresetManaged = false,
   });
 
   Lfo copyWith({
     String? id,
     String? name,
     bool? enabled,
+    bool? autoPresetManaged,
     LfoWave? wave,
     double? rateHz,
     double? phase,
@@ -157,6 +161,7 @@ class Lfo {
       shapeMode: shapeMode ?? this.shapeMode,
       curveMode: curveMode ?? this.curveMode,
       nodes: nodes ?? this.nodes,
+      autoPresetManaged: autoPresetManaged ?? this.autoPresetManaged,
     );
   }
 
@@ -290,6 +295,7 @@ class Lfo {
         'shapeMode': shapeMode.name,
         'curveMode': curveMode.name,
         'nodes': nodes.map((n) => n.toJson()).toList(),
+        'autoPresetManaged': autoPresetManaged,
       };
 
   static double _asDouble(dynamic v, double fallback) {
@@ -350,6 +356,7 @@ class Lfo {
         LfoCurveMode.bulge,
       ),
       nodes: nodes,
+      autoPresetManaged: (j['autoPresetManaged'] as bool?) ?? false,
     );
   }
 }

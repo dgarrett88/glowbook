@@ -24,6 +24,61 @@ import 'glow_blend.dart' as gb;
 
 enum SymmetryMode { off, mirrorV, mirrorH, quad }
 
+enum LfoQuickPreset {
+  smoothLoop,
+  sharpLoop,
+  linearRise,
+  smoothRise,
+  suddenRise,
+}
+
+extension LfoQuickPresetX on LfoQuickPreset {
+  String get label {
+    switch (this) {
+      case LfoQuickPreset.smoothLoop:
+        return 'Wave';
+      case LfoQuickPreset.sharpLoop:
+        return 'Bounce';
+      case LfoQuickPreset.linearRise:
+        return 'Ramp';
+      case LfoQuickPreset.smoothRise:
+        return 'Swoop';
+      case LfoQuickPreset.suddenRise:
+        return 'Switch';
+    }
+  }
+
+  String get shortName {
+    switch (this) {
+      case LfoQuickPreset.smoothLoop:
+        return 'Wave';
+      case LfoQuickPreset.sharpLoop:
+        return 'Bounce';
+      case LfoQuickPreset.linearRise:
+        return 'Ramp';
+      case LfoQuickPreset.smoothRise:
+        return 'Swoop';
+      case LfoQuickPreset.suddenRise:
+        return 'Switch';
+    }
+  }
+
+  String get subtitle {
+    switch (this) {
+      case LfoQuickPreset.smoothLoop:
+        return 'Smooth back and forth';
+      case LfoQuickPreset.sharpLoop:
+        return 'Sharp back and forth';
+      case LfoQuickPreset.linearRise:
+        return 'Steady one-way rise';
+      case LfoQuickPreset.smoothRise:
+        return 'Smooth one-way rise';
+      case LfoQuickPreset.suddenRise:
+        return 'Instant jump';
+    }
+  }
+}
+
 final canvasControllerProvider =
     ChangeNotifierProvider<CanvasController>((ref) => CanvasController());
 
@@ -568,9 +623,11 @@ class CanvasController extends ChangeNotifier {
   }
 
   void setLfoRateHz(String lfoId, double rateHz) {
-    final hz = rateHz.clamp(0.0, 9999.0).toDouble(); // keep simple & safe
+    final hz = rateHz.clamp(0.0, 9999.0).toDouble();
     final i = _lfos.indexWhere((l) => l.id == lfoId);
     if (i < 0) return;
+
+    _markLfoUserManaged(lfoId);
 
     _lfos[i] = _lfos[i].copyWith(rateHz: hz);
     _markModCachesDirty();
@@ -3305,6 +3362,9 @@ class CanvasController extends ChangeNotifier {
   void renameLfo(String id, String name) {
     final i = _lfos.indexWhere((l) => l.id == id);
     if (i < 0) return;
+
+    _markLfoUserManaged(id);
+
     final trimmed = name.trim();
     if (trimmed.isEmpty) return;
 
@@ -3331,6 +3391,9 @@ class CanvasController extends ChangeNotifier {
   void setLfoEnabled(String id, bool enabled) {
     final i = _lfos.indexWhere((l) => l.id == id);
     if (i < 0) return;
+
+    _markLfoUserManaged(id);
+
     _lfos[i] = _lfos[i].copyWith(enabled: enabled);
     _markModCachesDirty();
 
@@ -3352,15 +3415,22 @@ class CanvasController extends ChangeNotifier {
     final old = _lfos[i];
     if (old.curveMode == mode) return;
 
+    _markLfoUserManaged(lfoId);
+
     _lfos[i] = old.copyWith(curveMode: mode);
     _markModCachesDirty();
-    notifyListeners(); // or your existing state update call
+    notifyListeners();
     _hasUnsavedChanges = true;
   }
 
   void setLfoWave(String id, LfoWave wave) {
     final i = _lfos.indexWhere((l) => l.id == id);
     if (i < 0) return;
+
+    if (_lfos[i].wave == wave) return;
+
+    _markLfoUserManaged(id);
+
     _lfos[i] = _lfos[i].copyWith(wave: wave);
     _markModCachesDirty();
 
@@ -3372,6 +3442,9 @@ class CanvasController extends ChangeNotifier {
   void setLfoRate(String id, double hz) {
     final i = _lfos.indexWhere((l) => l.id == id);
     if (i < 0) return;
+
+    _markLfoUserManaged(id);
+
     final v = hz.clamp(0.01, 20.0).toDouble();
     _lfos[i] = _lfos[i].copyWith(rateHz: v);
     _markModCachesDirty();
@@ -3385,6 +3458,9 @@ class CanvasController extends ChangeNotifier {
   void setLfoPhase(String id, double phase01) {
     final i = _lfos.indexWhere((l) => l.id == id);
     if (i < 0) return;
+
+    _markLfoUserManaged(id);
+
     final v = phase01.clamp(0.0, 1.0).toDouble();
     _lfos[i] = _lfos[i].copyWith(phase: v);
     _markModCachesDirty();
@@ -3397,6 +3473,9 @@ class CanvasController extends ChangeNotifier {
   void setLfoOffset(String id, double offset) {
     final i = _lfos.indexWhere((l) => l.id == id);
     if (i < 0) return;
+
+    _markLfoUserManaged(id);
+
     final v = offset.clamp(-1.0, 1.0).toDouble();
     _lfos[i] = _lfos[i].copyWith(offset: v);
     _markModCachesDirty();
@@ -3404,6 +3483,162 @@ class CanvasController extends ChangeNotifier {
     _tick();
     notifyListeners();
     _hasUnsavedChanges = true;
+  }
+
+  List<LfoNode> _quickPresetNodes(LfoQuickPreset preset) {
+    switch (preset) {
+      case LfoQuickPreset.smoothLoop:
+        return const [
+          LfoNode(0.0, -1.0, bias: 0.5, bulgeAmt: 0.0, bendY: 0.0),
+          LfoNode(0.5, 1.0, bias: 0.5, bulgeAmt: 0.0, bendY: 0.0),
+          LfoNode(1.0, -1.0, bias: 0.5, bulgeAmt: 0.0, bendY: -1.0),
+        ];
+
+      case LfoQuickPreset.sharpLoop:
+        return const [
+          LfoNode(0.0, -1.0, bias: 0.5, bulgeAmt: 0.0, bendY: -1.0),
+          LfoNode(0.5, 1.0, bias: 0.5, bulgeAmt: 0.0, bendY: 1.0),
+          LfoNode(1.0, -1.0, bias: 0.5, bulgeAmt: 0.0, bendY: -1.0),
+        ];
+
+      case LfoQuickPreset.linearRise:
+        // True saw-up: straight linear ramp.
+        // Important for smooth continuous rotation.
+        return const [
+          LfoNode(0.0, -1.0, bias: 0.5, bulgeAmt: 0.0, bendY: -1.0),
+          LfoNode(1.0, 1.0, bias: 0.5, bulgeAmt: 0.0, bendY: 1.0),
+        ];
+
+      case LfoQuickPreset.smoothRise:
+        // Curved A -> B rise.
+        return const [
+          LfoNode(0.0, -1.0, bias: 0.5, bulgeAmt: 0.0, bendY: 0.0),
+          LfoNode(1.0, 1.0, bias: 0.5, bulgeAmt: 0.0, bendY: 1.0),
+        ];
+
+      case LfoQuickPreset.suddenRise:
+        return const [
+          LfoNode(0.0, -1.0, bias: 0.5, bulgeAmt: 0.0, bendY: -1.0),
+          LfoNode(0.499, -1.0, bias: 0.5, bulgeAmt: 0.0, bendY: -1.0),
+          LfoNode(0.501, 1.0, bias: 0.5, bulgeAmt: 0.0, bendY: 1.0),
+          LfoNode(1.0, 1.0, bias: 0.5, bulgeAmt: 0.0, bendY: 1.0),
+        ];
+    }
+  }
+
+  bool isAutoPresetManagedLfo(String lfoId) {
+    final lfo = _lfoById(lfoId);
+    return lfo?.autoPresetManaged == true;
+  }
+
+  void _markLfoUserManaged(String lfoId) {
+    final i = _lfos.indexWhere((l) => l.id == lfoId);
+    if (i < 0) return;
+
+    if (!_lfos[i].autoPresetManaged) return;
+
+    _lfos[i] = _lfos[i].copyWith(autoPresetManaged: false);
+    _hasUnsavedChanges = true;
+    notifyListeners();
+  }
+
+  bool _sameLfoNodes(List<LfoNode> a, List<LfoNode> b) {
+    if (a.length != b.length) return false;
+
+    for (int i = 0; i < a.length; i++) {
+      final x = a[i];
+      final y = b[i];
+
+      if ((x.x - y.x).abs() > 0.000001) return false;
+      if ((x.y - y.y).abs() > 0.000001) return false;
+      if ((x.bias - y.bias).abs() > 0.000001) return false;
+      if ((x.bulgeAmt - y.bulgeAmt).abs() > 0.000001) return false;
+      if ((x.bendY - y.bendY).abs() > 0.000001) return false;
+    }
+
+    return true;
+  }
+
+  void applyQuickPresetToLfo(
+    String lfoId,
+    LfoQuickPreset preset, {
+    bool? autoPresetManaged,
+  }) {
+    final i = _lfos.indexWhere((l) => l.id == lfoId);
+    if (i < 0) return;
+
+    final isSmooth = preset == LfoQuickPreset.smoothLoop ||
+        preset == LfoQuickPreset.smoothRise;
+
+    final nextAutoPresetManaged =
+        autoPresetManaged ?? _lfos[i].autoPresetManaged;
+
+    _lfos[i] = _lfos[i].copyWith(
+      enabled: true,
+
+      // Keep existing name. Auto presets stay "Preset 1", "Preset 2", etc.
+      // User-renamed/custom LFOs are never renamed by preset changes.
+      name: _lfos[i].name,
+
+      wave: LfoWave.curve,
+      shapeMode: LfoShapeMode.curve,
+      curveMode: isSmooth ? LfoCurveMode.bend : LfoCurveMode.bulge,
+      nodes: _quickPresetNodes(preset),
+      rateHz: 0.25,
+      autoPresetManaged: nextAutoPresetManaged,
+    );
+
+    _markModCachesDirty();
+    _hasUnsavedChanges = true;
+    _ensureTickerState();
+    _tick();
+    notifyListeners();
+  }
+
+  String _nextAutoPresetName() {
+    int highest = 0;
+
+    for (final lfo in _lfos) {
+      if (!lfo.name.startsWith('Preset')) continue;
+
+      final rest = lfo.name.substring('Preset'.length).trim();
+      final n = int.tryParse(rest);
+
+      if (n != null && n > highest) {
+        highest = n;
+      }
+    }
+
+    return 'Preset ${highest + 1}';
+  }
+
+  String createQuickPresetLfo(LfoQuickPreset preset) {
+    final id = addLfo(name: _nextAutoPresetName());
+
+    applyQuickPresetToLfo(
+      id,
+      preset,
+      autoPresetManaged: true,
+    );
+
+    return id;
+  }
+
+  void deleteAutoPresetLfoIfUnused(String lfoId) {
+    final lfo = _lfoById(lfoId);
+    if (lfo == null) return;
+    if (!lfo.autoPresetManaged) return;
+
+    final stillUsed = _routes.any((r) => r.lfoId == lfoId);
+    if (stillUsed) return;
+
+    _lfos.removeWhere((l) => l.id == lfoId);
+    _markModCachesDirty();
+
+    _hasUnsavedChanges = true;
+    _ensureTickerState();
+    _tick();
+    notifyListeners();
   }
 
   // ---------------------------------------------------------------------------
@@ -3415,6 +3650,14 @@ class CanvasController extends ChangeNotifier {
     if (i < 0) return;
 
     var l = _lfos[i];
+
+    // No real change: do not convert auto preset to custom.
+    if (l.shapeMode == mode &&
+        !(mode == LfoShapeMode.curve && l.nodes.isEmpty)) {
+      return;
+    }
+
+    _markLfoUserManaged(id);
 
     // If switching to curve with no nodes, seed a nice default loop curve.
     if (mode == LfoShapeMode.curve && l.nodes.isEmpty) {
@@ -3441,17 +3684,24 @@ class CanvasController extends ChangeNotifier {
     final i = _lfos.indexWhere((l) => l.id == id);
     if (i < 0) return;
 
-    // sanitize + sort (same as setLfoNodes)
+    // sanitize + sort
     final cleaned = nodes
         .map((n) => LfoNode(
               n.x.clamp(0.0, 1.0).toDouble(),
               n.y.clamp(-1.0, 1.0).toDouble(),
               bias: n.bias.clamp(0.0, 1.0).toDouble(),
               bulgeAmt: n.bulgeAmt.clamp(-2.5, 2.5).toDouble(),
-              bendY: n.bendY.clamp(-1.0, 1.0).toDouble(),
+              bendY: n.bendY.clamp(-1.0, 2.0).toDouble(),
             ))
         .toList()
       ..sort((a, b) => a.x.compareTo(b.x));
+
+    if (_lfos[i].shapeMode == LfoShapeMode.curve &&
+        _sameLfoNodes(_lfos[i].nodes, cleaned)) {
+      return;
+    }
+
+    _markLfoUserManaged(id);
 
     _lfos[i] = _lfos[i].copyWith(
       shapeMode: LfoShapeMode.curve,
@@ -3476,10 +3726,16 @@ class CanvasController extends ChangeNotifier {
               n.y.clamp(-1.0, 1.0).toDouble(),
               bias: n.bias.clamp(0.0, 1.0).toDouble(),
               bulgeAmt: n.bulgeAmt.clamp(-2.5, 2.5).toDouble(),
-              bendY: n.bendY.clamp(-1.0, 1.0).toDouble(),
+              bendY: n.bendY.clamp(-1.0, 2.0).toDouble(),
             ))
         .toList()
       ..sort((a, b) => a.x.compareTo(b.x));
+
+    if (_sameLfoNodes(_lfos[i].nodes, cleaned)) {
+      return;
+    }
+
+    _markLfoUserManaged(id);
 
     _lfos[i] = _lfos[i].copyWith(nodes: cleaned);
     _markModCachesDirty();
@@ -3494,6 +3750,8 @@ class CanvasController extends ChangeNotifier {
   int addLfoNode(String id, {required double x01, required double y11}) {
     final i = _lfos.indexWhere((l) => l.id == id);
     if (i < 0) return -1;
+
+    _markLfoUserManaged(id);
 
     final l = _lfos[i];
     final nodes = List<LfoNode>.from(l.nodes);
@@ -3520,6 +3778,8 @@ class CanvasController extends ChangeNotifier {
     final i = _lfos.indexWhere((l) => l.id == id);
     if (i < 0) return;
 
+    _markLfoUserManaged(id);
+
     final l = _lfos[i];
     final nodes = List<LfoNode>.from(l.nodes);
     if (index < 0 || index >= nodes.length) return;
@@ -3543,6 +3803,8 @@ class CanvasController extends ChangeNotifier {
   void removeLfoNode(String id, int index) {
     final i = _lfos.indexWhere((l) => l.id == id);
     if (i < 0) return;
+
+    _markLfoUserManaged(id);
 
     final l = _lfos[i];
     final nodes = List<LfoNode>.from(l.nodes);

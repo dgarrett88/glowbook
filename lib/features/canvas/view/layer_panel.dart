@@ -127,8 +127,7 @@ class _LayerPanelState extends ConsumerState<LayerPanel> {
                       filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
                       child: Container(
                         decoration: BoxDecoration(
-                          color: const Color(0xFF101018)
-                              .withValues(alpha: 0.4),
+                          color: const Color(0xFF101018).withValues(alpha: 0.4),
                           border: const Border(
                             top: BorderSide(color: Color(0xFF303040)),
                           ),
@@ -1414,6 +1413,255 @@ class _ModLightPainter extends CustomPainter {
   }
 }
 
+const String _assignNoneKey = '__none__';
+const String _assignPresetPrefix = '__preset__:';
+
+String _presetChoiceKey(canvas_state.LfoQuickPreset preset) {
+  return '$_assignPresetPrefix${preset.name}';
+}
+
+canvas_state.LfoQuickPreset? _presetFromChoiceKey(String key) {
+  if (!key.startsWith(_assignPresetPrefix)) return null;
+
+  final name = key.substring(_assignPresetPrefix.length);
+
+  for (final p in canvas_state.LfoQuickPreset.values) {
+    if (p.name == name) return p;
+  }
+
+  return null;
+}
+
+IconData _presetIcon(canvas_state.LfoQuickPreset preset) {
+  switch (preset) {
+    case canvas_state.LfoQuickPreset.smoothLoop:
+      return Icons.waves;
+    case canvas_state.LfoQuickPreset.sharpLoop:
+      return Icons.change_history;
+    case canvas_state.LfoQuickPreset.linearRise:
+      return Icons.trending_up;
+    case canvas_state.LfoQuickPreset.smoothRise:
+      return Icons.swipe_up_alt;
+    case canvas_state.LfoQuickPreset.suddenRise:
+      return Icons.swap_vert;
+  }
+}
+
+Widget _assignSectionHeader({
+  required String label,
+  required bool open,
+  required VoidCallback onTap,
+}) {
+  return ListTile(
+    dense: true,
+    visualDensity: VisualDensity.compact,
+    contentPadding: const EdgeInsets.fromLTRB(16, 2, 12, 2),
+    title: Text(
+      label,
+      style: const TextStyle(
+        color: Colors.white,
+        fontWeight: FontWeight.w700,
+        fontSize: 13,
+        letterSpacing: 0.2,
+      ),
+    ),
+    trailing: Icon(
+      open ? Icons.keyboard_arrow_up : Icons.keyboard_arrow_down,
+      color: Colors.white70,
+      size: 20,
+    ),
+    onTap: onTap,
+  );
+}
+
+Widget _assignDivider() {
+  return const Padding(
+    padding: EdgeInsets.symmetric(horizontal: 12),
+    child: Divider(
+      height: 8,
+      thickness: 1,
+      color: Colors.white12,
+    ),
+  );
+}
+
+Future<String?> _showAssignLfoPopup({
+  required BuildContext context,
+  required List<Lfo> lfos,
+  required String? currentLfoId,
+}) {
+  bool showPresets = true;
+  bool showCustom = true;
+
+  const selectedColor = Color(0xFF69F0AE);
+
+  return showDialog<String?>(
+    context: context,
+    builder: (ctx) {
+      return StatefulBuilder(
+        builder: (ctx, setDialogState) {
+          return AlertDialog(
+            backgroundColor: const Color(0xFF1C1C24),
+            titlePadding: const EdgeInsets.fromLTRB(20, 18, 20, 8),
+            contentPadding: const EdgeInsets.fromLTRB(8, 4, 8, 12),
+            title: const Text(
+              'Assign LFO',
+              style: TextStyle(color: Colors.white),
+            ),
+            content: SizedBox(
+              width: double.maxFinite,
+              child: ListView(
+                shrinkWrap: true,
+                children: [
+                  ListTile(
+                    dense: true,
+                    visualDensity: VisualDensity.compact,
+                    minLeadingWidth: 26,
+                    contentPadding: const EdgeInsets.fromLTRB(16, 4, 16, 4),
+                    leading: const Icon(
+                      Icons.close,
+                      color: Colors.white54,
+                      size: 18,
+                    ),
+                    title: const Text(
+                      'None',
+                      style: TextStyle(
+                        color: Colors.white70,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    onTap: () => Navigator.of(ctx).pop(_assignNoneKey),
+                  ),
+                  _assignDivider(),
+                  _assignSectionHeader(
+                    label: 'Presets',
+                    open: showPresets,
+                    onTap: () {
+                      setDialogState(() {
+                        showPresets = !showPresets;
+                      });
+                    },
+                  ),
+                  if (showPresets)
+                    for (final preset in canvas_state.LfoQuickPreset.values)
+                      ListTile(
+                        dense: true,
+                        visualDensity: VisualDensity.compact,
+                        minLeadingWidth: 28,
+                        contentPadding: const EdgeInsets.fromLTRB(24, 2, 16, 2),
+                        leading: Icon(
+                          _presetIcon(preset),
+                          color: Colors.cyanAccent.withValues(alpha: 0.85),
+                          size: 18,
+                        ),
+                        title: Text(
+                          preset.label,
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontWeight: FontWeight.w600,
+                            fontSize: 13,
+                          ),
+                        ),
+                        subtitle: Padding(
+                          padding: const EdgeInsets.only(top: 1),
+                          child: Text(
+                            preset.subtitle,
+                            style: const TextStyle(
+                              color: Colors.white54,
+                              fontSize: 11,
+                              height: 1.05,
+                            ),
+                          ),
+                        ),
+                        onTap: () {
+                          Navigator.of(ctx).pop(_presetChoiceKey(preset));
+                        },
+                      ),
+                  _assignDivider(),
+                  _assignSectionHeader(
+                    label: 'Custom',
+                    open: showCustom,
+                    onTap: () {
+                      setDialogState(() {
+                        showCustom = !showCustom;
+                      });
+                    },
+                  ),
+                  if (showCustom) ...[
+                    if (lfos.isEmpty)
+                      const Padding(
+                        padding: EdgeInsets.fromLTRB(24, 6, 16, 8),
+                        child: Text(
+                          'No custom LFOs yet',
+                          style: TextStyle(
+                            color: Colors.white38,
+                            fontSize: 12,
+                          ),
+                        ),
+                      )
+                    else
+                      for (final l in lfos)
+                        Builder(
+                          builder: (_) {
+                            final selected = l.id == currentLfoId;
+                            final textColor =
+                                selected ? selectedColor : Colors.white;
+                            final subColor = selected
+                                ? selectedColor.withValues(alpha: 0.78)
+                                : Colors.white54;
+
+                            return ListTile(
+                              dense: true,
+                              visualDensity: VisualDensity.compact,
+                              minLeadingWidth: 28,
+                              contentPadding:
+                                  const EdgeInsets.fromLTRB(24, 2, 16, 2),
+                              leading: Icon(
+                                selected
+                                    ? Icons.radio_button_checked
+                                    : Icons.radio_button_unchecked,
+                                color:
+                                    selected ? selectedColor : Colors.white38,
+                                size: 18,
+                              ),
+                              title: Text(
+                                l.name,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: TextStyle(
+                                  color: textColor,
+                                  fontWeight: selected
+                                      ? FontWeight.w800
+                                      : FontWeight.w600,
+                                  fontSize: 13,
+                                ),
+                              ),
+                              subtitle: Padding(
+                                padding: const EdgeInsets.only(top: 1),
+                                child: Text(
+                                  '${l.wave.label} • ${l.rateHz.toStringAsFixed(2)} Hz',
+                                  style: TextStyle(
+                                    color: subColor,
+                                    fontSize: 11,
+                                    height: 1.05,
+                                  ),
+                                ),
+                              ),
+                              onTap: () => Navigator.of(ctx).pop(l.id),
+                            );
+                          },
+                        ),
+                  ],
+                ],
+              ),
+            ),
+          );
+        },
+      );
+    },
+  );
+}
+
 /// Layer mod light (same behaviour as your layer rotation one)
 class _LayerModLight extends ConsumerWidget {
   const _LayerModLight({
@@ -1447,50 +1695,77 @@ class _LayerModLight extends ConsumerWidget {
       onTapLight: () async {
         final lfos = controller.lfos;
 
-        final String? chosen = await showDialog<String?>(
+        final String? chosen = await _showAssignLfoPopup(
           context: context,
-          builder: (ctx) {
-            return AlertDialog(
-              backgroundColor: const Color(0xFF1C1C24),
-              title: const Text('Assign LFO',
-                  style: TextStyle(color: Colors.white)),
-              content: SizedBox(
-                width: double.maxFinite,
-                child: ListView(
-                  shrinkWrap: true,
-                  children: [
-                    ListTile(
-                      title: const Text('None',
-                          style: TextStyle(color: Colors.white70)),
-                      onTap: () => Navigator.of(ctx).pop(null),
-                    ),
-                    const Divider(color: Colors.white12),
-                    for (final l in lfos)
-                      ListTile(
-                        title: Text(l.name,
-                            style: const TextStyle(color: Colors.white)),
-                        subtitle: Text(
-                          '${l.wave.label} • ${l.rateHz.toStringAsFixed(2)} Hz',
-                          style: const TextStyle(
-                              color: Colors.white54, fontSize: 12),
-                        ),
-                        onTap: () => Navigator.of(ctx).pop(l.id),
-                      ),
-                  ],
-                ),
-              ),
-            );
-          },
+          lfos: controller.lfos,
+          currentLfoId: route?.lfoId,
         );
 
-        if (chosen == null) {
+        // Dismissed dialog = do nothing.
+        if (chosen == null) return;
+
+        // None = clear current route, then delete old auto preset if unused.
+        if (chosen == _assignNoneKey) {
+          final oldLfoId = route?.lfoId;
+
           controller.clearRouteForLayerParam(layerId, param);
-        } else {
-          controller.upsertRouteForLayerParam(
-            layerId: layerId,
-            param: param,
-            lfoId: chosen,
-          );
+
+          if (oldLfoId != null) {
+            controller.deleteAutoPresetLfoIfUnused(oldLfoId);
+          }
+
+          return;
+        }
+
+        // Preset = create/update a REAL LFO, then assign that real LFO id.
+        final preset = _presetFromChoiceKey(chosen);
+
+        if (preset != null) {
+          final existingRoute =
+              controller.findRouteForLayerParam(layerId, param);
+
+          if (existingRoute != null &&
+              controller.isAutoPresetManagedLfo(existingRoute.lfoId)) {
+            // Already using an unedited auto preset:
+            // update that same LFO instead of creating another one.
+            controller.applyQuickPresetToLfo(
+              existingRoute.lfoId,
+              preset,
+              autoPresetManaged: true,
+            );
+          } else {
+            // No route, or current route uses a custom/user-edited LFO:
+            // create a new auto preset LFO and assign it.
+            final oldLfoId = existingRoute?.lfoId;
+            final newLfoId = controller.createQuickPresetLfo(preset);
+
+            controller.upsertRouteForLayerParam(
+              layerId: layerId,
+              param: param,
+              lfoId: newLfoId,
+            );
+
+            // If old LFO was an unused auto preset, clean it up.
+            if (oldLfoId != null && oldLfoId != newLfoId) {
+              controller.deleteAutoPresetLfoIfUnused(oldLfoId);
+            }
+          }
+
+          return;
+        }
+
+        // Otherwise chosen is an existing real custom/preset LFO id.
+        final oldLfoId = route?.lfoId;
+
+        controller.upsertRouteForLayerParam(
+          layerId: layerId,
+          param: param,
+          lfoId: chosen,
+        );
+
+        // If switching away from an unused auto preset, remove it.
+        if (oldLfoId != null && oldLfoId != chosen) {
+          controller.deleteAutoPresetLfoIfUnused(oldLfoId);
         }
       },
       onChanged: (v) {
@@ -1545,66 +1820,77 @@ class _StrokeModLight extends ConsumerWidget {
       onTapLight: () async {
         final lfos = controller.lfos;
 
-        final String? chosen = await showDialog<String?>(
+        final String? chosen = await _showAssignLfoPopup(
           context: context,
-          builder: (ctx) {
-            return AlertDialog(
-              backgroundColor: const Color(0xFF1C1C24),
-              title: const Text(
-                'Assign LFO',
-                style: TextStyle(color: Colors.white),
-              ),
-              content: SizedBox(
-                width: double.maxFinite,
-                child: ListView(
-                  shrinkWrap: true,
-                  children: [
-                    ListTile(
-                      title: const Text(
-                        'None',
-                        style: TextStyle(color: Colors.white70),
-                      ),
-                      onTap: () => Navigator.of(ctx).pop(null),
-                    ),
-                    const Divider(color: Colors.white12),
-                    for (final l in lfos)
-                      ListTile(
-                        title: Text(
-                          l.name,
-                          style: const TextStyle(color: Colors.white),
-                        ),
-                        subtitle: Text(
-                          '${l.wave.label} • ${l.rateHz.toStringAsFixed(2)} Hz',
-                          style: const TextStyle(
-                            color: Colors.white54,
-                            fontSize: 12,
-                          ),
-                        ),
-                        onTap: () => Navigator.of(ctx).pop(l.id),
-                      ),
-                  ],
-                ),
-              ),
-            );
-          },
+          lfos: controller.lfos,
+          currentLfoId: route?.lfoId,
         );
 
-        if (chosen == null) {
+// Dismissed dialog = do nothing.
+        if (chosen == null) return;
+
+        if (chosen == _assignNoneKey) {
+          final oldLfoId = route?.lfoId;
+
           controller.clearRouteForStrokeParam(
             layerId,
             groupIndex,
             strokeId,
             param,
           );
-        } else {
-          controller.upsertRouteForStrokeParam(
-            layerId: layerId,
-            strokeId: strokeId,
-            groupIndex: groupIndex,
-            param: param,
-            lfoId: chosen,
-          );
+
+          if (oldLfoId != null) {
+            controller.deleteAutoPresetLfoIfUnused(oldLfoId);
+          }
+
+          return;
         }
+
+        final preset = _presetFromChoiceKey(chosen);
+
+        if (preset != null) {
+          final existingRoute = controller.findRouteForStrokeParam(
+            layerId,
+            groupIndex,
+            strokeId,
+            param,
+          );
+
+          if (existingRoute != null &&
+              controller.isAutoPresetManagedLfo(existingRoute.lfoId)) {
+            controller.applyQuickPresetToLfo(
+              existingRoute.lfoId,
+              preset,
+              autoPresetManaged: true,
+            );
+          } else {
+            final newLfoId = controller.createQuickPresetLfo(preset);
+
+            final oldLfoId = route?.lfoId;
+
+            controller.upsertRouteForStrokeParam(
+              layerId: layerId,
+              strokeId: strokeId,
+              groupIndex: groupIndex,
+              param: param,
+              lfoId: chosen,
+            );
+
+            if (oldLfoId != null && oldLfoId != chosen) {
+              controller.deleteAutoPresetLfoIfUnused(oldLfoId);
+            }
+          }
+
+          return;
+        }
+
+        controller.upsertRouteForStrokeParam(
+          layerId: layerId,
+          strokeId: strokeId,
+          groupIndex: groupIndex,
+          param: param,
+          lfoId: chosen,
+        );
       },
       onChanged: (v) {
         final r = route;
