@@ -47,7 +47,7 @@ class LfoVisualEditor extends ConsumerStatefulWidget {
   final List<LfoEditorNode>? initialNodes;
 
   final ValueChanged<LfoEditorCurve>? onCurveChanged;
-    final ValueChanged<LfoWave>? onPresetWaveChanged;
+  final ValueChanged<LfoWave>? onPresetWaveChanged;
 
   @override
   ConsumerState<LfoVisualEditor> createState() => _LfoVisualEditorState();
@@ -163,9 +163,9 @@ class _LfoVisualEditorState extends ConsumerState<LfoVisualEditor> {
     });
   }
 
-    void _applyPreset(_LfoPreset preset) {
+  void _applyPreset(_LfoPreset preset) {
     setState(() {
-      _mode = CurveMode.bulge;
+      _mode = preset == _LfoPreset.sin ? CurveMode.bend : CurveMode.bulge;
       _nodes = _presetNodes(preset);
       _selectedIndex = null;
       _dragKind = _DragKind.none;
@@ -183,28 +183,31 @@ class _LfoVisualEditorState extends ConsumerState<LfoVisualEditor> {
         // Smooth unipolar sine-style hump:
         // baseline -> peak -> baseline.
         //
-        // This uses sin(pi*x)^2 instead of a simple triangle/bulge.
-        // Important: sin² has near-flat slope at x=0 and x=1,
-        // so when the loop wraps from end -> start it doesn't "bounce".
+        // Uses only 3 visible nodes.
+        // CurveMode.bend is now our Smooth vertical-handle mode.
         //
         // Internal editor y:
         // 0.0 = top
         // 1.0 = bottom / baseline
         return <_LfoNode>[
-          for (int i = 0; i <= 12; i++)
-            (() {
-              final x = i / 12.0;
-              final v = math.sin(math.pi * x);
-              final hump = (v * v).clamp(0.0, 1.0).toDouble();
-              final y01 = (1.0 - hump).clamp(0.0, 1.0).toDouble();
-
-              return _LfoNode(
-                Offset(x, y01),
-                bias: 0.5,
-                bulgeAmt: 0.0,
-                bendY: y01,
-              );
-            })(),
+          _LfoNode(
+            const Offset(0.0, 1.0),
+            bias: 0.5,
+            bulgeAmt: 0.0,
+            bendY: 0.5,
+          ),
+          _LfoNode(
+            const Offset(0.5, 0.0),
+            bias: 0.5,
+            bulgeAmt: 0.0,
+            bendY: 0.5,
+          ),
+          _LfoNode(
+            const Offset(1.0, 1.0),
+            bias: 0.5,
+            bulgeAmt: 0.0,
+            bendY: 1.0,
+          ),
         ];
 
       case _LfoPreset.tri:
@@ -395,7 +398,6 @@ class _LfoVisualEditorState extends ConsumerState<LfoVisualEditor> {
                 widget.onRateChanged?.call(_rateHz);
               },
             ),
-
             Expanded(
               child: LayoutBuilder(
                 builder: (context, gc) {
@@ -464,7 +466,6 @@ class _LfoVisualEditorState extends ConsumerState<LfoVisualEditor> {
                 },
               ),
             ),
-
             _EditorBottomBar(
               mode: _mode,
               lockedOrder: _lockedOrder,
@@ -723,13 +724,15 @@ class _LfoVisualEditorState extends ConsumerState<LfoVisualEditor> {
               final bias = _clampBiasPxSafe(seg, size, rawBias);
 
               if (_mode == CurveMode.bend) {
-                final minY = math.min(a.p.dy, b.p.dy);
-                final maxY = math.max(a.p.dy, b.p.dy);
-                final yBound = _boundedBetween(n.dy, minY, maxY);
+                final raw = _toNorm(d.localPosition, size);
 
                 setState(() {
-                  a.bias = bias;
-                  a.bendY = yBound;
+                  a.bias = 0.5;
+
+                  // Store RAW overdrag.
+                  // Visible handle still clamps between nodes when drawn,
+                  // but this lets dragging past top/bottom keep pushing the curve.
+                  a.bendY = raw.dy.clamp(-1.0, 2.0).toDouble();
                 });
               } else {
                 final linY = lerpDouble(a.p.dy, b.p.dy, bias)!;
@@ -825,13 +828,16 @@ class _LfoVisualEditorState extends ConsumerState<LfoVisualEditor> {
     final b = _nodes[seg + 1];
 
     final bias = a.bias.clamp(0.001, 0.999);
-    final xH = lerpDouble(a.p.dx, b.p.dx, bias)!.clamp(0.0, 1.0);
+    final xH = lerpDouble(a.p.dx, b.p.dx, bias)!;
 
     if (_mode == CurveMode.bend) {
+      // Smooth mode: handle X is fixed to midpoint, only Y moves.
+      // Clamp Y between the segment's two nodes.
+      final midX = lerpDouble(a.p.dx, b.p.dx, 0.5)!;
       final minY = math.min(a.p.dy, b.p.dy);
       final maxY = math.max(a.p.dy, b.p.dy);
-      final yH = a.bendY.clamp(minY, maxY);
-      return Offset(xH, yH);
+      final yH = a.bendY.clamp(minY, maxY).toDouble();
+      return Offset(midX, yH);
     } else {
       final span = (b.p.dx - a.p.dx);
       if (span.abs() <= 1e-9) return Offset(a.p.dx, a.p.dy);
@@ -878,7 +884,14 @@ class _LfoVisualEditorState extends ConsumerState<LfoVisualEditor> {
       final bY = _nodes[i + 1].p.dy;
       final minY = math.min(aY, bY);
       final maxY = math.max(aY, bY);
-      _nodes[i].bendY = _nodes[i].bendY.clamp(minY, maxY);
+
+      if (_mode == CurveMode.bend) {
+        // Keep raw overdrag for Smooth mode.
+        // Do NOT clamp to 0..1 or we lose the "push past node" behaviour.
+        _nodes[i].bendY = _nodes[i].bendY.clamp(-1.0, 2.0);
+      } else {
+        _nodes[i].bendY = _nodes[i].bendY.clamp(minY, maxY);
+      }
     }
   }
 
@@ -1140,76 +1153,18 @@ class _LfoEditorPainter extends CustomPainter {
         continue;
       }
 
-      final bias = a.bias.clamp(0.001, 0.999);
-      final xH = lerpDouble(ax, bx, bias)!;
+      // Smooth/Vital-style vertical handle mode.
+      // One continuous sampled curve per segment, not two joined curves.
+      for (int i = 1; i <= resolution; i++) {
+        final t = i / resolution;
+        final x = lerpDouble(ax, bx, t)!;
+        final y = _smoothHandleY(a: a, b: b, t: t).clamp(0.0, 1.0);
 
-      final minY = math.min(ay, by);
-      final maxY = math.max(ay, by);
-      final yH = a.bendY.clamp(minY, maxY);
-
-      if (dy.abs() < epsYNorm && (yH - ay).abs() < epsYNorm) {
-        curvePath.lineTo(bPx.dx, bPx.dy);
-        continue;
+        curvePath.lineTo(
+          r.left + x * r.width,
+          r.top + y * r.height,
+        );
       }
-
-      final pA = Offset(ax, ay);
-      final pH = Offset(xH, yH);
-      final pB = Offset(bx, by);
-
-      Offset norm(Offset v) {
-        final d = v.distance;
-        if (d <= 1e-9) return const Offset(1, 0);
-        return Offset(v.dx / d, v.dy / d);
-      }
-
-      final d1 = norm(pH - pA);
-      final d2 = norm(pB - pH);
-      var tan = Offset(d1.dx + d2.dx, d1.dy + d2.dy);
-
-      if (tan.distance <= 1e-9) {
-        tan = norm(pB - pA);
-      } else {
-        tan = norm(tan);
-      }
-
-      if (dx > 0 && tan.dx < 0) tan = Offset(-tan.dx, -tan.dy);
-      if (dx < 0 && tan.dx > 0) tan = Offset(-tan.dx, -tan.dy);
-
-      final s = math.min((pH - pA).distance, (pB - pH).distance) * 0.30;
-
-      double clampX(double x, double lo, double hi) {
-        final mn = math.min(lo, hi);
-        final mx = math.max(lo, hi);
-        return x.clamp(mn, mx).toDouble();
-      }
-
-      final cA1 = Offset(
-        lerpDouble(pA.dx, pH.dx, 0.35)!,
-        lerpDouble(pA.dy, pH.dy, 0.35)!,
-      );
-      final cA2 = Offset(
-        clampX(pH.dx - tan.dx * s, pA.dx, pH.dx),
-        (pH.dy - tan.dy * s).clamp(minY, maxY),
-      );
-
-      final cB1 = Offset(
-        clampX(pH.dx + tan.dx * s, pH.dx, pB.dx),
-        (pH.dy + tan.dy * s).clamp(minY, maxY),
-      );
-      final cB2 = Offset(
-        lerpDouble(pH.dx, pB.dx, 0.65)!,
-        lerpDouble(pH.dy, b.p.dy, 0.65)!,
-      );
-
-      final a1Px = toPx(cA1);
-      final a2Px = toPx(cA2);
-      final hPx = toPx(pH);
-      final b1Px = toPx(cB1);
-      final b2Px = toPx(cB2);
-      final bPx2 = toPx(pB);
-
-      curvePath.cubicTo(a1Px.dx, a1Px.dy, a2Px.dx, a2Px.dy, hPx.dx, hPx.dy);
-      curvePath.cubicTo(b1Px.dx, b1Px.dy, b2Px.dx, b2Px.dy, bPx2.dx, bPx2.dy);
     }
 
     final fillPath = Path.from(curvePath)
@@ -1261,14 +1216,23 @@ class _LfoEditorPainter extends CustomPainter {
       if ((a.p.dx - b.p.dx).abs() <= epsX) continue;
 
       final bias = a.bias.clamp(0.001, 0.999);
-      final xH = lerpDouble(a.p.dx, b.p.dx, bias)!;
 
-      final yH = (mode == CurveMode.bend)
-          ? a.bendY.clamp(
-              math.min(a.p.dy, b.p.dy),
-              math.max(a.p.dy, b.p.dy),
-            )
-          : _handleYOnBulge(a: a, b: b, t: bias);
+      final double xH;
+      final double yH;
+
+      if (mode == CurveMode.bend) {
+        // Smooth mode: fixed midpoint X.
+        // Handle follows finger directly, clamped between the two nodes.
+        xH = lerpDouble(a.p.dx, b.p.dx, 0.5)!;
+
+        final minY = math.min(a.p.dy, b.p.dy);
+        final maxY = math.max(a.p.dy, b.p.dy);
+
+        yH = a.bendY.clamp(minY, maxY).toDouble();
+      } else {
+        xH = lerpDouble(a.p.dx, b.p.dx, bias)!;
+        yH = _handleYOnBulge(a: a, b: b, t: bias);
+      }
 
       final hp = Offset(
         r.left + xH * r.width,
@@ -1287,6 +1251,84 @@ class _LfoEditorPainter extends CustomPainter {
       canvas.drawCircle(hp, handleRadius, handleFill);
       canvas.drawCircle(hp, handleRadius, handleOutline);
     }
+  }
+
+  static double _smoothHandleY({
+    required _LfoNode a,
+    required _LfoNode b,
+    required double t,
+  }) {
+    final tt = t.clamp(0.0, 1.0).toDouble();
+
+    double smoothstep(double x) {
+      final v = x.clamp(0.0, 1.0).toDouble();
+      return v * v * (3.0 - 2.0 * v);
+    }
+
+    double bump(double x) {
+      final v = x.clamp(0.0, 1.0).toDouble();
+      if (v <= 0.5) {
+        return smoothstep(v / 0.5);
+      }
+      return smoothstep((1.0 - v) / 0.5);
+    }
+
+    double warpedProgress(double x, double bias) {
+      final xx = x.clamp(0.0, 1.0).toDouble();
+
+      if (bias.abs() < 0.0001) {
+        return xx;
+      }
+
+      if (bias > 0) {
+        final p = 1.0 + bias * 4.0;
+        return 1.0 - math.pow(1.0 - xx, p).toDouble();
+      }
+
+      final p = 1.0 + (-bias) * 4.0;
+      return math.pow(xx, p).toDouble();
+    }
+
+    final minY = math.min(a.p.dy, b.p.dy);
+    final maxY = math.max(a.p.dy, b.p.dy);
+
+    // Raw can continue past the visible clamp for extra curve push.
+    final rawHandleY = a.bendY.clamp(-1.0, 2.0).toDouble();
+
+    // Visible handle follows the finger, but stays between the two nodes.
+    final visibleHandleY = rawHandleY.clamp(minY, maxY).toDouble();
+
+    final overdragAmount = (rawHandleY - visibleHandleY).abs();
+
+    final span = b.p.dy - a.p.dy;
+    final handleProgress = span.abs() < 1e-9
+        ? 0.5
+        : ((visibleHandleY - a.p.dy) / span).clamp(0.0, 1.0).toDouble();
+
+    final biasFromHandle = (handleProgress - 0.5) * 1.65;
+
+// Once the visible handle hits either node, continued dragging should push
+// further in the SAME direction the handle was already pushing along the segment.
+    final overdragDir = handleProgress >= 0.5 ? 1.0 : -1.0;
+    final biasFromOverdrag = overdragDir * overdragAmount * 2.75;
+
+    final bias = (biasFromHandle + biasFromOverdrag).clamp(-0.95, 0.95);
+
+    // Main smooth curve.
+    final warpedT = warpedProgress(tt, bias);
+    final eased = smoothstep(warpedT);
+    final y = lerpDouble(a.p.dy, b.p.dy, eased)!;
+
+    // Attach correction:
+    // Work out where the curve would be at the midpoint, then add a smooth
+    // correction bump so the curve passes through the visible handle.
+    final warpedMid = warpedProgress(0.5, bias);
+    final easedMid = smoothstep(warpedMid);
+    final yAtMid = lerpDouble(a.p.dy, b.p.dy, easedMid)!;
+
+    final attachCorrection = (visibleHandleY - yAtMid) * bump(tt);
+
+    return (y + attachCorrection).clamp(minY, maxY).toDouble();
   }
 
   static double _handleYOnBulge({
@@ -1447,11 +1489,11 @@ class _EditorBottomBar extends StatelessWidget {
       child: Row(
         children: [
           _IconToggleButton(
-            tooltip: 'Curve: ${mode == CurveMode.bulge ? "Bulge" : "Bend"}',
+            tooltip: 'Curve: ${mode == CurveMode.bulge ? "Bulge" : "Smooth"}',
             selected: true,
             onPressed: onToggleMode,
             child: Text(
-              mode == CurveMode.bulge ? 'Bulge' : 'Bend',
+              mode == CurveMode.bulge ? 'Bulge' : 'Smooth',
               style: const TextStyle(
                 color: Colors.white,
                 fontSize: 11,
@@ -1835,10 +1877,10 @@ class _IconToggleButton extends StatelessWidget {
       child: InkWell(
         borderRadius: BorderRadius.circular(8),
         onTap: onPressed,
-child: Container(
-  constraints: const BoxConstraints(minWidth: 34),
-  height: 26,
-  padding: const EdgeInsets.symmetric(horizontal: 8),
+        child: Container(
+          constraints: const BoxConstraints(minWidth: 34),
+          height: 26,
+          padding: const EdgeInsets.symmetric(horizontal: 8),
           alignment: Alignment.center,
           decoration: BoxDecoration(
             color: selected

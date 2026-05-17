@@ -244,7 +244,7 @@ class _LfoTile extends ConsumerWidget {
         bias: n.bias.clamp(0.0, 1.0),
         // core: -2.5..2.5, shared contract: -1..1
         bulgeAmt: (n.bulgeAmt / 2.5).clamp(-1.0, 1.0),
-        bendY: n.bendY.clamp(-1.0, 1.0),
+        bendY: n.bendY.clamp(-1.0, 2.0),
       );
     }).toList(growable: false);
   }
@@ -426,7 +426,7 @@ class _LfoTile extends ConsumerWidget {
                         bias: n.bias.clamp(0.0, 1.0),
                         // shared contract: -1..1  -> core: -2.5..2.5
                         bulgeAmt: (n.bulgeAmt.clamp(-1.0, 1.0) * 2.5),
-                        bendY: n.bendY.clamp(-1.0, 1.0),
+                        bendY: n.bendY.clamp(-1.0, 2.0),
                       );
                     }).toList(growable: false);
 

@@ -122,15 +122,66 @@ double _bulge(LfoNode a, LfoNode b, double t, double yLin) {
 }
 
 double _bend(LfoNode a, LfoNode b, double t, double yLin) {
-  final bias = a.bias.clamp(0.0, 1.0).toDouble();
-  final bendY = a.bendY.clamp(-1.0, 1.0).toDouble();
+  final tt = t.clamp(0.0, 1.0).toDouble();
 
-  if (bendY.abs() < 1e-6) return yLin.clamp(-1.0, 1.0).toDouble();
+  double smoothstepLocal(double x) {
+    final v = x.clamp(0.0, 1.0).toDouble();
+    return v * v * (3.0 - 2.0 * v);
+  }
 
-  final tb = _bias(t, bias);
+  double bumpLocal(double x) {
+    final v = x.clamp(0.0, 1.0).toDouble();
+    if (v <= 0.5) {
+      return smoothstepLocal(v / 0.5);
+    }
+    return smoothstepLocal((1.0 - v) / 0.5);
+  }
 
-  final y = _lerp(a.y, b.y, tb) + (bendY * 0.35);
-  final lo = math.min(a.y, b.y);
-  final hi = math.max(a.y, b.y);
-  return y.clamp(lo, hi).clamp(-1.0, 1.0).toDouble();
+  double warpedProgress(double x, double bias) {
+    final xx = x.clamp(0.0, 1.0).toDouble();
+
+    if (bias.abs() < 0.0001) {
+      return xx;
+    }
+
+    if (bias > 0) {
+      final p = 1.0 + bias * 4.0;
+      return 1.0 - math.pow(1.0 - xx, p).toDouble();
+    }
+
+    final p = 1.0 + (-bias) * 4.0;
+    return math.pow(xx, p).toDouble();
+  }
+
+  final minY = math.min(a.y, b.y);
+  final maxY = math.max(a.y, b.y);
+
+  final rawHandleY = a.bendY.clamp(-1.0, 1.0).toDouble();
+  final visibleHandleY = rawHandleY.clamp(minY, maxY).toDouble();
+
+  final overdragAmount = (rawHandleY - visibleHandleY).abs();
+
+  final span = b.y - a.y;
+  final handleProgress = span.abs() < 1e-9
+      ? 0.5
+      : ((visibleHandleY - a.y) / span).clamp(0.0, 1.0).toDouble();
+
+  final biasFromHandle = (handleProgress - 0.5) * 1.65;
+
+  final overdragDir = handleProgress >= 0.5 ? 1.0 : -1.0;
+  final biasFromOverdrag = overdragDir * overdragAmount * 2.75;
+
+  final bias = (biasFromHandle + biasFromOverdrag).clamp(-0.95, 0.95);
+
+  final warpedT = warpedProgress(tt, bias);
+  final eased = smoothstepLocal(warpedT);
+  final y = _lerp(a.y, b.y, eased);
+
+  final warpedMid = warpedProgress(0.5, bias);
+  final easedMid = smoothstepLocal(warpedMid);
+  final yAtMid = _lerp(a.y, b.y, easedMid);
+
+  final attachCorrection = (visibleHandleY - yAtMid) * bumpLocal(tt);
+
+  return (y + attachCorrection).clamp(minY, maxY).clamp(-1.0, 1.0).toDouble();
 }
