@@ -11,8 +11,10 @@ import '../../../core/models/brush.dart';
 import '../../../core/models/canvas_document_bundle.dart';
 import '../../../core/models/canvas_doc.dart' as doc_model;
 import '../../../core/models/canvas_layer.dart';
+import '../../../core/models/canvas_text_object.dart';
 import '../../../core/models/stroke.dart';
 import '../../../core/models/lfo.dart'; // ✅ NEW
+import '../../../core/utils/uuid.dart';
 import '../history/history_command.dart';
 import '../history/history_stack.dart';
 import 'package:glowbook/core/models/lfo_route.dart';
@@ -1599,8 +1601,63 @@ class CanvasController extends ChangeNotifier {
   List<Stroke> get strokes => List.unmodifiable(_state.allStrokes);
 
   List<CanvasLayer> get layers => List.unmodifiable(_state.layers);
+  List<CanvasTextObject> get textObjects =>
+      List.unmodifiable(_state.textObjects);
   String get activeLayerId => _state.activeLayerId;
   CanvasLayer get activeLayer => _state.activeLayer;
+
+
+  CanvasTextObject addTextObject({
+    String text = 'TEXT',
+    Offset position = Offset.zero,
+    double fontSize = 72.0,
+  }) {
+    final obj = CanvasTextObject(
+      id: 'text-${simpleId()}',
+      layerId: activeLayerId,
+      text: text,
+      position: position,
+      fontSize: fontSize,
+      fillColor: color,
+      glowColor: color,
+      blendModeKey: gb.glowBlendToKey(gb.GlowBlendState.I.mode),
+    );
+
+    _state = _state.copyWith(
+      textObjects: <CanvasTextObject>[
+        ..._state.textObjects,
+        obj,
+      ],
+    );
+
+    _hasUnsavedChanges = true;
+    _tick();
+    notifyListeners();
+    return obj;
+  }
+
+  void updateTextObject(CanvasTextObject updated) {
+    final idx = _state.textObjects.indexWhere((t) => t.id == updated.id);
+    if (idx < 0) return;
+
+    final next = List<CanvasTextObject>.from(_state.textObjects);
+    next[idx] = updated;
+
+    _state = _state.copyWith(textObjects: next);
+    _hasUnsavedChanges = true;
+    _tick();
+    notifyListeners();
+  }
+
+  void deleteTextObject(String id) {
+    final next = _state.textObjects.where((t) => t.id != id).toList();
+    if (next.length == _state.textObjects.length) return;
+
+    _state = _state.copyWith(textObjects: next);
+    _hasUnsavedChanges = true;
+    _tick();
+    notifyListeners();
+  }
 
   int color = 0xFF00FFFF;
   double brushSize = 10.0;
@@ -4811,10 +4868,12 @@ class CanvasController extends ChangeNotifier {
       _state = CanvasState(
         layers: restoredLayers,
         activeLayerId: activeId,
+        textObjects: List<CanvasTextObject>.from(bundle.textObjects),
         redoStack: const [],
       );
     } else {
-      _state = CanvasState.fromStrokes(List<Stroke>.from(bundle.strokes));
+      _state = CanvasState.fromStrokes(List<Stroke>.from(bundle.strokes))
+          .copyWith(textObjects: List<CanvasTextObject>.from(bundle.textObjects));
     }
 
     _current = null;

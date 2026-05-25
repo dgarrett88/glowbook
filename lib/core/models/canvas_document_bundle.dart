@@ -1,6 +1,7 @@
 import 'canvas_doc.dart';
 import 'stroke.dart';
 import 'canvas_layer.dart';
+import 'canvas_text_object.dart';
 import 'lfo.dart'; // ✅ add
 import 'package:glowbook/core/models/lfo_route.dart';
 
@@ -9,6 +10,7 @@ class CanvasDocumentBundle {
   final List<CanvasLayer>? layers;
   final String? activeLayerId;
   final List<Stroke> strokes;
+  final List<CanvasTextObject> textObjects;
 
   // ✅ NEW: per-document LFO state
   final List<Lfo>? lfos;
@@ -17,6 +19,7 @@ class CanvasDocumentBundle {
   const CanvasDocumentBundle({
     required this.doc,
     required this.strokes,
+    this.textObjects = const [],
     this.layers,
     this.activeLayerId,
     this.lfos,
@@ -26,6 +29,7 @@ class CanvasDocumentBundle {
   CanvasDocumentBundle copyWith({
     CanvasDoc? doc,
     List<Stroke>? strokes,
+    List<CanvasTextObject>? textObjects,
     List<CanvasLayer>? layers,
     String? activeLayerId,
     List<Lfo>? lfos,
@@ -34,6 +38,7 @@ class CanvasDocumentBundle {
     return CanvasDocumentBundle(
       doc: doc ?? this.doc,
       strokes: strokes ?? this.strokes,
+      textObjects: textObjects ?? this.textObjects,
       layers: layers ?? this.layers,
       activeLayerId: activeLayerId ?? this.activeLayerId,
       lfos: lfos ?? this.lfos,
@@ -53,6 +58,8 @@ class CanvasDocumentBundle {
           'lfoRoutes': lfoRoutes!.map((r) => r.toJson()).toList(),
 
         'strokes': strokes.map((s) => s.toJson()).toList(),
+        if (textObjects.isNotEmpty)
+          'textObjects': textObjects.map((t) => t.toJson()).toList(),
       };
 
   factory CanvasDocumentBundle.fromJson(Map<String, dynamic> json) {
@@ -73,6 +80,11 @@ class CanvasDocumentBundle {
         .map((e) => Stroke.fromJson(e.cast<String, dynamic>()))
         .toList();
 
+    final textObjects = (json['textObjects'] as List? ?? const [])
+        .whereType<Map>()
+        .map((e) => CanvasTextObject.fromJson(e.cast<String, dynamic>()))
+        .toList();
+
     // ✅ NEW
     final List<Lfo>? lfos = (json['lfos'] is List)
         ? (json['lfos'] as List)
@@ -91,6 +103,7 @@ class CanvasDocumentBundle {
     return CanvasDocumentBundle(
       doc: doc,
       strokes: strokes,
+      textObjects: textObjects,
       layers: layers,
       activeLayerId: activeLayerId,
       lfos: lfos,

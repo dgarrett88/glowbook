@@ -121,6 +121,7 @@ class _CanvasScreenState extends ConsumerState<CanvasScreen> {
     return CanvasDocumentBundle(
       doc: doc,
       strokes: List.of(controller.strokes),
+      textObjects: List.of(controller.textObjects),
       layers: List.of(controller.layers),
       activeLayerId: controller.activeLayerId,
       lfos: List.of(controller.lfos),

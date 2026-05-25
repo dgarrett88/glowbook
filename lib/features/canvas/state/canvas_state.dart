@@ -4,6 +4,7 @@ import 'dart:ui' show Offset;
 
 import '../../../core/models/stroke.dart';
 import '../../../core/models/canvas_layer.dart';
+import '../../../core/models/canvas_text_object.dart';
 
 class CanvasState {
   /// Logical layers in the document.
@@ -13,12 +14,16 @@ class CanvasState {
   /// ID of the currently active layer for drawing.
   final String activeLayerId;
 
+  /// Text objects stored separately for now, linked back to layers by layerId.
+  final List<CanvasTextObject> textObjects;
+
   /// Redo stack is kept stroke-based for now.
   final List<Stroke> redoStack;
 
   const CanvasState({
     required this.layers,
     required this.activeLayerId,
+    this.textObjects = const [],
     this.redoStack = const [],
   });
 
@@ -43,6 +48,7 @@ class CanvasState {
         ),
       ],
       activeLayerId: 'layer-main',
+      textObjects: [],
       redoStack: [],
     );
   }
@@ -68,6 +74,7 @@ class CanvasState {
         ),
       ],
       activeLayerId: 'layer-main',
+      textObjects: const [],
       redoStack: const [],
     );
   }
@@ -75,11 +82,13 @@ class CanvasState {
   CanvasState copyWith({
     List<CanvasLayer>? layers,
     String? activeLayerId,
+    List<CanvasTextObject>? textObjects,
     List<Stroke>? redoStack,
   }) {
     return CanvasState(
       layers: layers ?? this.layers,
       activeLayerId: activeLayerId ?? this.activeLayerId,
+      textObjects: textObjects ?? this.textObjects,
       redoStack: redoStack ?? this.redoStack,
     );
   }

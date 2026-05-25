@@ -243,6 +243,7 @@ class _MainMenuScreenState extends State<MainMenuScreen> {
     final newBundle = CanvasDocumentBundle(
       doc: newDoc,
       strokes: List.of(bundle.strokes),
+      textObjects: List.of(bundle.textObjects),
 
       // ✅ keep layered docs intact too
       layers: bundle.layers == null ? null : List.of(bundle.layers!),
