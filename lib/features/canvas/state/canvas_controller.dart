@@ -881,8 +881,26 @@ class CanvasController extends ChangeNotifier {
       case LfoParam.strokeSize:
         return 25.0;
 
-      default:
-        return 25.0;
+      // --- TEXT TRANSFORM ---
+      case LfoParam.textX:
+      case LfoParam.textY:
+        return 120.0;
+      case LfoParam.textRotationDeg:
+        return 35.0;
+      case LfoParam.textScale:
+        return 0.35;
+      case LfoParam.textFontSize:
+        return 28.0;
+
+      // --- TEXT VISUAL ---
+      case LfoParam.textOpacity:
+      case LfoParam.textGlowRadius:
+      case LfoParam.textGlowOpacity:
+      case LfoParam.textGlowBrightness:
+      case LfoParam.textEdgeGlowWidth:
+      case LfoParam.textEdgeGlowStrength:
+      case LfoParam.textLetterPhaseOffset:
+        return 0.35;
     }
   }
 
@@ -900,7 +918,14 @@ class CanvasController extends ChangeNotifier {
         param == LfoParam.strokeCoreOpacity ||
         param == LfoParam.strokeGlowRadius ||
         param == LfoParam.strokeGlowOpacity ||
-        param == LfoParam.strokeGlowBrightness);
+        param == LfoParam.strokeGlowBrightness ||
+        param == LfoParam.textOpacity ||
+        param == LfoParam.textGlowRadius ||
+        param == LfoParam.textGlowOpacity ||
+        param == LfoParam.textGlowBrightness ||
+        param == LfoParam.textEdgeGlowWidth ||
+        param == LfoParam.textEdgeGlowStrength ||
+        param == LfoParam.textLetterPhaseOffset);
 
     if (forceUnipolar) {
       return ((raw + 1.0) * 0.5);
@@ -924,7 +949,9 @@ class CanvasController extends ChangeNotifier {
 
       // stroke match rules:
       if (strokeId == null) {
-        if (r.strokeId != null) continue; // layer param: ignore stroke routes
+        if (r.strokeId != null || r.textObjectId != null || r.isTextTarget) {
+          continue;
+        }
       } else {
         if (r.strokeId != strokeId) continue; // stroke param: must match
       }
@@ -1164,7 +1191,14 @@ class CanvasController extends ChangeNotifier {
         r.param == LfoParam.strokeCoreOpacity ||
         r.param == LfoParam.strokeGlowRadius ||
         r.param == LfoParam.strokeGlowOpacity ||
-        r.param == LfoParam.strokeGlowBrightness);
+        r.param == LfoParam.strokeGlowBrightness ||
+        r.param == LfoParam.textOpacity ||
+        r.param == LfoParam.textGlowRadius ||
+        r.param == LfoParam.textGlowOpacity ||
+        r.param == LfoParam.textGlowBrightness ||
+        r.param == LfoParam.textEdgeGlowWidth ||
+        r.param == LfoParam.textEdgeGlowStrength ||
+        r.param == LfoParam.textLetterPhaseOffset);
 
     if (forceUnipolar) {
       return ((raw + 1.0) * 0.5); // [0..1]
@@ -1557,7 +1591,254 @@ class CanvasController extends ChangeNotifier {
     return out;
   }
 
+
+  CanvasTextObject? _textObjectById(String layerId, String textObjectId) {
+    for (final t in _state.textObjects) {
+      if (t.layerId == layerId && t.id == textObjectId) return t;
+    }
+    return null;
+  }
+
+  Iterable<LfoRoute> _routesForTextParam(
+    String layerId,
+    String textObjectId,
+    LfoParam param,
+  ) sync* {
+    for (final r in _routes) {
+      if (!r.enabled) continue;
+      if (r.layerId != layerId) continue;
+      if (r.textObjectId != textObjectId) continue;
+      if (r.param != param) continue;
+      final lfo = _lfoById(r.lfoId);
+      if (lfo == null || !lfo.enabled) continue;
+      yield r;
+    }
+  }
+
+  double _sumTextRouteAmount(
+    String layerId,
+    String textObjectId,
+    LfoParam param,
+  ) {
+    double total = 0.0;
+    for (final r in _routesForTextParam(layerId, textObjectId, param)) {
+      total += _currentLfoShapedValueForRoute(r) * r.amount;
+    }
+    return total;
+  }
+
+  double _applyTextBoundedParam({
+    required String layerId,
+    required String textObjectId,
+    required LfoParam param,
+    required double base,
+    required double min,
+    required double max,
+  }) {
+    double out = base.clamp(min, max).toDouble();
+
+    for (final r in _routesForTextParam(layerId, textObjectId, param)) {
+      final shaped = _currentLfoShapedValueForRoute(r);
+      final lfo01 = (param == LfoParam.textOpacity ||
+              param == LfoParam.textGlowRadius ||
+              param == LfoParam.textGlowOpacity ||
+              param == LfoParam.textGlowBrightness ||
+              param == LfoParam.textEdgeGlowWidth ||
+              param == LfoParam.textEdgeGlowStrength ||
+              param == LfoParam.textLetterPhaseOffset)
+          ? shaped.clamp(0.0, 1.0).toDouble()
+          : ((shaped + 1.0) * 0.5).clamp(0.0, 1.0).toDouble();
+      final depth = r.amount.clamp(-1.0, 1.0).toDouble();
+      out = _applyVitalMod(
+        base: out,
+        min: min,
+        max: max,
+        lfo01: lfo01,
+        depth: depth,
+      );
+    }
+
+    return out;
+  }
+
+  double _textExtraX(String layerId, String textObjectId) {
+    return _sumTextRouteAmount(layerId, textObjectId, LfoParam.textX);
+  }
+
+  double _textExtraY(String layerId, String textObjectId) {
+    // Positive UI Y should move upward, matching the existing layer/stroke Y feel.
+    return -_sumTextRouteAmount(layerId, textObjectId, LfoParam.textY);
+  }
+
+  double _textExtraRotationRad(String layerId, String textObjectId) {
+    final deg = _sumTextRouteAmount(layerId, textObjectId, LfoParam.textRotationDeg);
+    return deg * math.pi / 180.0;
+  }
+
+  double _textExtraScale(String layerId, String textObjectId) {
+    final obj = _textObjectById(layerId, textObjectId);
+    if (obj == null) return 0.0;
+
+    final base = obj.scale.clamp(0.1, 5.0).toDouble();
+    double out = base;
+    for (final r in _routesForTextParam(layerId, textObjectId, LfoParam.textScale)) {
+      final shaped = _currentLfoShapedValueForRoute(r);
+      final lfo01 = ((shaped + 1.0) * 0.5).clamp(0.0, 1.0).toDouble();
+      final depthPct = (r.amount / 3.0).clamp(-1.0, 1.0).toDouble();
+      out = _applyBoundedRouteMod(
+        base: out,
+        min: 0.1,
+        max: 5.0,
+        lfo01: lfo01,
+        depthPct: depthPct,
+      );
+    }
+    return out - base;
+  }
+
+  double _textFontSizeEffective(String layerId, String textObjectId) {
+    final obj = _textObjectById(layerId, textObjectId);
+    if (obj == null) return 72.0;
+    double out = obj.fontSize;
+    for (final r in _routesForTextParam(layerId, textObjectId, LfoParam.textFontSize)) {
+      out += _currentLfoShapedValueForRoute(r) * r.amount;
+    }
+    return out.clamp(4.0, 420.0).toDouble();
+  }
+
+  double _textOpacityEffective(String layerId, String textObjectId) {
+    final obj = _textObjectById(layerId, textObjectId);
+    if (obj == null) return 1.0;
+    return _applyTextBoundedParam(
+      layerId: layerId,
+      textObjectId: textObjectId,
+      param: LfoParam.textOpacity,
+      base: obj.opacity,
+      min: 0.0,
+      max: 1.0,
+    );
+  }
+
+  double _textGlowRadiusEffective(String layerId, String textObjectId) {
+    final obj = _textObjectById(layerId, textObjectId);
+    if (obj == null) return 0.0;
+    return _applyTextBoundedParam(
+      layerId: layerId,
+      textObjectId: textObjectId,
+      param: LfoParam.textGlowRadius,
+      base: obj.glowRadius,
+      min: 0.0,
+      max: 80.0,
+    );
+  }
+
+  double _textGlowOpacityEffective(String layerId, String textObjectId) {
+    final obj = _textObjectById(layerId, textObjectId);
+    if (obj == null) return 1.0;
+    return _applyTextBoundedParam(
+      layerId: layerId,
+      textObjectId: textObjectId,
+      param: LfoParam.textGlowOpacity,
+      base: obj.glowOpacity,
+      min: 0.0,
+      max: 1.0,
+    );
+  }
+
+  double _textGlowBrightnessEffective(String layerId, String textObjectId) {
+    final obj = _textObjectById(layerId, textObjectId);
+    if (obj == null) return 1.0;
+    return _applyTextBoundedParam(
+      layerId: layerId,
+      textObjectId: textObjectId,
+      param: LfoParam.textGlowBrightness,
+      base: obj.glowBrightness,
+      min: 0.0,
+      max: 4.0,
+    );
+  }
+
+  double _textEdgeGlowWidthEffective(String layerId, String textObjectId) {
+    final obj = _textObjectById(layerId, textObjectId);
+    if (obj == null) return 0.0;
+    return _applyTextBoundedParam(
+      layerId: layerId,
+      textObjectId: textObjectId,
+      param: LfoParam.textEdgeGlowWidth,
+      base: obj.edgeGlowWidth,
+      min: 0.0,
+      max: 64.0,
+    );
+  }
+
+  double _textLetterPhaseOffsetEffective(String layerId, String textObjectId) {
+    final obj = _textObjectById(layerId, textObjectId);
+    if (obj == null) return 0.0;
+    return _applyTextBoundedParam(
+      layerId: layerId,
+      textObjectId: textObjectId,
+      param: LfoParam.textLetterPhaseOffset,
+      base: obj.letterPhaseOffset,
+      min: 0.0,
+      max: 1.0,
+    );
+  }
+
+  double _textEdgeGlowStrengthEffective(String layerId, String textObjectId) {
+    final obj = _textObjectById(layerId, textObjectId);
+    if (obj == null) return 0.0;
+    return _applyTextBoundedParam(
+      layerId: layerId,
+      textObjectId: textObjectId,
+      param: LfoParam.textEdgeGlowStrength,
+      base: obj.edgeGlowStrength,
+      min: 0.0,
+      max: 3.0,
+    );
+  }
+
+  double? previewTextParamValue(
+    String layerId,
+    String textObjectId,
+    LfoParam param,
+    double baseValue,
+  ) {
+    final route = findRouteForTextParam(layerId, textObjectId, param);
+    if (route == null || !route.enabled) return null;
+
+    switch (param) {
+      case LfoParam.textX:
+        return baseValue + _textExtraX(layerId, textObjectId);
+      case LfoParam.textY:
+        return baseValue + _sumTextRouteAmount(layerId, textObjectId, LfoParam.textY);
+      case LfoParam.textRotationDeg:
+        return baseValue +
+            (_textExtraRotationRad(layerId, textObjectId) * 180.0 / math.pi);
+      case LfoParam.textScale:
+        return baseValue + _textExtraScale(layerId, textObjectId);
+      case LfoParam.textFontSize:
+        return _textFontSizeEffective(layerId, textObjectId);
+      case LfoParam.textOpacity:
+        return _textOpacityEffective(layerId, textObjectId);
+      case LfoParam.textGlowRadius:
+        return _textGlowRadiusEffective(layerId, textObjectId);
+      case LfoParam.textGlowOpacity:
+        return _textGlowOpacityEffective(layerId, textObjectId);
+      case LfoParam.textGlowBrightness:
+        return _textGlowBrightnessEffective(layerId, textObjectId);
+      case LfoParam.textEdgeGlowWidth:
+        return _textEdgeGlowWidthEffective(layerId, textObjectId);
+      case LfoParam.textEdgeGlowStrength:
+        return _textEdgeGlowStrengthEffective(layerId, textObjectId);
+      case LfoParam.textLetterPhaseOffset:
+        return _textLetterPhaseOffsetEffective(layerId, textObjectId);
+      default:
+        return null;
+    }
+  }
+
   String? _selectedStrokeIdFn() => _selectedStrokeId;
+  String? _selectedTextObjectIdFn() => selectionMode ? _selectedTextObjectId : null;
 
   late final Renderer _renderer = Renderer(
     repaint,
@@ -1565,6 +1846,7 @@ class CanvasController extends ChangeNotifier {
     previewScaleFn: () => previewLogicalScale,
     previewFullSizeFn: () => previewFullLogicalSize,
     backgroundColorFn: () => effectiveCanvasBackgroundColor,
+    textObjectsFn: () => _state.textObjects,
 
     // ✅ always use latest layer transform (fixes stale pivot issue)
     layerTransformFn: _layerTransformCached,
@@ -1595,7 +1877,20 @@ class CanvasController extends ChangeNotifier {
     strokeExtraGlowBrightness: (layerId, strokeId) =>
         strokeGlowBrightnessEffective(layerId, strokeId),
 
+    textExtraX: _textExtraX,
+    textExtraY: _textExtraY,
+    textExtraScale: _textExtraScale,
+    textExtraRotationRad: _textExtraRotationRad,
+    textFontSizeEffective: _textFontSizeEffective,
+    textOpacityEffective: _textOpacityEffective,
+    textGlowRadiusEffective: _textGlowRadiusEffective,
+    textGlowOpacityEffective: _textGlowOpacityEffective,
+    textGlowBrightnessEffective: _textGlowBrightnessEffective,
+    textEdgeGlowWidthEffective: _textEdgeGlowWidthEffective,
+    textEdgeGlowStrengthEffective: _textEdgeGlowStrengthEffective,
+
     selectedStrokeIdFn: _selectedStrokeIdFn,
+    selectedTextObjectIdFn: _selectedTextObjectIdFn,
   );
 
   List<Stroke> get strokes => List.unmodifiable(_state.allStrokes);
@@ -1603,6 +1898,16 @@ class CanvasController extends ChangeNotifier {
   List<CanvasLayer> get layers => List.unmodifiable(_state.layers);
   List<CanvasTextObject> get textObjects =>
       List.unmodifiable(_state.textObjects);
+
+  CanvasTextObject? get selectedTextObject {
+    final id = _selectedTextObjectId;
+    if (id == null) return null;
+    for (final obj in _state.textObjects) {
+      if (obj.id == id) return obj;
+    }
+    return null;
+  }
+
   String get activeLayerId => _state.activeLayerId;
   CanvasLayer get activeLayer => _state.activeLayer;
 
@@ -1620,6 +1925,11 @@ class CanvasController extends ChangeNotifier {
       fontSize: fontSize,
       fillColor: color,
       glowColor: color,
+      // Start new text with a proper Animod-strength glow. The renderer maps
+      // this 0..80 style control onto stroke-like bloom strength.
+      glowRadius: 64.0,
+      glowOpacity: 1.0,
+      glowBrightness: 1.4,
       blendModeKey: gb.glowBlendToKey(gb.GlowBlendState.I.mode),
     );
 
@@ -1629,6 +1939,11 @@ class CanvasController extends ChangeNotifier {
         obj,
       ],
     );
+
+    _selectedTextObjectId = obj.id;
+    _selectedStrokeId = null;
+    _selectedLayerId = obj.layerId;
+    _selectedGroupIndex = null;
 
     _hasUnsavedChanges = true;
     _tick();
@@ -1654,6 +1969,9 @@ class CanvasController extends ChangeNotifier {
     if (next.length == _state.textObjects.length) return;
 
     _state = _state.copyWith(textObjects: next);
+    if (_selectedTextObjectId == id) {
+      _selectedTextObjectId = null;
+    }
     _hasUnsavedChanges = true;
     _tick();
     notifyListeners();
@@ -1937,6 +2255,7 @@ class CanvasController extends ChangeNotifier {
   bool selectionMode = false;
 
   String? _selectedStrokeId;
+  String? _selectedTextObjectId;
   String? _selectedLayerId;
   int? _selectedGroupIndex;
 
@@ -1953,14 +2272,18 @@ class CanvasController extends ChangeNotifier {
 
   List<PointSample>? _gestureStartLocalPoints;
   Offset? _gestureStartPivotLocal;
+  Offset? _gestureStartTextPosition;
+  double? _gestureStartTextScale;
+  double? _gestureStartTextRotation;
 
   double _gestureLastScale = 1.0;
   double _gestureLastRotation = 0.0;
 
-  bool get hasSelection => _selectedStrokeId != null;
+  bool get hasSelection => _selectedStrokeId != null || _selectedTextObjectId != null;
 
   // ✅ Expose selection info for UI highlighting (Layer panel)
   String? get selectedStrokeId => _selectedStrokeId;
+  String? get selectedTextObjectId => _selectedTextObjectId;
   String? get selectedLayerId => _selectedLayerId;
   int? get selectedGroupIndex => _selectedGroupIndex;
 
@@ -1977,6 +2300,7 @@ class CanvasController extends ChangeNotifier {
 
   void clearSelection() {
     _selectedStrokeId = null;
+    _selectedTextObjectId = null;
     _selectedLayerId = null;
     _selectedGroupIndex = null;
 
@@ -1990,15 +2314,40 @@ class CanvasController extends ChangeNotifier {
     _isSelectionGesturing = false;
     _gestureStartLocalPoints = null;
     _gestureStartPivotLocal = null;
+    _gestureStartTextPosition = null;
+    _gestureStartTextScale = null;
+    _gestureStartTextRotation = null;
     _gestureLastScale = 1.0;
     _gestureLastRotation = 0.0;
 
+    _tick();
     notifyListeners();
   }
 
   void cancelActivePointer() {
     final pid = _activePointerId;
     if (pid != null) cancelPointer(pid);
+  }
+
+  /// Select a text object from UI without hit-testing.
+  void selectTextObjectRef(String textObjectId) {
+    final exists = _state.textObjects.any((t) => t.id == textObjectId);
+    if (!exists) return;
+
+    if (!selectionMode) selectionMode = true;
+
+    final obj = _state.textObjects.firstWhere((t) => t.id == textObjectId);
+    _selectedTextObjectId = textObjectId;
+    _selectedStrokeId = null;
+    _selectedLayerId = obj.layerId;
+    _selectedGroupIndex = null;
+
+    _selectedMirrorX = false;
+    _selectedMirrorY = false;
+    _selectionAnchorWorld = null;
+
+    _tick();
+    notifyListeners();
   }
 
   /// Select a stroke from UI (Layer panel) without hit-testing.
@@ -2008,6 +2357,7 @@ class CanvasController extends ChangeNotifier {
     _selectedLayerId = layerId;
     _selectedGroupIndex = groupIndex;
     _selectedStrokeId = strokeId;
+    _selectedTextObjectId = null;
 
     _selectedMirrorX = false;
     _selectedMirrorY = false;
@@ -2940,7 +3290,89 @@ class CanvasController extends ChangeNotifier {
     return null;
   }
 
+  CanvasTextObject? _hitTestTextWorld(Offset worldPos) {
+    for (int i = _state.textObjects.length - 1; i >= 0; i--) {
+      final obj = _state.textObjects[i];
+      if (obj.text.trim().isEmpty) continue;
+
+      final layer = _state.layers.where((l) => l.id == obj.layerId);
+      if (layer.isEmpty || !layer.first.visible) continue;
+
+      final layerTr = _effectiveLayerTransformForInput(obj.layerId, _layerTransformCached(obj.layerId));
+      final pivotLocal = layerTr.pivot ?? obj.position;
+      final worldPosition = _forwardTransformPoint(obj.position, layerTr, pivotLocal);
+
+      final effectiveScale = (obj.scale * layerTr.scale).clamp(0.01, 20.0).toDouble();
+      final effectiveRotation = obj.rotation + layerTr.rotation;
+
+      final local = _inverseObjectPoint(
+        worldPos,
+        originWorld: worldPosition,
+        rotation: effectiveRotation,
+        scale: effectiveScale,
+      );
+
+      final size = _measureTextObject(obj);
+      final rect = Rect.fromCenter(
+        center: Offset.zero,
+        width: size.width + 32.0,
+        height: size.height + 32.0,
+      );
+
+      if (rect.contains(local)) return obj;
+    }
+    return null;
+  }
+
+  Size _measureTextObject(CanvasTextObject obj) {
+    final tp = TextPainter(
+      text: TextSpan(
+        text: obj.text,
+        style: TextStyle(
+          fontFamily: obj.fontFamily,
+          fontSize: obj.fontSize,
+          height: obj.lineHeight,
+          letterSpacing: obj.letterSpacing,
+        ),
+      ),
+      textAlign: obj.textAlign,
+      textDirection: TextDirection.ltr,
+    )..layout();
+    return tp.size;
+  }
+
+  Offset _inverseObjectPoint(
+    Offset world, {
+    required Offset originWorld,
+    required double rotation,
+    required double scale,
+  }) {
+    final s = (scale.abs() < 0.0001) ? 1.0 : scale;
+    final v = (world - originWorld) / s;
+    final a = -rotation;
+    final c = math.cos(a);
+    final sn = math.sin(a);
+    return Offset(
+      v.dx * c - v.dy * sn,
+      v.dx * sn + v.dy * c,
+    );
+  }
+
   void selectAtWorld(Offset worldPos) {
+    final textHit = _hitTestTextWorld(worldPos);
+    if (textHit != null) {
+      _selectedTextObjectId = textHit.id;
+      _selectedStrokeId = null;
+      _selectedLayerId = textHit.layerId;
+      _selectedGroupIndex = null;
+      _selectedMirrorX = false;
+      _selectedMirrorY = false;
+      _selectionAnchorWorld = worldPos;
+      _tick();
+      notifyListeners();
+      return;
+    }
+
     final hit = _hitTestStrokeWorld(worldPos);
     if (hit == null) {
       clearSelection();
@@ -2948,6 +3380,7 @@ class CanvasController extends ChangeNotifier {
     }
 
     _selectedStrokeId = hit.strokeId;
+    _selectedTextObjectId = null;
     _selectedLayerId = hit.layerId;
     _selectedGroupIndex = hit.groupIndex;
 
@@ -2956,10 +3389,48 @@ class CanvasController extends ChangeNotifier {
 
     _selectionAnchorWorld = hit.grabWorld;
 
+    _tick();
+    notifyListeners();
+  }
+
+
+  void _moveSelectedTextByWorldDelta(Offset deltaWorld) {
+    final id = _selectedTextObjectId;
+    if (id == null) return;
+
+    final idx = _state.textObjects.indexWhere((t) => t.id == id);
+    if (idx < 0) return;
+
+    final obj = _state.textObjects[idx];
+    final layerTr = _effectiveLayerTransformForInput(obj.layerId, _layerTransformCached(obj.layerId));
+
+    final correctedWorldDelta = _correctedWorldDelta(deltaWorld);
+
+    final s = (layerTr.scale.abs() < 0.0001) ? 1.0 : layerTr.scale;
+    final a = -layerTr.rotation;
+    final c = math.cos(a);
+    final sn = math.sin(a);
+    final unscaled = Offset(correctedWorldDelta.dx / s, correctedWorldDelta.dy / s);
+    final deltaLocal = Offset(
+      unscaled.dx * c - unscaled.dy * sn,
+      unscaled.dx * sn + unscaled.dy * c,
+    );
+
+    final next = List<CanvasTextObject>.from(_state.textObjects);
+    next[idx] = obj.copyWith(position: obj.position + deltaLocal);
+    _state = _state.copyWith(textObjects: next);
+
+    _hasUnsavedChanges = true;
+    _tick();
     notifyListeners();
   }
 
   void _moveSelectedByWorldDelta(Offset deltaWorld) {
+    if (_selectedTextObjectId != null) {
+      _moveSelectedTextByWorldDelta(deltaWorld);
+      return;
+    }
+
     final layerId = _selectedLayerId;
     final strokeId = _selectedStrokeId;
     final gi = _selectedGroupIndex;
@@ -3075,6 +3546,26 @@ class CanvasController extends ChangeNotifier {
   }) {
     if (!selectionMode || !hasSelection) return;
 
+    // A two-finger selection gesture takes over from any one-finger drag.
+    // If the original drag pointer remains active when the pinch ends, a late
+    // pointer move/up can apply a stale drag delta and make the object jump.
+    _activePointerId = null;
+    _isDraggingSelection = false;
+    _selectionDragLastWorld = null;
+
+    if (_selectedTextObjectId != null) {
+      final obj = selectedTextObject;
+      if (obj == null) return;
+      _gestureStartTextPosition = obj.position;
+      _gestureStartTextScale = obj.scale;
+      _gestureStartTextRotation = obj.rotation;
+      _gestureLastScale = scale;
+      _gestureLastRotation = _correctedRotation(rotation);
+      _isSelectionGesturing = true;
+      notifyListeners();
+      return;
+    }
+
     final layerId = _selectedLayerId;
     final strokeId = _selectedStrokeId;
     final gi = _selectedGroupIndex;
@@ -3122,12 +3613,49 @@ class CanvasController extends ChangeNotifier {
     notifyListeners();
   }
 
+
+  void _updateSelectedTextGesture({
+    required double scale,
+    required double rotation,
+  }) {
+    final id = _selectedTextObjectId;
+    final startScale = _gestureStartTextScale;
+    final startRotation = _gestureStartTextRotation;
+    if (id == null || startScale == null || startRotation == null) return;
+
+    final idx = _state.textObjects.indexWhere((t) => t.id == id);
+    if (idx < 0) return;
+
+    final ds = (scale <= 0.0001) ? 1.0 : scale;
+    final ang = _correctedRotation(rotation);
+
+    final obj = _state.textObjects[idx];
+    final next = List<CanvasTextObject>.from(_state.textObjects);
+    next[idx] = obj.copyWith(
+      scale: (startScale * ds).clamp(0.05, 20.0).toDouble(),
+      rotation: startRotation + ang,
+    );
+    _state = _state.copyWith(textObjects: next);
+
+    _hasUnsavedChanges = true;
+    _tick();
+    notifyListeners();
+
+    _gestureLastScale = scale;
+    _gestureLastRotation = ang;
+  }
+
   void selectionGestureUpdate({
     required Offset focalWorld,
     required double scale,
     required double rotation,
   }) {
     if (!_isSelectionGesturing) return;
+
+    if (_selectedTextObjectId != null) {
+      _updateSelectedTextGesture(scale: scale, rotation: rotation);
+      return;
+    }
 
     final startPts = _gestureStartLocalPoints;
     final pivotLocal = _gestureStartPivotLocal;
@@ -3198,8 +3726,14 @@ class CanvasController extends ChangeNotifier {
 
   void selectionGestureEnd() {
     _isSelectionGesturing = false;
+    _isDraggingSelection = false;
+    _selectionDragLastWorld = null;
+    _activePointerId = null;
     _gestureStartLocalPoints = null;
     _gestureStartPivotLocal = null;
+    _gestureStartTextPosition = null;
+    _gestureStartTextScale = null;
+    _gestureStartTextRotation = null;
     _gestureLastScale = 1.0;
     _gestureLastRotation = 0.0;
 
@@ -3991,6 +4525,7 @@ class CanvasController extends ChangeNotifier {
       // Rotation in degrees
       case LfoParam.layerRotationDeg:
       case LfoParam.strokeRotationDeg:
+      case LfoParam.textRotationDeg:
         v = amount.clamp(-360.0, 360.0).toDouble();
         break;
 
@@ -3999,12 +4534,20 @@ class CanvasController extends ChangeNotifier {
       case LfoParam.layerY:
       case LfoParam.strokeX:
       case LfoParam.strokeY:
+      case LfoParam.textX:
+      case LfoParam.textY:
         v = amount.clamp(-500.0, 500.0).toDouble();
         break;
 
       // Scale depth
       case LfoParam.layerScale:
+      case LfoParam.textScale:
         v = amount.clamp(-3.0, 3.0).toDouble();
+        break;
+
+      // Font size depth
+      case LfoParam.textFontSize:
+        v = amount.clamp(-160.0, 160.0).toDouble();
         break;
 
       // Stroke size depth
@@ -4018,6 +4561,13 @@ class CanvasController extends ChangeNotifier {
       case LfoParam.strokeGlowRadius:
       case LfoParam.strokeGlowOpacity:
       case LfoParam.strokeGlowBrightness:
+      case LfoParam.textOpacity:
+      case LfoParam.textGlowRadius:
+      case LfoParam.textGlowOpacity:
+      case LfoParam.textGlowBrightness:
+      case LfoParam.textEdgeGlowWidth:
+      case LfoParam.textEdgeGlowStrength:
+      case LfoParam.textLetterPhaseOffset:
         v = amount.clamp(-1.0, 1.0).toDouble();
         break;
     }
@@ -4071,7 +4621,11 @@ class CanvasController extends ChangeNotifier {
 
   LfoRoute? findRouteForLayerParam(String layerId, LfoParam param) {
     for (final r in _routes) {
-      if (r.layerId == layerId && r.param == param && r.strokeId == null) {
+      if (r.layerId == layerId &&
+          r.param == param &&
+          r.strokeId == null &&
+          r.textObjectId == null &&
+          !r.isTextTarget) {
         return r;
       }
     }
@@ -4084,8 +4638,12 @@ class CanvasController extends ChangeNotifier {
     required String lfoId,
   }) {
     // enforce 1 route per (layer,param) for layer-level routes
-    _routes.removeWhere(
-        (r) => r.layerId == layerId && r.param == param && r.strokeId == null);
+    _routes.removeWhere((r) =>
+        r.layerId == layerId &&
+        r.param == param &&
+        r.strokeId == null &&
+        r.textObjectId == null &&
+        !r.isTextTarget);
 
     final id = 'route-${DateTime.now().millisecondsSinceEpoch}';
     _routes.add(LfoRoute(
@@ -4116,8 +4674,12 @@ class CanvasController extends ChangeNotifier {
   }
 
   void clearRouteForLayerParam(String layerId, LfoParam param) {
-    _routes.removeWhere(
-        (r) => r.layerId == layerId && r.param == param && r.strokeId == null);
+    _routes.removeWhere((r) =>
+        r.layerId == layerId &&
+        r.param == param &&
+        r.strokeId == null &&
+        r.textObjectId == null &&
+        !r.isTextTarget);
     _markModCachesDirty();
 
     for (final l in _state.layers) {
@@ -4128,6 +4690,79 @@ class CanvasController extends ChangeNotifier {
     _tick();
     notifyListeners();
     _hasUnsavedChanges = true;
+  }
+
+
+// ---------------------------------------------------------------------------
+// TEXT ROUTE HELPERS
+// ---------------------------------------------------------------------------
+
+  LfoRoute? findRouteForTextParam(
+    String layerId,
+    String textObjectId,
+    LfoParam param,
+  ) {
+    for (final r in _routes) {
+      if (r.layerId != layerId) continue;
+      if (r.textObjectId != textObjectId) continue;
+      if (r.param != param) continue;
+      return r;
+    }
+    return null;
+  }
+
+  void clearRouteForTextParam(
+    String layerId,
+    String textObjectId,
+    LfoParam param,
+  ) {
+    _routes.removeWhere((r) =>
+        r.layerId == layerId &&
+        r.textObjectId == textObjectId &&
+        r.param == param);
+    _markModCachesDirty();
+
+    _ensureTickerState();
+    _tick();
+    notifyListeners();
+    _hasUnsavedChanges = true;
+  }
+
+  String upsertRouteForTextParam({
+    required String layerId,
+    required String textObjectId,
+    required LfoParam param,
+    required String lfoId,
+  }) {
+    final textExists = _state.textObjects.any(
+      (t) => t.layerId == layerId && t.id == textObjectId,
+    );
+    if (!textExists) return '';
+
+    _routes.removeWhere((r) =>
+        r.layerId == layerId &&
+        r.textObjectId == textObjectId &&
+        r.param == param);
+
+    final id = 'route-${DateTime.now().millisecondsSinceEpoch}';
+    _routes.add(LfoRoute(
+      id: id,
+      lfoId: lfoId,
+      layerId: layerId,
+      textObjectId: textObjectId,
+      isTextTarget: true,
+      param: param,
+      enabled: true,
+      bipolar: true,
+      amount: _defaultAmountForParam(param),
+    ));
+
+    _markModCachesDirty();
+    _ensureTickerState();
+    _tick();
+    notifyListeners();
+    _hasUnsavedChanges = true;
+    return id;
   }
 
 // ---------------------------------------------------------------------------
@@ -4143,6 +4778,7 @@ class CanvasController extends ChangeNotifier {
     for (final r in _routes) {
       if (r.layerId != layerId) continue;
       if (r.strokeId != strokeId) continue;
+      if (r.textObjectId != null || r.isTextTarget) continue;
       if (r.param != param) continue;
       return r;
     }
@@ -4156,7 +4792,12 @@ class CanvasController extends ChangeNotifier {
     LfoParam param,
   ) {
     _routes.removeWhere(
-      (r) => r.layerId == layerId && r.strokeId == strokeId && r.param == param,
+      (r) =>
+          r.layerId == layerId &&
+          r.strokeId == strokeId &&
+          r.textObjectId == null &&
+          !r.isTextTarget &&
+          r.param == param,
     );
     _markModCachesDirty();
 
@@ -4175,7 +4816,12 @@ class CanvasController extends ChangeNotifier {
   }) {
     // one route per (stroke,param)
     _routes.removeWhere(
-      (r) => r.layerId == layerId && r.strokeId == strokeId && r.param == param,
+      (r) =>
+          r.layerId == layerId &&
+          r.strokeId == strokeId &&
+          r.textObjectId == null &&
+          !r.isTextTarget &&
+          r.param == param,
     );
     _markModCachesDirty();
 
@@ -4185,6 +4831,7 @@ class CanvasController extends ChangeNotifier {
       lfoId: lfoId,
       layerId: layerId,
       strokeId: strokeId,
+      isStrokeTarget: true,
       param: param,
       enabled: true,
       bipolar: true,

@@ -21,6 +21,20 @@ enum LfoParam {
   strokeGlowRadius,
   strokeGlowOpacity,
   strokeGlowBrightness,
+
+  // Text object params
+  textX,
+  textY,
+  textFontSize,
+  textScale,
+  textRotationDeg,
+  textOpacity,
+  textGlowRadius,
+  textGlowOpacity,
+  textGlowBrightness,
+  textEdgeGlowWidth,
+  textEdgeGlowStrength,
+  textLetterPhaseOffset,
 }
 
 /// A routing from an LFO to some target (layer/stroke/whatever).
@@ -35,11 +49,17 @@ class LfoRoute {
   /// Target: either a layer or a stroke depending on your design.
   final String layerId;
 
-  /// Optional stroke target (null = layer target).
+  /// Optional stroke target (null = layer/text target).
   final String? strokeId;
 
-  /// If true, this route targets stroke params; else layer params.
+  /// Optional text object target.
+  final String? textObjectId;
+
+  /// If true, this route targets stroke params.
   final bool isStrokeTarget;
+
+  /// If true, this route targets a text object param.
+  final bool isTextTarget;
 
   final LfoParam param;
 
@@ -58,7 +78,9 @@ class LfoRoute {
     required this.lfoId,
     required this.layerId,
     this.strokeId,
+    this.textObjectId,
     this.isStrokeTarget = false,
+    this.isTextTarget = false,
     required this.param,
     this.amount = 0.0,
     this.amountDeg = 0.0,
@@ -71,7 +93,9 @@ class LfoRoute {
         'lfoId': lfoId,
         'layerId': layerId,
         'strokeId': strokeId,
+        'textObjectId': textObjectId,
         'isStrokeTarget': isStrokeTarget,
+        'isTextTarget': isTextTarget,
         'param': param.name,
         'amount': amount,
         'amountDeg': amountDeg,
@@ -91,7 +115,9 @@ class LfoRoute {
       lfoId: (j['lfoId'] as String?) ?? '',
       layerId: (j['layerId'] as String?) ?? '',
       strokeId: j['strokeId'] as String?,
+      textObjectId: j['textObjectId'] as String?,
       isStrokeTarget: (j['isStrokeTarget'] as bool?) ?? false,
+      isTextTarget: (j['isTextTarget'] as bool?) ?? false,
       param: parsedParam,
       amount: (j['amount'] as num?)?.toDouble() ?? 0.0,
       amountDeg: (j['amountDeg'] as num?)?.toDouble() ?? 0.0,
@@ -111,7 +137,9 @@ class LfoRoute {
     String? lfoId,
     String? layerId,
     String? strokeId,
+    String? textObjectId,
     bool? isStrokeTarget,
+    bool? isTextTarget,
     LfoParam? param,
     double? amount,
     double? amountDeg,
@@ -123,7 +151,9 @@ class LfoRoute {
       lfoId: lfoId ?? this.lfoId,
       layerId: layerId ?? this.layerId,
       strokeId: strokeId ?? this.strokeId,
+      textObjectId: textObjectId ?? this.textObjectId,
       isStrokeTarget: isStrokeTarget ?? this.isStrokeTarget,
+      isTextTarget: isTextTarget ?? this.isTextTarget,
       param: param ?? this.param,
       amount: amount ?? this.amount,
       amountDeg: amountDeg ?? this.amountDeg,

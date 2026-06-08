@@ -18,12 +18,89 @@ enum CanvasTextWaveDirection {
   outsideIn,
 }
 
+/// Optional per-character overrides for text objects.
+///
+/// This lets the text object stay as one editable word while still allowing
+/// individual letters to be pushed, scaled, rotated, faded, or glow-boosted.
+/// It is intentionally index-based for now because the first text workflow is
+/// short visual words/logos rather than paragraph editing.
+class CanvasTextLetterOverride {
+  final int index;
+  final double offsetX;
+  final double offsetY;
+  final double scale;
+  final double rotation;
+  final double opacity;
+  final double glowBoost;
+
+  const CanvasTextLetterOverride({
+    required this.index,
+    this.offsetX = 0.0,
+    this.offsetY = 0.0,
+    this.scale = 1.0,
+    this.rotation = 0.0,
+    this.opacity = 1.0,
+    this.glowBoost = 1.0,
+  });
+
+  CanvasTextLetterOverride copyWith({
+    int? index,
+    double? offsetX,
+    double? offsetY,
+    double? scale,
+    double? rotation,
+    double? opacity,
+    double? glowBoost,
+  }) {
+    return CanvasTextLetterOverride(
+      index: index ?? this.index,
+      offsetX: offsetX ?? this.offsetX,
+      offsetY: offsetY ?? this.offsetY,
+      scale: scale ?? this.scale,
+      rotation: rotation ?? this.rotation,
+      opacity: opacity ?? this.opacity,
+      glowBoost: glowBoost ?? this.glowBoost,
+    );
+  }
+
+  bool get isDefault =>
+      offsetX == 0.0 &&
+      offsetY == 0.0 &&
+      scale == 1.0 &&
+      rotation == 0.0 &&
+      opacity == 1.0 &&
+      glowBoost == 1.0;
+
+  Map<String, dynamic> toJson() => <String, dynamic>{
+        'index': index,
+        'offsetX': offsetX,
+        'offsetY': offsetY,
+        'scale': scale,
+        'rotation': rotation,
+        'opacity': opacity,
+        'glowBoost': glowBoost,
+      };
+
+  factory CanvasTextLetterOverride.fromJson(Map<String, dynamic> json) {
+    return CanvasTextLetterOverride(
+      index: (json['index'] as num?)?.toInt() ?? 0,
+      offsetX: (json['offsetX'] as num?)?.toDouble() ?? 0.0,
+      offsetY: (json['offsetY'] as num?)?.toDouble() ?? 0.0,
+      scale: (json['scale'] as num?)?.toDouble() ?? 1.0,
+      rotation: (json['rotation'] as num?)?.toDouble() ?? 0.0,
+      opacity: (json['opacity'] as num?)?.toDouble() ?? 1.0,
+      glowBoost: (json['glowBoost'] as num?)?.toDouble() ?? 1.0,
+    );
+  }
+}
+
 /// Editable text object stored in a canvas document.
 ///
 /// V1 intent:
-/// - one saved object with editable text
-/// - can render as a whole word/object
-/// - can later distribute LFO modulation per character without detaching letters
+/// - one saved parent object with editable text
+/// - parent controls edit the whole word/object
+/// - optional letter overrides edit individual letters without detaching them
+/// - LFO can later be distributed per character with phase offset
 class CanvasTextObject {
   final String id;
   final String layerId;
@@ -74,6 +151,9 @@ class CanvasTextObject {
   final CanvasTextWaveDirection waveDirection;
   final double letterRandomness;
 
+  /// Static per-letter edits. Whole-word params remain the parent.
+  final List<CanvasTextLetterOverride> letterOverrides;
+
   const CanvasTextObject({
     required this.id,
     required this.layerId,
@@ -107,6 +187,7 @@ class CanvasTextObject {
     this.letterPhaseOffset = 0.08,
     this.waveDirection = CanvasTextWaveDirection.leftToRight,
     this.letterRandomness = 0.0,
+    this.letterOverrides = const [],
   });
 
   CanvasTextObject copyWith({
@@ -143,6 +224,7 @@ class CanvasTextObject {
     double? letterPhaseOffset,
     CanvasTextWaveDirection? waveDirection,
     double? letterRandomness,
+    List<CanvasTextLetterOverride>? letterOverrides,
   }) {
     return CanvasTextObject(
       id: id ?? this.id,
@@ -177,6 +259,42 @@ class CanvasTextObject {
       letterPhaseOffset: letterPhaseOffset ?? this.letterPhaseOffset,
       waveDirection: waveDirection ?? this.waveDirection,
       letterRandomness: letterRandomness ?? this.letterRandomness,
+      letterOverrides: letterOverrides ?? this.letterOverrides,
+    );
+  }
+
+  CanvasTextLetterOverride letterOverrideAt(int index) {
+    for (final override in letterOverrides) {
+      if (override.index == index) return override;
+    }
+    return CanvasTextLetterOverride(index: index);
+  }
+
+  CanvasTextObject withLetterOverride(CanvasTextLetterOverride override) {
+    final safe = override.index < 0 ? override.copyWith(index: 0) : override;
+    final next = <CanvasTextLetterOverride>[];
+    var replaced = false;
+
+    for (final existing in letterOverrides) {
+      if (existing.index == safe.index) {
+        replaced = true;
+        if (!safe.isDefault) next.add(safe);
+      } else if (existing.index >= 0 && existing.index < text.length) {
+        next.add(existing);
+      }
+    }
+
+    if (!replaced && !safe.isDefault && safe.index < text.length) {
+      next.add(safe);
+    }
+
+    next.sort((a, b) => a.index.compareTo(b.index));
+    return copyWith(letterOverrides: next);
+  }
+
+  CanvasTextObject clearLetterOverride(int index) {
+    return copyWith(
+      letterOverrides: letterOverrides.where((o) => o.index != index).toList(),
     );
   }
 
@@ -214,6 +332,10 @@ class CanvasTextObject {
         'letterPhaseOffset': letterPhaseOffset,
         'waveDirection': waveDirection.name,
         'letterRandomness': letterRandomness,
+        'letterOverrides': letterOverrides
+            .where((o) => !o.isDefault)
+            .map((o) => o.toJson())
+            .toList(),
       };
 
   factory CanvasTextObject.fromJson(Map<String, dynamic> json) {
@@ -270,6 +392,13 @@ class CanvasTextObject {
         CanvasTextWaveDirection.leftToRight,
       ),
       letterRandomness: (json['letterRandomness'] as num?)?.toDouble() ?? 0.0,
+      letterOverrides: ((json['letterOverrides'] as List?) ?? const [])
+          .whereType<Map>()
+          .map((m) => CanvasTextLetterOverride.fromJson(
+                Map<String, dynamic>.from(m),
+              ))
+          .where((o) => o.index >= 0)
+          .toList(),
     );
   }
 

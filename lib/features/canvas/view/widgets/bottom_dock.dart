@@ -4,6 +4,7 @@ import 'package:flutter/physics.dart';
 
 import '../../state/canvas_controller.dart';
 import '../../state/glow_blend.dart' as gb;
+import '../../../../core/models/canvas_text_object.dart';
 
 import '../layer_panel.dart'; // widgets -> view
 import '../lfo_panel.dart'; // ✅ ADD: your LFO panel (adjust path/name if different)
@@ -23,11 +24,24 @@ class BottomDock extends StatefulWidget {
   /// ✅ kept for backwards-compat with canvas_screen.dart
   final VoidCallback onToggleLayers;
 
+  final VoidCallback onBrushTool;
+  final VoidCallback onTextTool;
+  final VoidCallback onSelectTool;
+  final bool brushToolActive;
+  final bool textToolActive;
+  final bool selectToolActive;
+
   const BottomDock({
     super.key,
     required this.controller,
     required this.showLayers,
     required this.onToggleLayers,
+    required this.onBrushTool,
+    required this.onTextTool,
+    required this.onSelectTool,
+    this.brushToolActive = true,
+    this.textToolActive = false,
+    this.selectToolActive = false,
   });
 
   @override
@@ -38,6 +52,7 @@ class _BottomDockState extends State<BottomDock>
     with SingleTickerProviderStateMixin {
   final PageController _page = PageController();
   int _pageIndex = 0;
+  bool _textEditorOpen = false;
 
   // ✅ lets us resize programmatically from the handle/header drag
   final DraggableScrollableController _layersSheetCtrl =
@@ -75,7 +90,7 @@ class _BottomDockState extends State<BottomDock>
     return AnimatedBuilder(
       animation: controller,
       builder: (context, _) {
-        final bool selectOn = controller.selectionMode;
+        final bool selectOn = widget.selectToolActive;
 
         return SafeArea(
           top: false,
@@ -108,6 +123,14 @@ class _BottomDockState extends State<BottomDock>
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
+                  if (false && _textEditorOpen && controller.selectedTextObject != null) ...[
+                    _buildInlineTextEditor(
+                      context,
+                      cs,
+                      controller.selectedTextObject!,
+                    ),
+                    const SizedBox(height: 8),
+                  ],
                   // swipe dots
                   Row(
                     mainAxisAlignment: MainAxisAlignment.center,
@@ -130,9 +153,18 @@ class _BottomDockState extends State<BottomDock>
                         _DockRow(
                           children: [
                             _DockButton(
-                              icon: Icons.brush,
+                              customIcon: Icon(
+                                Icons.brush,
+                                size: 22,
+                                color: widget.brushToolActive
+                                    ? Colors.cyanAccent
+                                    : Colors.white,
+                              ),
                               label: 'Brush',
-                              onTap: () => _openBrushSheet(context, cs),
+                              onTap: () {
+                                widget.onBrushTool();
+                                _openBrushSheet(context, cs);
+                              },
                             ),
                             _DockButton(
                               customIcon: _symIcon(controller.symmetry),
@@ -190,6 +222,18 @@ class _BottomDockState extends State<BottomDock>
                               },
                             ),
                             _DockButton(
+                              customIcon: Icon(
+                                Icons.text_fields,
+                                size: 22,
+                                color: widget.textToolActive
+                                    ? Colors.cyanAccent
+                                    : Colors.white,
+                              ),
+                              label: 'Text',
+                              onTap: widget.onTextTool,
+                              onLongPress: widget.onTextTool,
+                            ),
+                            _DockButton(
                               icon: Icons.auto_awesome,
                               label: 'Blend',
                               onTap: () => _openBlendSheet(context),
@@ -228,10 +272,9 @@ class _BottomDockState extends State<BottomDock>
                                     selectOn ? Colors.cyanAccent : Colors.white,
                               ),
                               label: selectOn ? 'Select ON' : 'Select',
-                              onTap: () => controller
-                                  .setSelectionMode(!controller.selectionMode),
+                              onTap: widget.onSelectTool,
                               onLongPress: () {
-                                if (controller.selectionMode) {
+                                if (widget.selectToolActive) {
                                   controller.clearSelection();
                                 }
                               },
@@ -594,6 +637,682 @@ return DraggableScrollableSheet(
         );
       },
     );
+  }
+
+
+
+
+  void _addTestTextObject() {
+    final fullSize = controller.previewFullLogicalSize;
+    final fallbackSize = controller.canvasSize;
+    final size = (fullSize.width > 0 && fullSize.height > 0)
+        ? fullSize
+        : fallbackSize;
+
+    final pos = (size.width > 0 && size.height > 0)
+        ? Offset(size.width / 2.0, size.height / 2.0)
+        : Offset.zero;
+
+    controller.addTextObject(
+      text: 'ANIMOD',
+      position: pos,
+      fontSize: 72.0,
+    );
+  }
+
+
+
+  Widget _buildInlineTextEditor(
+    BuildContext context,
+    ColorScheme cs,
+    CanvasTextObject text,
+  ) {
+    Widget sliderRow({
+      required String label,
+      required double value,
+      required double min,
+      required double max,
+      required ValueChanged<double> onChanged,
+      int divisions = 100,
+    }) {
+      return Row(
+        children: [
+          SizedBox(
+            width: 92,
+            child: Text(label, style: const TextStyle(fontSize: 12)),
+          ),
+          Expanded(
+            child: Slider(
+              value: value.clamp(min, max).toDouble(),
+              min: min,
+              max: max,
+              divisions: divisions,
+              onChanged: onChanged,
+            ),
+          ),
+          SizedBox(
+            width: 42,
+            child: Text(
+              value.toStringAsFixed(value.abs() >= 10 ? 0 : 2),
+              textAlign: TextAlign.right,
+              style: const TextStyle(fontSize: 11),
+            ),
+          ),
+        ],
+      );
+    }
+
+    Future<void> pickAndApplyColor({
+      required int currentColor,
+      required void Function(int argb) apply,
+    }) async {
+      final picked = await showDialog<Color?>(
+        context: context,
+        barrierDismissible: true,
+        builder: (_) => ColorWheelDialog(initial: Color(currentColor)),
+      );
+      if (picked == null || !mounted) return;
+      apply(picked.toARGB32());
+    }
+
+    void update(CanvasTextObject updated) {
+      controller.updateTextObject(updated);
+    }
+
+    return ConstrainedBox(
+      constraints: BoxConstraints(
+        maxHeight: MediaQuery.of(context).size.height * 0.42,
+      ),
+      child: Container(
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color: cs.surface.withValues(alpha: 0.96),
+          borderRadius: BorderRadius.circular(18),
+          border: Border.all(color: Colors.white.withValues(alpha: 0.10)),
+          boxShadow: const [
+            BoxShadow(
+              blurRadius: 24,
+              spreadRadius: 4,
+              color: Colors.black38,
+            ),
+          ],
+        ),
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Row(
+                children: [
+                  const Icon(Icons.text_fields, size: 20),
+                  const SizedBox(width: 8),
+                  const Expanded(
+                    child: Text(
+                      'Text object',
+                      style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ),
+                  IconButton(
+                    tooltip: 'Delete text',
+                    icon: const Icon(Icons.delete_outline),
+                    onPressed: () {
+                      controller.deleteTextObject(text.id);
+                      setState(() => _textEditorOpen = false);
+                    },
+                  ),
+                  IconButton(
+                    tooltip: 'Close',
+                    icon: const Icon(Icons.close),
+                    onPressed: () => setState(() => _textEditorOpen = false),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              TextFormField(
+                key: ValueKey('text-field-${text.id}'),
+                initialValue: text.text,
+                maxLines: 2,
+                decoration: const InputDecoration(
+                  labelText: 'Text',
+                  border: OutlineInputBorder(),
+                  isDense: true,
+                ),
+                onChanged: (value) => update(text.copyWith(text: value)),
+              ),
+              const SizedBox(height: 12),
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: [
+                  FilterChip(
+                    label: const Text('Fill'),
+                    selected: text.fillEnabled,
+                    onSelected: (v) => update(text.copyWith(fillEnabled: v)),
+                  ),
+                  FilterChip(
+                    label: const Text('Glow'),
+                    selected: text.glowEnabled,
+                    onSelected: (v) => update(text.copyWith(glowEnabled: v)),
+                  ),
+                  FilterChip(
+                    label: const Text('Edge glow'),
+                    selected: text.edgeGlowEnabled,
+                    onSelected: (v) => update(text.copyWith(edgeGlowEnabled: v)),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 10),
+              Row(
+                children: [
+                  Expanded(
+                    child: OutlinedButton.icon(
+                      icon: Container(
+                        width: 16,
+                        height: 16,
+                        decoration: BoxDecoration(
+                          color: Color(text.fillColor),
+                          shape: BoxShape.circle,
+                          border: Border.all(color: Colors.white24),
+                        ),
+                      ),
+                      label: const Text('Fill colour'),
+                      onPressed: () => pickAndApplyColor(
+                        currentColor: text.fillColor,
+                        apply: (argb) => update(text.copyWith(fillColor: argb)),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: OutlinedButton.icon(
+                      icon: Container(
+                        width: 16,
+                        height: 16,
+                        decoration: BoxDecoration(
+                          color: Color(text.glowColor),
+                          shape: BoxShape.circle,
+                          border: Border.all(color: Colors.white24),
+                        ),
+                      ),
+                      label: const Text('Glow colour'),
+                      onPressed: () => pickAndApplyColor(
+                        currentColor: text.glowColor,
+                        apply: (argb) => update(text.copyWith(glowColor: argb)),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              sliderRow(
+                label: 'Font size',
+                value: text.fontSize,
+                min: 8,
+                max: 240,
+                divisions: 232,
+                onChanged: (v) => update(text.copyWith(fontSize: v)),
+              ),
+              sliderRow(
+                label: 'Scale',
+                value: text.scale,
+                min: 0.05,
+                max: 5,
+                onChanged: (v) => update(text.copyWith(scale: v)),
+              ),
+              sliderRow(
+                label: 'Opacity',
+                value: text.opacity,
+                min: 0,
+                max: 1,
+                onChanged: (v) => update(text.copyWith(opacity: v)),
+              ),
+              sliderRow(
+                label: 'Glow size',
+                value: text.glowRadius,
+                min: 0,
+                max: 80,
+                divisions: 80,
+                onChanged: (v) => update(text.copyWith(glowRadius: v)),
+              ),
+              sliderRow(
+                label: 'Glow opacity',
+                value: text.glowOpacity,
+                min: 0,
+                max: 1,
+                onChanged: (v) => update(text.copyWith(glowOpacity: v)),
+              ),
+              sliderRow(
+                label: 'Brightness',
+                value: text.glowBrightness,
+                min: 0,
+                max: 3,
+                onChanged: (v) => update(text.copyWith(glowBrightness: v)),
+              ),
+              if (text.edgeGlowEnabled) ...[
+                sliderRow(
+                  label: 'Edge width',
+                  value: text.edgeGlowWidth,
+                  min: 0.2,
+                  max: 16,
+                  onChanged: (v) => update(text.copyWith(edgeGlowWidth: v)),
+                ),
+                sliderRow(
+                  label: 'Edge power',
+                  value: text.edgeGlowStrength,
+                  min: 0,
+                  max: 3,
+                  onChanged: (v) => update(text.copyWith(edgeGlowStrength: v)),
+                ),
+              ],
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _openTextEditSheet(
+    BuildContext context,
+    CanvasTextObject initial,
+  ) async {
+    final cs = Theme.of(context).colorScheme;
+
+    // IMPORTANT:
+    // Keep edits local while the sheet is open, then apply them after the
+    // sheet has fully closed. Notifying CanvasController from inside a modal
+    // route while it is being dismissed can trigger Flutter's `_dependents.isEmpty`
+    // assertion on some devices/builds.
+    var draft = initial;
+    var changed = false;
+    var deleteRequested = false;
+
+    final textCtrl = TextEditingController(text: draft.text);
+
+    void applyLocal(CanvasTextObject updated) {
+      draft = updated;
+      changed = true;
+    }
+
+    Widget sliderRow({
+      required String label,
+      required double value,
+      required double min,
+      required double max,
+      required ValueChanged<double> onChanged,
+      int divisions = 100,
+    }) {
+      return Row(
+        children: [
+          SizedBox(
+            width: 96,
+            child: Text(label, style: const TextStyle(fontSize: 12)),
+          ),
+          Expanded(
+            child: Slider(
+              value: value.clamp(min, max).toDouble(),
+              min: min,
+              max: max,
+              divisions: divisions,
+              onChanged: onChanged,
+            ),
+          ),
+          SizedBox(
+            width: 44,
+            child: Text(
+              value.toStringAsFixed(value.abs() >= 10 ? 0 : 2),
+              textAlign: TextAlign.right,
+              style: const TextStyle(fontSize: 11),
+            ),
+          ),
+        ],
+      );
+    }
+
+    Future<int?> pickColor(BuildContext sheetContext, int initialColor) async {
+      final picked = await showDialog<Color?>(
+        context: sheetContext,
+        barrierDismissible: true,
+        builder: (_) => ColorWheelDialog(initial: Color(initialColor)),
+      );
+      return picked?.toARGB32();
+    }
+
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (sheetContext) {
+        return StatefulBuilder(
+          builder: (sheetContext, setSheetState) {
+            return SafeArea(
+              top: false,
+              child: Container(
+                margin: const EdgeInsets.only(top: 24),
+                padding: EdgeInsets.only(
+                  left: 16,
+                  right: 16,
+                  top: 12,
+                  bottom: 12 + MediaQuery.of(sheetContext).viewInsets.bottom,
+                ),
+                decoration: BoxDecoration(
+                  color: cs.surface.withValues(alpha: 0.97),
+                  borderRadius:
+                      const BorderRadius.vertical(top: Radius.circular(18)),
+                  border: Border(
+                    top: BorderSide(
+                      color: Colors.white.withValues(alpha: 0.10),
+                    ),
+                  ),
+                ),
+                child: SingleChildScrollView(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Row(
+                        children: [
+                          const Icon(Icons.text_fields, size: 20),
+                          const SizedBox(width: 8),
+                          const Expanded(
+                            child: Text(
+                              'Text object',
+                              style: TextStyle(
+                                fontSize: 16,
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                          ),
+                          IconButton(
+                            tooltip: 'Delete text',
+                            icon: const Icon(Icons.delete_outline),
+                            onPressed: () {
+                              deleteRequested = true;
+                              Navigator.of(sheetContext).pop();
+                            },
+                          ),
+                          IconButton(
+                            tooltip: 'Close',
+                            icon: const Icon(Icons.close),
+                            onPressed: () => Navigator.of(sheetContext).pop(),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 8),
+                      TextField(
+                        controller: textCtrl,
+                        maxLines: 2,
+                        decoration: const InputDecoration(
+                          labelText: 'Text',
+                          border: OutlineInputBorder(),
+                          isDense: true,
+                        ),
+                        onChanged: (value) {
+                          applyLocal(draft.copyWith(text: value));
+                          setSheetState(() {});
+                        },
+                      ),
+                      const SizedBox(height: 12),
+                      Wrap(
+                        spacing: 8,
+                        runSpacing: 8,
+                        children: [
+                          FilterChip(
+                            label: const Text('Fill'),
+                            selected: draft.fillEnabled,
+                            onSelected: (v) {
+                              applyLocal(draft.copyWith(fillEnabled: v));
+                              setSheetState(() {});
+                            },
+                          ),
+                          FilterChip(
+                            label: const Text('Glow'),
+                            selected: draft.glowEnabled,
+                            onSelected: (v) {
+                              applyLocal(draft.copyWith(glowEnabled: v));
+                              setSheetState(() {});
+                            },
+                          ),
+                          FilterChip(
+                            label: const Text('Edge glow'),
+                            selected: draft.edgeGlowEnabled,
+                            onSelected: (v) {
+                              applyLocal(draft.copyWith(edgeGlowEnabled: v));
+                              setSheetState(() {});
+                            },
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 10),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: OutlinedButton.icon(
+                              icon: Container(
+                                width: 16,
+                                height: 16,
+                                decoration: BoxDecoration(
+                                  color: Color(draft.fillColor),
+                                  shape: BoxShape.circle,
+                                  border: Border.all(color: Colors.white24),
+                                ),
+                              ),
+                              label: const Text('Fill colour'),
+                              onPressed: () async {
+                                final picked = await pickColor(
+                                  sheetContext,
+                                  draft.fillColor,
+                                );
+                                if (picked == null) return;
+                                applyLocal(draft.copyWith(fillColor: picked));
+                                setSheetState(() {});
+                              },
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: OutlinedButton.icon(
+                              icon: Container(
+                                width: 16,
+                                height: 16,
+                                decoration: BoxDecoration(
+                                  color: Color(draft.glowColor),
+                                  shape: BoxShape.circle,
+                                  border: Border.all(color: Colors.white24),
+                                ),
+                              ),
+                              label: const Text('Glow colour'),
+                              onPressed: () async {
+                                final picked = await pickColor(
+                                  sheetContext,
+                                  draft.glowColor,
+                                );
+                                if (picked == null) return;
+                                applyLocal(draft.copyWith(glowColor: picked));
+                                setSheetState(() {});
+                              },
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 8),
+                      sliderRow(
+                        label: 'Font size',
+                        value: draft.fontSize,
+                        min: 8,
+                        max: 240,
+                        divisions: 232,
+                        onChanged: (v) {
+                          applyLocal(draft.copyWith(fontSize: v));
+                          setSheetState(() {});
+                        },
+                      ),
+                      sliderRow(
+                        label: 'Scale',
+                        value: draft.scale,
+                        min: 0.05,
+                        max: 5,
+                        onChanged: (v) {
+                          applyLocal(draft.copyWith(scale: v));
+                          setSheetState(() {});
+                        },
+                      ),
+                      sliderRow(
+                        label: 'Opacity',
+                        value: draft.opacity,
+                        min: 0,
+                        max: 1,
+                        onChanged: (v) {
+                          applyLocal(draft.copyWith(opacity: v));
+                          setSheetState(() {});
+                        },
+                      ),
+                      sliderRow(
+                        label: 'Glow size',
+                        value: draft.glowRadius,
+                        min: 0,
+                        max: 80,
+                        divisions: 80,
+                        onChanged: (v) {
+                          applyLocal(draft.copyWith(glowRadius: v));
+                          setSheetState(() {});
+                        },
+                      ),
+                      sliderRow(
+                        label: 'Glow opacity',
+                        value: draft.glowOpacity,
+                        min: 0,
+                        max: 1,
+                        onChanged: (v) {
+                          applyLocal(draft.copyWith(glowOpacity: v));
+                          setSheetState(() {});
+                        },
+                      ),
+                      sliderRow(
+                        label: 'Brightness',
+                        value: draft.glowBrightness,
+                        min: 0,
+                        max: 3,
+                        onChanged: (v) {
+                          applyLocal(draft.copyWith(glowBrightness: v));
+                          setSheetState(() {});
+                        },
+                      ),
+                      if (draft.edgeGlowEnabled) ...[
+                        sliderRow(
+                          label: 'Edge width',
+                          value: draft.edgeGlowWidth,
+                          min: 0.2,
+                          max: 16,
+                          onChanged: (v) {
+                            applyLocal(draft.copyWith(edgeGlowWidth: v));
+                            setSheetState(() {});
+                          },
+                        ),
+                        sliderRow(
+                          label: 'Edge power',
+                          value: draft.edgeGlowStrength,
+                          min: 0,
+                          max: 3,
+                          onChanged: (v) {
+                            applyLocal(draft.copyWith(edgeGlowStrength: v));
+                            setSheetState(() {});
+                          },
+                        ),
+                      ],
+                      const SizedBox(height: 8),
+                      Text(
+                        'Changes apply when this sheet closes. This keeps the temporary editor stable while we build the proper text panel.',
+                        style: TextStyle(
+                          fontSize: 11,
+                          color: Colors.white.withValues(alpha: 0.55),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            );
+          },
+        );
+      },
+    );
+
+    textCtrl.dispose();
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      if (deleteRequested) {
+        controller.deleteTextObject(initial.id);
+      } else if (changed) {
+        controller.updateTextObject(draft);
+      }
+    });
+  }
+
+  Future<void> _openAddTextDialog(BuildContext context) async {
+    final textCtrl = TextEditingController(text: 'ANIMOD');
+
+    final result = await showDialog<String?>(
+      context: context,
+      barrierDismissible: true,
+      builder: (ctx) {
+        return AlertDialog(
+          backgroundColor: const Color(0xFF121212),
+          title: const Text('Add text'),
+          content: TextField(
+            controller: textCtrl,
+            autofocus: true,
+            maxLines: 2,
+            textInputAction: TextInputAction.done,
+            decoration: const InputDecoration(
+              hintText: 'Enter text',
+            ),
+            onSubmitted: (_) => Navigator.of(ctx).pop(textCtrl.text),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(null),
+              child: const Text('Cancel'),
+            ),
+            ElevatedButton(
+              onPressed: () => Navigator.of(ctx).pop(textCtrl.text),
+              child: const Text('Add'),
+            ),
+          ],
+        );
+      },
+    );
+
+    textCtrl.dispose();
+
+    final trimmed = result?.trim();
+    if (trimmed == null || trimmed.isEmpty) return;
+
+    final fullSize = controller.previewFullLogicalSize;
+    final fallbackSize = controller.canvasSize;
+    final size = (fullSize.width > 0 && fullSize.height > 0)
+        ? fullSize
+        : fallbackSize;
+
+    final pos = (size.width > 0 && size.height > 0)
+        ? Offset(size.width / 2.0, size.height / 2.0)
+        : Offset.zero;
+
+    // Wait until the dialog route has fully finished tearing down before
+    // notifying the canvas controller. Calling notifyListeners immediately
+    // after Navigator.pop can trip Flutter's `_dependents.isEmpty` assertion
+    // on some devices/builds while inherited widgets are deactivating.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      controller.addTextObject(
+        text: trimmed,
+        position: pos,
+        fontSize: 72.0,
+      );
+    });
   }
 
   void _openBlendSheet(BuildContext context) {

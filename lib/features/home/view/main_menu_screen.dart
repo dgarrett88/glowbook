@@ -5,6 +5,8 @@ import '../../../core/models/saved_document_info.dart';
 import '../../../core/models/canvas_document_bundle.dart';
 import '../../../core/models/canvas_doc.dart';
 import '../../../core/models/stroke.dart';
+import '../../../core/models/canvas_text_object.dart';
+import '../../../core/models/canvas_layer.dart';
 import '../../../core/services/document_storage.dart';
 import '../../canvas/view/canvas_screen.dart';
 
@@ -510,7 +512,7 @@ class _DocumentTile extends StatelessWidget {
                     }
 
                     final bundle = snapshot.data;
-                    if (bundle == null || bundle.strokes.isEmpty) {
+                    if (bundle == null || !_hasPreviewContent(bundle)) {
                       return const Center(
                         child: Icon(
                           Icons.image_not_supported_outlined,
@@ -588,6 +590,24 @@ class _DocumentTile extends StatelessWidget {
   }
 }
 
+bool _hasPreviewContent(CanvasDocumentBundle bundle) {
+  if (bundle.textObjects.any((t) => t.text.trim().isNotEmpty)) {
+    return true;
+  }
+
+  final layers = bundle.layers;
+  if (layers != null && layers.isNotEmpty) {
+    for (final layer in layers) {
+      if (!layer.visible) continue;
+      for (final group in layer.groups) {
+        if (group.strokes.isNotEmpty) return true;
+      }
+    }
+  }
+
+  return bundle.strokes.isNotEmpty;
+}
+
 class _StrokePreviewPainter extends CustomPainter {
   final CanvasDocumentBundle bundle;
 
@@ -596,9 +616,8 @@ class _StrokePreviewPainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
     final CanvasDoc doc = bundle.doc;
-    final List<Stroke> strokes = bundle.strokes;
 
-    if (doc.width <= 0 || doc.height <= 0 || strokes.isEmpty) {
+    if (doc.width <= 0 || doc.height <= 0) {
       return;
     }
 
@@ -620,45 +639,204 @@ class _StrokePreviewPainter extends CustomPainter {
     final contentWidth = doc.width * scale;
     final contentHeight = doc.height * scale;
 
-    // Center horizontally
     final dx = (size.width - contentWidth) / 2.0;
-
-    // Base vertical center
     double dy = (size.height - contentHeight) / 2.0;
 
-    // If the content is taller than the card, bias the crop DOWN a bit
-    // so we see more of the top and less of the bottom.
     final overflowY = contentHeight - size.height;
     if (overflowY > 0) {
-      dy += overflowY * 0.55; // tweak 0.2 -> more/less bias if you like
+      dy += overflowY * 0.55;
     }
 
-    for (final stroke in strokes) {
-      final points = stroke.points;
-      if (points.isEmpty) continue;
+    canvas.save();
+    canvas.translate(dx, dy);
+    canvas.scale(scale, scale);
 
-      final path = Path();
-      final first = points.first;
-      path.moveTo(
-        dx + first.x * scale,
-        dy + first.y * scale,
-      );
-      for (var i = 1; i < points.length; i++) {
-        final p = points[i];
-        path.lineTo(
-          dx + p.x * scale,
-          dy + p.y * scale,
-        );
+    final visibleLayerIds = <String>{};
+    final layers = bundle.layers;
+
+    if (layers != null && layers.isNotEmpty) {
+      for (final layer in layers) {
+        if (!layer.visible) continue;
+        visibleLayerIds.add(layer.id);
+        _paintLayerStrokes(canvas, layer);
+      }
+    } else {
+      visibleLayerIds.addAll(bundle.textObjects.map((t) => t.layerId));
+      for (final stroke in bundle.strokes) {
+        _paintStroke(canvas, stroke);
+      }
+    }
+
+    for (final text in bundle.textObjects) {
+      if (text.text.trim().isEmpty) continue;
+      if (visibleLayerIds.isNotEmpty && !visibleLayerIds.contains(text.layerId)) {
+        continue;
       }
 
-      final paint = Paint()
-        ..style = PaintingStyle.stroke
-        ..strokeCap = StrokeCap.round
-        ..strokeWidth = stroke.size * scale
-        ..color = Color(stroke.color);
+      LayerTransform? layerTransform;
+      if (layers != null && layers.isNotEmpty) {
+        for (final layer in layers) {
+          if (layer.id == text.layerId) {
+            layerTransform = layer.transform;
+            break;
+          }
+        }
+      }
 
-      canvas.drawPath(path, paint);
+      _paintTextObject(
+        canvas,
+        text,
+        layerTransform: layerTransform,
+      );
     }
+
+    canvas.restore();
+  }
+
+  void _paintLayerStrokes(Canvas canvas, CanvasLayer layer) {
+    if (!layer.visible) return;
+
+    // Use the layer pivot when present; otherwise keep preview transform simple.
+    final pivot = layer.transform.pivot ?? Offset.zero;
+    canvas.save();
+    _applyLayerTransform(canvas, layer.transform, pivot);
+
+    for (final group in layer.groups) {
+      canvas.save();
+      canvas.translate(group.transform.position.dx, group.transform.position.dy);
+      canvas.rotate(group.transform.rotation);
+      canvas.scale(group.transform.scale, group.transform.scale);
+      for (final stroke in group.strokes) {
+        _paintStroke(
+          canvas,
+          stroke,
+          opacity: (layer.transform.opacity * group.transform.opacity)
+              .clamp(0.0, 1.0)
+              .toDouble(),
+        );
+      }
+      canvas.restore();
+    }
+
+    canvas.restore();
+  }
+
+  void _paintStroke(Canvas canvas, Stroke stroke, {double opacity = 1.0}) {
+    final points = stroke.points;
+    if (points.isEmpty) return;
+
+    final path = Path();
+    final first = points.first;
+    path.moveTo(first.x, first.y);
+    for (var i = 1; i < points.length; i++) {
+      final p = points[i];
+      path.lineTo(p.x, p.y);
+    }
+
+    final color = Color(stroke.color).withOpacity(
+      (Color(stroke.color).opacity * opacity).clamp(0.0, 1.0).toDouble(),
+    );
+
+    final paint = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeCap = StrokeCap.round
+      ..strokeJoin = StrokeJoin.round
+      ..strokeWidth = stroke.size
+      ..color = color;
+
+    canvas.drawPath(path, paint);
+  }
+
+  void _paintTextObject(
+    Canvas canvas,
+    CanvasTextObject text, {
+    LayerTransform? layerTransform,
+  }) {
+    final opacity = text.opacity.clamp(0.0, 1.0).toDouble();
+    if (opacity <= 0.001) return;
+
+    canvas.save();
+
+    if (layerTransform != null) {
+      final pivot = layerTransform.pivot ?? text.position;
+      _applyLayerTransform(canvas, layerTransform, pivot);
+    }
+
+    canvas.translate(text.position.dx, text.position.dy);
+    canvas.rotate(text.rotation);
+    canvas.scale(text.scale, text.scale);
+
+    final baseStyle = TextStyle(
+      fontFamily: text.fontFamily,
+      fontSize: text.fontSize,
+      height: text.lineHeight,
+      letterSpacing: text.letterSpacing,
+    );
+
+    TextPainter painterFor(Paint paint) {
+      return TextPainter(
+        text: TextSpan(
+          text: text.text,
+          style: baseStyle.copyWith(foreground: paint),
+        ),
+        textAlign: text.textAlign,
+        textDirection: TextDirection.ltr,
+      )..layout();
+    }
+
+    void paintText(Paint paint) {
+      final tp = painterFor(paint);
+      tp.paint(canvas, Offset(-tp.width / 2.0, -tp.height / 2.0));
+    }
+
+    if (text.glowEnabled && text.glowOpacity > 0.0 && text.glowRadius > 0.0) {
+      final glowAlpha = (opacity * text.glowOpacity * 0.65)
+          .clamp(0.0, 1.0)
+          .toDouble();
+      final glowColor = Color(text.glowColor).withOpacity(glowAlpha);
+      final sigma = (text.glowRadius * 0.45).clamp(1.0, 40.0).toDouble();
+
+      paintText(Paint()
+        ..color = glowColor
+        ..maskFilter = MaskFilter.blur(BlurStyle.normal, sigma));
+      paintText(Paint()
+        ..color = glowColor.withOpacity((glowAlpha * 0.85).clamp(0.0, 1.0))
+        ..maskFilter = MaskFilter.blur(BlurStyle.normal, sigma * 0.45));
+    }
+
+    if (text.fillEnabled) {
+      paintText(Paint()
+        ..color = Color(text.fillColor).withOpacity(
+          (Color(text.fillColor).opacity * opacity).clamp(0.0, 1.0).toDouble(),
+        ));
+    }
+
+    if (text.outlineEnabled && text.outlineWidth > 0.0) {
+      paintText(Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = text.outlineWidth
+        ..color = Color(text.outlineColor).withOpacity(
+          (Color(text.outlineColor).opacity * opacity * text.outlineOpacity)
+              .clamp(0.0, 1.0)
+              .toDouble(),
+        ));
+    }
+
+    canvas.restore();
+  }
+
+  void _applyLayerTransform(
+    Canvas canvas,
+    LayerTransform transform,
+    Offset pivot,
+  ) {
+    canvas.translate(
+      pivot.dx + transform.position.dx,
+      pivot.dy + transform.position.dy,
+    );
+    canvas.rotate(transform.rotation);
+    canvas.scale(transform.scale, transform.scale);
+    canvas.translate(-pivot.dx, -pivot.dy);
   }
 
   @override

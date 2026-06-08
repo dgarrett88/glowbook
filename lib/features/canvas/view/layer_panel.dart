@@ -12,6 +12,7 @@ import '../../../core/models/lfo.dart';
 import 'package:glowbook/core/models/lfo_route.dart';
 
 import 'widgets/synth_knob.dart';
+import 'text_panel.dart';
 
 class LayerPanel extends ConsumerStatefulWidget {
   const LayerPanel({
@@ -603,6 +604,20 @@ class _LayerTileState extends State<_LayerTile> {
               onChanged: _updateAndSend,
               onAnyKnobInteraction: widget.onAnyKnobInteraction,
               onAnyKnobValueChanged: widget.onAnyKnobValueChanged,
+            ),
+            const SizedBox(height: 6),
+            LayerTextSection(
+              layerId: layer.id,
+              onAnyKnobInteraction: widget.onAnyKnobInteraction,
+              onAnyKnobValueChanged: widget.onAnyKnobValueChanged,
+              buildTextModLight: (context, layerId, textObjectId, param) {
+                return _TextModLight(
+                  layerId: layerId,
+                  textObjectId: textObjectId,
+                  param: param,
+                  onInteractionChanged: widget.onAnyKnobInteraction,
+                );
+              },
             ),
             const SizedBox(height: 6),
             _StrokeList(
@@ -1764,6 +1779,122 @@ class _LayerModLight extends ConsumerWidget {
         );
 
         // If switching away from an unused auto preset, remove it.
+        if (oldLfoId != null && oldLfoId != chosen) {
+          controller.deleteAutoPresetLfoIfUnused(oldLfoId);
+        }
+      },
+      onChanged: (v) {
+        final r = route;
+        if (r == null) return;
+        controller.setRouteAmount(r.id, v);
+      },
+    );
+  }
+}
+
+
+/// Text mod light.
+///
+/// This intentionally reuses the exact same private light control and assign
+/// popup used by layer/stroke params. Text only supplies different route
+/// lookup/upsert/clear controller calls.
+class _TextModLight extends ConsumerWidget {
+  const _TextModLight({
+    required this.layerId,
+    required this.textObjectId,
+    required this.param,
+    this.onInteractionChanged,
+  });
+
+  final String layerId;
+  final String textObjectId;
+  final LfoParam param;
+  final ValueChanged<bool>? onInteractionChanged;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final controller = ref.watch(canvas_state.canvasControllerProvider);
+    final route = controller.findRouteForTextParam(
+      layerId,
+      textObjectId,
+      param,
+    );
+    final isOn = route != null;
+    final spec = _lfoAmountSpec(param);
+
+    return _ModLightControl(
+      isOn: isOn,
+      value: route?.amount ?? 0.0,
+      min: spec.min,
+      max: spec.max,
+      onInteractionChanged: onInteractionChanged,
+      onTapLight: () async {
+        final String? chosen = await _showAssignLfoPopup(
+          context: context,
+          lfos: controller.lfos,
+          currentLfoId: route?.lfoId,
+        );
+
+        if (chosen == null) return;
+
+        if (chosen == _assignNoneKey) {
+          final oldLfoId = route?.lfoId;
+
+          controller.clearRouteForTextParam(
+            layerId,
+            textObjectId,
+            param,
+          );
+
+          if (oldLfoId != null) {
+            controller.deleteAutoPresetLfoIfUnused(oldLfoId);
+          }
+          return;
+        }
+
+        final preset = _presetFromChoiceKey(chosen);
+
+        if (preset != null) {
+          final existingRoute = controller.findRouteForTextParam(
+            layerId,
+            textObjectId,
+            param,
+          );
+
+          if (existingRoute != null &&
+              controller.isAutoPresetManagedLfo(existingRoute.lfoId)) {
+            controller.applyQuickPresetToLfo(
+              existingRoute.lfoId,
+              preset,
+              autoPresetManaged: true,
+            );
+          } else {
+            final oldLfoId = existingRoute?.lfoId;
+            final newLfoId = controller.createQuickPresetLfo(preset);
+
+            controller.upsertRouteForTextParam(
+              layerId: layerId,
+              textObjectId: textObjectId,
+              param: param,
+              lfoId: newLfoId,
+            );
+
+            if (oldLfoId != null && oldLfoId != newLfoId) {
+              controller.deleteAutoPresetLfoIfUnused(oldLfoId);
+            }
+          }
+          return;
+        }
+
+        final oldLfoId = route?.lfoId;
+
+        controller.upsertRouteForTextParam(
+          layerId: layerId,
+          textObjectId: textObjectId,
+          param: param,
+          lfoId: chosen,
+        );
+
         if (oldLfoId != null && oldLfoId != chosen) {
           controller.deleteAutoPresetLfoIfUnused(oldLfoId);
         }
@@ -3866,6 +3997,32 @@ String _lfoParamLabel(LfoParam p) {
       return 'Stroke Glow Op';
     case LfoParam.strokeGlowBrightness:
       return 'Stroke Bright';
+
+    // Text
+    case LfoParam.textX:
+      return 'Text X';
+    case LfoParam.textY:
+      return 'Text Y';
+    case LfoParam.textFontSize:
+      return 'Text Font';
+    case LfoParam.textScale:
+      return 'Text Scale';
+    case LfoParam.textRotationDeg:
+      return 'Text Rot';
+    case LfoParam.textOpacity:
+      return 'Text Opacity';
+    case LfoParam.textGlowRadius:
+      return 'Text Glow Size';
+    case LfoParam.textGlowOpacity:
+      return 'Text Glow Op';
+    case LfoParam.textGlowBrightness:
+      return 'Text Bright';
+    case LfoParam.textEdgeGlowWidth:
+      return 'Text Edge W';
+    case LfoParam.textEdgeGlowStrength:
+      return 'Text Edge';
+    case LfoParam.textLetterPhaseOffset:
+      return 'Text Letter Off';
   }
 }
 
@@ -3876,6 +4033,8 @@ _AmtSpec _lfoAmountSpec(LfoParam p) {
     case LfoParam.layerY:
     case LfoParam.strokeX:
     case LfoParam.strokeY:
+    case LfoParam.textX:
+    case LfoParam.textY:
       return _AmtSpec(
         label: 'Amt',
         min: -500,
@@ -3887,6 +4046,7 @@ _AmtSpec _lfoAmountSpec(LfoParam p) {
     // Rotation in degrees
     case LfoParam.layerRotationDeg:
     case LfoParam.strokeRotationDeg:
+    case LfoParam.textRotationDeg:
       return _AmtSpec(
         label: 'Amt',
         min: -360,
@@ -3897,6 +4057,7 @@ _AmtSpec _lfoAmountSpec(LfoParam p) {
 
     // Scale
     case LfoParam.layerScale:
+    case LfoParam.textScale:
       return _AmtSpec(
         label: 'Amt',
         min: -3.0,
@@ -3905,7 +4066,7 @@ _AmtSpec _lfoAmountSpec(LfoParam p) {
         formatter: (v) => v.toStringAsFixed(2),
       );
 
-    // Stroke size
+    // Stroke / text size
     case LfoParam.strokeSize:
       return _AmtSpec(
         label: 'Amt',
@@ -3915,11 +4076,27 @@ _AmtSpec _lfoAmountSpec(LfoParam p) {
         formatter: (v) => v.toStringAsFixed(1),
       );
 
+    case LfoParam.textFontSize:
+      return _AmtSpec(
+        label: 'Amt',
+        min: -160.0,
+        max: 160.0,
+        def: 28.0,
+        formatter: (v) => v.toStringAsFixed(0),
+      );
+
     // Vital-style bounded params
     case LfoParam.layerOpacity:
     case LfoParam.strokeCoreOpacity:
     case LfoParam.strokeGlowOpacity:
     case LfoParam.strokeGlowBrightness:
+    case LfoParam.textOpacity:
+    case LfoParam.textGlowRadius:
+    case LfoParam.textGlowOpacity:
+    case LfoParam.textGlowBrightness:
+    case LfoParam.textEdgeGlowWidth:
+    case LfoParam.textEdgeGlowStrength:
+    case LfoParam.textLetterPhaseOffset:
       return _AmtSpec(
         label: 'Amt',
         min: -1.0,

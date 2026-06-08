@@ -2,6 +2,7 @@ import 'dart:ui';
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../state/canvas_controller.dart' as canvas_state;
@@ -13,6 +14,7 @@ import '../../../core/utils/uuid.dart';
 import 'widgets/top_toolbar.dart';
 import 'widgets/bottom_dock.dart';
 import '../../../core/models/canvas_document_bundle.dart';
+import '../../../core/models/canvas_text_object.dart';
 import '../state/canvas_preview_quality.dart';
 import '../state/glow_blend.dart' as gb;
 import 'layer_panel.dart';
@@ -33,6 +35,8 @@ class CanvasScreen extends ConsumerStatefulWidget {
 enum _NewPageAction { saveAndNew, discardAndNew, cancel }
 
 enum _ExportAction { image, video }
+
+enum _CanvasToolMode { brush, select, text }
 
 class _VideoExportSettingsResult {
   final VideoExportOptions resolution;
@@ -56,6 +60,25 @@ class _CanvasScreenState extends ConsumerState<CanvasScreen> {
 
   bool _showLayers = false;
   bool _showLfos = false;
+
+  _CanvasToolMode _activeToolMode = _CanvasToolMode.brush;
+  String? _editingTextObjectId;
+  final TextEditingController _textEditController = TextEditingController();
+  final FocusNode _textEditFocusNode = FocusNode();
+  final Set<int> _textHandledPointers = <int>{};
+  int? _pendingTextEditPointer;
+  Offset? _pendingTextEditStart;
+  String? _pendingTextEditObjectId;
+  double? _editingTextOriginalOpacity;
+
+  static const List<String?> _fontChoices = <String?>[
+    null,
+    'Roboto',
+    'Arial',
+    'Times New Roman',
+    'Courier New',
+    'Georgia',
+  ];
 
   // Track finger-1 in selection mode so we can resume grab after pinch ends.
   int? _selectionPointerId;
@@ -168,6 +191,7 @@ class _CanvasScreenState extends ConsumerState<CanvasScreen> {
   @override
   void initState() {
     super.initState();
+    _textEditController.addListener(_handleTextEditControllerChanged);
 
     final controller = ref.read(canvas_state.canvasControllerProvider);
     final bundle = widget.initialDocument;
@@ -179,6 +203,339 @@ class _CanvasScreenState extends ConsumerState<CanvasScreen> {
     } else {
       controller.newDocument();
     }
+  }
+
+  @override
+  void dispose() {
+    _textEditController.removeListener(_handleTextEditControllerChanged);
+    _textEditController.dispose();
+    _textEditFocusNode.dispose();
+    super.dispose();
+  }
+
+  void _handleTextEditControllerChanged() {
+    // The editable TextField is the live source of truth while typing.
+    // Rebuild the overlay from the controller value so the active edit box
+    // width/outline updates immediately with each character, without waiting
+    // for the canvas renderer/model to repaint.
+    if (!mounted || _editingTextObjectId == null) return;
+    setState(() {});
+  }
+
+  void _setActiveToolMode(_CanvasToolMode mode) {
+    _commitActiveTextEdit();
+
+    final controller = ref.read(canvas_state.canvasControllerProvider);
+    controller.setSelectionMode(mode == _CanvasToolMode.select);
+
+    setState(() {
+      _activeToolMode = mode;
+      if (mode != _CanvasToolMode.select) {
+        _showLayers = false;
+      }
+      if (mode != _CanvasToolMode.text) {
+        _showLfos = false;
+      }
+    });
+  }
+
+  void _activateBrushTool() {
+    _setActiveToolMode(_CanvasToolMode.brush);
+  }
+
+  void _toggleTextTool() {
+    _setActiveToolMode(
+      _activeToolMode == _CanvasToolMode.text
+          ? _CanvasToolMode.brush
+          : _CanvasToolMode.text,
+    );
+  }
+
+  void _toggleSelectTool() {
+    _setActiveToolMode(
+      _activeToolMode == _CanvasToolMode.select
+          ? _CanvasToolMode.brush
+          : _CanvasToolMode.select,
+    );
+  }
+
+  CanvasTextObject? _editingTextObject(canvas_state.CanvasController controller) {
+    final id = _editingTextObjectId;
+    if (id == null) return null;
+    for (final obj in controller.textObjects) {
+      if (obj.id == id) return obj;
+    }
+    return null;
+  }
+
+  Size _measureTextObject(
+    CanvasTextObject obj, {
+    String? textOverride,
+    bool tight = false,
+  }) {
+    final text = (textOverride ?? obj.text);
+    final style = TextStyle(
+      fontFamily: obj.fontFamily,
+      fontSize: obj.fontSize,
+      height: obj.lineHeight,
+      letterSpacing: obj.letterSpacing,
+    );
+    final tp = TextPainter(
+      text: TextSpan(
+        // Do not measure the editor from placeholder text. Empty text objects
+        // get a small starter box, and real text objects hug their glyph bounds.
+        text: text,
+        style: style,
+      ),
+      textDirection: TextDirection.ltr,
+      textAlign: obj.textAlign,
+    )..layout();
+
+    // Keep this linked to the renderer's selected-text bounds:
+    // selected box = glyph bounds + 8px padding on each side.
+    // The active editor uses the same tight sizing so it does not open as a
+    // generic wide TextField and make the word jump around.
+    final horizontalPad = tight ? 38.0 : 56.0;
+    final verticalPad = tight ? 26.0 : 24.0;
+    final emptyStarterWidth = math.max(64.0, obj.fontSize * 0.85);
+    final emptyStarterHeight = math.max(obj.fontSize + 16.0, 32.0);
+    final minWidth = tight ? emptyStarterWidth : 140.0;
+    final minHeight = tight ? emptyStarterHeight : obj.fontSize + 32.0;
+
+    return Size(
+      math.max(tp.width + horizontalPad, text.isEmpty ? minWidth : 0.0),
+      math.max(tp.height + verticalPad, text.isEmpty ? minHeight : 0.0),
+    );
+  }
+
+  Rect _textEditRect(
+    CanvasTextObject obj, {
+    String? textOverride,
+    bool tight = false,
+  }) {
+    final size = _measureTextObject(
+      obj,
+      textOverride: textOverride,
+      tight: tight,
+    );
+    final safeScale = obj.scale.abs().clamp(0.05, 20.0).toDouble();
+
+    return Rect.fromCenter(
+      center: obj.position,
+      width: size.width * safeScale,
+      height: size.height * safeScale,
+    );
+  }
+
+  Rect _rotatedBounds(Rect rect, double radians) {
+    if (radians.abs() < 0.0001) return rect;
+
+    final c = rect.center;
+    final cosA = math.cos(radians);
+    final sinA = math.sin(radians);
+    Offset rotate(Offset p) {
+      final d = p - c;
+      return Offset(
+        c.dx + d.dx * cosA - d.dy * sinA,
+        c.dy + d.dx * sinA + d.dy * cosA,
+      );
+    }
+
+    final points = <Offset>[
+      rotate(rect.topLeft),
+      rotate(rect.topRight),
+      rotate(rect.bottomRight),
+      rotate(rect.bottomLeft),
+    ];
+
+    double minX = points.first.dx;
+    double maxX = points.first.dx;
+    double minY = points.first.dy;
+    double maxY = points.first.dy;
+    for (final p in points.skip(1)) {
+      minX = math.min(minX, p.dx);
+      maxX = math.max(maxX, p.dx);
+      minY = math.min(minY, p.dy);
+      maxY = math.max(maxY, p.dy);
+    }
+
+    return Rect.fromLTRB(minX, minY, maxX, maxY);
+  }
+
+  bool _pointInTextEditBox(CanvasTextObject obj, Offset pos) {
+    final rect = _textEditRect(
+      obj,
+      textOverride: _textEditController.text,
+      tight: true,
+    ).inflate(18.0);
+
+    final center = rect.center;
+    final d = pos - center;
+    final cosA = math.cos(-obj.rotation);
+    final sinA = math.sin(-obj.rotation);
+    final local = Offset(
+      d.dx * cosA - d.dy * sinA,
+      d.dx * sinA + d.dy * cosA,
+    );
+
+    return local.dx.abs() <= rect.width / 2.0 &&
+        local.dy.abs() <= rect.height / 2.0;
+  }
+
+  void _startEditingTextObject(
+    canvas_state.CanvasController controller,
+    CanvasTextObject obj,
+  ) {
+    final wasEditingDifferentObject = _editingTextObjectId != obj.id;
+
+    controller.selectTextObjectRef(obj.id);
+    if (_activeToolMode != _CanvasToolMode.select) {
+      controller.setSelectionMode(false);
+    }
+    _textEditController.text = obj.text;
+    _textEditController.selection = TextSelection.collapsed(
+      offset: _textEditController.text.length,
+    );
+
+    if (wasEditingDifferentObject) {
+      _editingTextOriginalOpacity = obj.opacity;
+      // Hide the canvas-rendered copy while the real editable TextField is on top.
+      // This prevents the double-text effect while typing/editing.
+      controller.updateTextObject(obj.copyWith(opacity: 0.0));
+    }
+
+    setState(() {
+      _editingTextObjectId = obj.id;
+    });
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _textEditFocusNode.requestFocus();
+      SystemChannels.textInput.invokeMethod('TextInput.show');
+    });
+  }
+
+  void _commitActiveTextEdit() {
+    final controller = ref.read(canvas_state.canvasControllerProvider);
+    final obj = _editingTextObject(controller);
+    if (obj != null) {
+      final restoredOpacity = _editingTextOriginalOpacity ?? obj.opacity;
+      final trimmed = _textEditController.text.trim();
+      if (trimmed.isEmpty) {
+        controller.deleteTextObject(obj.id);
+      } else {
+        controller.updateTextObject(
+          obj.copyWith(
+            text: _textEditController.text,
+            opacity: restoredOpacity,
+          ),
+        );
+      }
+    }
+    _editingTextOriginalOpacity = null;
+    _textEditFocusNode.unfocus();
+    if (mounted && _editingTextObjectId != null) {
+      setState(() => _editingTextObjectId = null);
+    } else {
+      _editingTextObjectId = null;
+    }
+  }
+
+  void _queueSelectedTextEditTap(
+    canvas_state.CanvasController controller,
+    int pointer,
+    Offset pos,
+  ) {
+    if (_editingTextObjectId != null) return;
+    if (_activeToolMode != _CanvasToolMode.select) return;
+    if (!controller.selectionMode) return;
+
+    final selected = controller.selectedTextObject;
+    if (selected == null) return;
+
+    final rect = _rotatedBounds(_textEditRect(selected), selected.rotation).inflate(16.0);
+    if (!rect.contains(pos)) return;
+
+    _pendingTextEditPointer = pointer;
+    _pendingTextEditStart = pos;
+    _pendingTextEditObjectId = selected.id;
+  }
+
+  void _cancelPendingTextEditTap() {
+    _pendingTextEditPointer = null;
+    _pendingTextEditStart = null;
+    _pendingTextEditObjectId = null;
+  }
+
+  void _maybeStartPendingTextEditTap(
+    canvas_state.CanvasController controller,
+    int pointer,
+    Offset pos,
+  ) {
+    if (_pendingTextEditPointer != pointer) return;
+
+    final objectId = _pendingTextEditObjectId;
+    final start = _pendingTextEditStart;
+    _cancelPendingTextEditTap();
+
+    if (objectId == null || start == null) return;
+    if ((pos - start).distance > 8.0) return;
+    if (controller.selectedTextObjectId != objectId) return;
+
+    final selected = controller.selectedTextObject;
+    if (selected == null || selected.id != objectId) return;
+    _startEditingTextObject(controller, selected);
+  }
+
+  bool _handleTextCanvasTap(
+    canvas_state.CanvasController controller,
+    Offset pos,
+  ) {
+    final editing = _editingTextObject(controller);
+    if (editing != null) {
+      if (!_pointInTextEditBox(editing, pos)) {
+        _commitActiveTextEdit();
+        return true;
+      }
+      return false;
+    }
+
+    if (_activeToolMode != _CanvasToolMode.text) return false;
+
+    controller.selectAtWorld(pos);
+    final hitText = controller.selectedTextObject;
+    if (hitText != null) {
+      _startEditingTextObject(controller, hitText);
+      return true;
+    }
+
+    final obj = controller.addTextObject(
+      text: '',
+      position: pos,
+      fontSize: 72.0,
+    );
+    _startEditingTextObject(controller, obj);
+    return true;
+  }
+
+  void _updateEditingText(CanvasTextObject obj, String value) {
+    // The TextEditingController listener rebuilds the overlay live. Do not
+    // change the TextField key or push model updates per keystroke here, or the
+    // editable field can lose focus and close the keyboard while typing.
+  }
+
+  void _updateEditingFontSize(CanvasTextObject obj, double fontSize) {
+    ref.read(canvas_state.canvasControllerProvider).updateTextObject(
+          obj.copyWith(fontSize: fontSize.clamp(8.0, 260.0).toDouble()),
+        );
+  }
+
+  void _updateEditingFontFamily(CanvasTextObject obj, String? fontFamily) {
+    ref.read(canvas_state.canvasControllerProvider).updateTextObject(
+          obj.copyWith(
+            fontFamily: fontFamily,
+            clearFontFamily: fontFamily == null,
+          ),
+        );
   }
 
   void _routePointerDown(
@@ -218,6 +575,7 @@ class _CanvasScreenState extends ConsumerState<CanvasScreen> {
     final Color canvasBg = Color(controller.effectiveCanvasBackgroundColor);
 
     return Scaffold(
+      resizeToAvoidBottomInset: false,
       appBar: PreferredSize(
         preferredSize: const Size.fromHeight(56),
         child: TopToolbar(
@@ -231,6 +589,12 @@ class _CanvasScreenState extends ConsumerState<CanvasScreen> {
         controller: controller,
         showLayers: _showLayers,
         onToggleLayers: _toggleLayers,
+        onBrushTool: _activateBrushTool,
+        onTextTool: _toggleTextTool,
+        onSelectTool: _toggleSelectTool,
+        brushToolActive: _activeToolMode == _CanvasToolMode.brush,
+        textToolActive: _activeToolMode == _CanvasToolMode.text,
+        selectToolActive: _activeToolMode == _CanvasToolMode.select,
       ),
       body: LayoutBuilder(
         builder: (context, constraints) {
@@ -263,15 +627,32 @@ class _CanvasScreenState extends ConsumerState<CanvasScreen> {
               Listener(
                 behavior: HitTestBehavior.translucent,
                 onPointerDown: (e) {
+                  _queueSelectedTextEditTap(
+                    controller,
+                    e.pointer,
+                    e.localPosition,
+                  );
                   if (controller.selectionMode) {
                     _selectionPointerId ??= e.pointer;
                     if (_selectionPointerId == e.pointer) {
                       _selectionPointerPos = e.localPosition;
                     }
                   }
+                  if (_handleTextCanvasTap(controller, e.localPosition)) {
+                    _textHandledPointers.add(e.pointer);
+                    return;
+                  }
                   _routePointerDown(controller, e.pointer, e.localPosition);
                 },
                 onPointerMove: (e) {
+                  if (_pendingTextEditPointer == e.pointer) {
+                    final start = _pendingTextEditStart;
+                    if (start != null &&
+                        (e.localPosition - start).distance > 8.0) {
+                      _cancelPendingTextEditTap();
+                    }
+                  }
+                  if (_textHandledPointers.contains(e.pointer)) return;
                   if (controller.selectionMode &&
                       _selectionPointerId == e.pointer) {
                     _selectionPointerPos = e.localPosition;
@@ -280,14 +661,24 @@ class _CanvasScreenState extends ConsumerState<CanvasScreen> {
                   _routePointerMove(controller, e.pointer, e.localPosition);
                 },
                 onPointerUp: (e) {
+                  if (_textHandledPointers.remove(e.pointer)) return;
                   if (controller.selectionMode &&
                       _selectionPointerId == e.pointer) {
                     _selectionPointerPos = e.localPosition;
                     _selectionPointerId = null;
                   }
                   _routePointerUp(controller, e.pointer);
+                  _maybeStartPendingTextEditTap(
+                    controller,
+                    e.pointer,
+                    e.localPosition,
+                  );
                 },
                 onPointerCancel: (e) {
+                  if (_pendingTextEditPointer == e.pointer) {
+                    _cancelPendingTextEditTap();
+                  }
+                  if (_textHandledPointers.remove(e.pointer)) return;
                   if (controller.selectionMode &&
                       _selectionPointerId == e.pointer) {
                     _selectionPointerId = null;
@@ -380,19 +771,212 @@ class _CanvasScreenState extends ConsumerState<CanvasScreen> {
                     onScaleEnd: (_) {
                       if (controller.isSelectionGesturing) {
                         controller.selectionGestureEnd();
-
-                        final p = _selectionPointerPos;
-                        if (p != null) {
-                          controller.selectionResumeDragAt(p);
-                        }
+                        _selectionPointerId = null;
+                        _selectionPointerPos = null;
                       }
                     },
                   ),
+                ),
+
+              if (_editingTextObject(controller) != null)
+                _buildTextEditingOverlay(
+                  context,
+                  controller,
+                  _editingTextObject(controller)!,
+                  fullSize,
                 ),
             ],
           );
         },
       ),
+    );
+  }
+
+  Widget _buildTextEditingOverlay(
+    BuildContext context,
+    canvas_state.CanvasController controller,
+    CanvasTextObject obj,
+    Size fullSize,
+  ) {
+    final liveText = _textEditController.text;
+    final baseSize = _measureTextObject(
+      obj,
+      textOverride: liveText,
+      tight: true,
+    );
+    final safeScale = obj.scale.abs().clamp(0.05, 20.0).toDouble();
+    final scaledRect = _textEditRect(
+      obj,
+      textOverride: liveText,
+      tight: true,
+    );
+    final rotatedBounds = _rotatedBounds(scaledRect, obj.rotation);
+
+    final toolbarWidth = math
+        .max(250.0, math.min(math.max(scaledRect.width, 250.0), fullSize.width - 16.0))
+        .toDouble();
+    final toolbarLeft = (obj.position.dx - toolbarWidth / 2.0)
+        .clamp(8.0, math.max(8.0, fullSize.width - toolbarWidth - 8.0))
+        .toDouble();
+    final toolbarTop = (rotatedBounds.top - 48.0)
+        .clamp(8.0, math.max(8.0, fullSize.height - 56.0))
+        .toDouble();
+
+    final glowAlpha = (obj.glowOpacity * obj.glowBrightness)
+        .clamp(0.0, 1.0)
+        .toDouble();
+    final glowBlur = math.max(6.0, obj.glowRadius * 0.35);
+
+    return Stack(
+      children: [
+        Positioned(
+          left: toolbarLeft,
+          top: toolbarTop,
+          width: toolbarWidth,
+          child: Material(
+            color: Colors.black.withValues(alpha: 0.72),
+            borderRadius: BorderRadius.circular(14),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: DropdownButtonHideUnderline(
+                      child: DropdownButton<String?>(
+                        value: obj.fontFamily,
+                        isExpanded: true,
+                        dropdownColor: const Color(0xFF111111),
+                        isDense: true,
+                        style: const TextStyle(color: Colors.white, fontSize: 12),
+                        items: [
+                          for (final font in _fontChoices)
+                            DropdownMenuItem<String?>(
+                              value: font,
+                              child: Text(font ?? 'Default'),
+                            ),
+                        ],
+                        onChanged: (font) => _updateEditingFontFamily(obj, font),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  GestureDetector(
+                    behavior: HitTestBehavior.opaque,
+                    onVerticalDragUpdate: (d) {
+                      _updateEditingFontSize(
+                        obj,
+                        obj.fontSize - d.delta.dy * 0.65,
+                      );
+                    },
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+                      decoration: BoxDecoration(
+                        color: Colors.white.withValues(alpha: 0.10),
+                        borderRadius: BorderRadius.circular(10),
+                        border: Border.all(color: Colors.white24),
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          const Icon(Icons.swap_vert, size: 15, color: Colors.white70),
+                          const SizedBox(width: 4),
+                          Text(
+                            obj.fontSize.round().toString(),
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+        // Keep the editable field unconstrained. Using Positioned.fill here gives
+        // the TextField full-screen tight constraints, which makes the active edit
+        // box appear huge even when our measured word bounds are small.
+        Positioned(
+          left: obj.position.dx,
+          top: obj.position.dy,
+          child: Transform.rotate(
+            angle: obj.rotation,
+            alignment: Alignment.topLeft,
+            child: Transform.scale(
+              scale: safeScale,
+              alignment: Alignment.topLeft,
+              child: Transform.translate(
+                offset: Offset(-baseSize.width / 2.0, -baseSize.height / 2.0),
+                child: SizedBox(
+                  width: baseSize.width,
+                  height: baseSize.height,
+                  child: Material(
+                    color: Colors.transparent,
+                    child: Container(
+                      decoration: BoxDecoration(
+                        color: Colors.black.withValues(alpha: 0.08),
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(
+                          color: Colors.cyanAccent.withValues(alpha: 0.9),
+                          width: 1.4,
+                        ),
+                      ),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 14,
+                        vertical: 10,
+                      ),
+                      child: EditableText(
+                        key: ValueKey('text-edit-${obj.id}'),
+                        controller: _textEditController,
+                        focusNode: _textEditFocusNode,
+                        autofocus: true,
+                        maxLines: 1,
+                        textAlign: obj.textAlign,
+                        cursorColor: Colors.cyanAccent,
+                        backgroundCursorColor: Colors.cyanAccent.withValues(alpha: 0.25),
+                        style: TextStyle(
+                          fontFamily: obj.fontFamily,
+                          fontSize: obj.fontSize,
+                          height: obj.lineHeight,
+                          letterSpacing: obj.letterSpacing,
+                          color: Color(obj.fillColor),
+                          shadows: obj.glowEnabled
+                              ? [
+                                  Shadow(
+                                    color: Color(obj.glowColor).withValues(
+                                      alpha: (0.45 * glowAlpha).clamp(0.0, 1.0),
+                                    ),
+                                    blurRadius: glowBlur * 2.2,
+                                  ),
+                                  Shadow(
+                                    color: Color(obj.glowColor).withValues(
+                                      alpha: (0.70 * glowAlpha).clamp(0.0, 1.0),
+                                    ),
+                                    blurRadius: glowBlur,
+                                  ),
+                                  Shadow(
+                                    color: Color(obj.glowColor).withValues(
+                                      alpha: (0.85 * glowAlpha).clamp(0.0, 1.0),
+                                    ),
+                                    blurRadius: math.max(4.0, glowBlur * 0.35),
+                                  ),
+                                ]
+                              : null,
+                        ),
+                        onChanged: (value) => _updateEditingText(obj, value),
+                        onSubmitted: (_) => _commitActiveTextEdit(),
+                      ),
+                    ),
+                  ),
+                ),
+                ),
+              ),
+            ),
+          ),
+      ],
     );
   }
 
